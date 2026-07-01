@@ -285,3 +285,17 @@ def test_default_contract_is_free_agent_shape():
     p = make_skater()
     assert p.contract.salaries == []
     assert p.contract.years_remaining == 0
+
+
+# ---------------------------------------------------------------------------
+# Handedness (shoots)
+# ---------------------------------------------------------------------------
+def test_shoots_defaults_to_left():
+    p = make_skater()
+    assert p.shoots == "L"
+
+
+def test_shoots_round_trips():
+    p = make_skater(shoots="R")
+    restored = Player.from_dict(p.to_dict())
+    assert restored.shoots == "R"

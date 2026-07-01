@@ -95,6 +95,16 @@ class Player:
     potential: int = 25                  # overall ceiling, 25-99
     scout_error: float = 0.0             # hidden noise driving scouted_potential() fog-of-war
     secondary_position: Optional[str] = None
+    shoots: str = "L"                    # "L" or "R" -- shot/stick handedness.
+    # Distinct from `position`: two players can both be "D" but shoot opposite
+    # hands, which matters for pairing (a lefty/righty D pair covers the blue
+    # line without both reaching across their body) and for wingers (a player's
+    # natural wing side generally matches their handedness -- left shots on
+    # left wing, right shots on right wing -- though real NHL rosters routinely
+    # deploy players on their "off wing"). Position stays a single "D" slot for
+    # now (see attributes.py's POSITIONS docstring); handedness is what actually
+    # drives side-of-ice fit, and is consumed by team.py's line/pair builder as
+    # a fit-penalty input, not baked into overall().
     team_id: Optional[int] = None        # None == free agent; source of truth for membership
 
     contract: Contract = field(default_factory=Contract.free_agent)
@@ -178,6 +188,7 @@ class Player:
             "age": self.age,
             "position": self.position,
             "secondary_position": self.secondary_position,
+            "shoots": self.shoots,
             "ratings": dict(self.ratings),
             "potential": self.potential,
             "scout_error": self.scout_error,
@@ -210,6 +221,7 @@ class Player:
             age=d["age"],
             position=position,
             secondary_position=d.get("secondary_position"),
+            shoots=d.get("shoots", "L"),
             ratings=ratings,
             potential=d.get("potential", RATING_MIN),
             scout_error=d.get("scout_error", 0.0),
