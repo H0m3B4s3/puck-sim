@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pucksim"
+version = "0.1.0"
+description = "A text-based Football-Manager-style NHL hockey franchise simulation"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "httpx>=0.24"]
+web = ["fastapi>=0.104", "uvicorn[standard]>=0.24"]
+
+[project.scripts]
+pucksim-web = "pucksim.web.app:run"
+
+[tool.setuptools.packages.find]
+include = ["pucksim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
