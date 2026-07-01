@@ -196,3 +196,53 @@ SEASON_START_DAY = 8
 # ---------------------------------------------------------------------------
 LEAGUE_ORIGIN_CHOICES = ("none", "chl", "ncaa", "europe")
 DEFAULT_LEAGUE_ORIGIN = "none"
+
+# ---------------------------------------------------------------------------
+# Position / handedness fit penalties (DEVPLAN.md Step 1.7, "Position
+# flexibility & handedness" amendment, 2026-07-01)
+# ---------------------------------------------------------------------------
+# A player's `Player.position` (set in Step 1.6) is their PRIMARY slot, but
+# team.py's auto-line-builder can slot forwards into any of the 3 forward
+# slots (LW/C/RW) and pair D on either side, at a fit-rating cost. These
+# penalties are consumed ONLY by team.py's line-builder fit-score function —
+# never by attributes.overall(), which stays position-agnostic by design (see
+# attributes.py's module docstring / the design discussion this amendment
+# references).
+#
+# PROVISIONAL, FIRST-PASS VALUES — tunable once real line-building/gameplay
+# data exists, per DEVPLAN.md's explicit "provisional/tunable" framing.
+#
+# Position-category penalty: forwards only (D has a single POSITIONS slot,
+# so no category cross-assignment is possible -- see attributes.py's POSITIONS
+# docstring). Keyed (primary_position, assigned_slot) -> rating-point penalty.
+# On-position (primary == assigned slot) is always 0 and is intentionally NOT
+# a key here; callers should treat a missing/on-position lookup as 0.
+#   wing <-> wing (LW/RW cross-assignment): small penalty -- both wing slots
+#     carry similar positional responsibility.
+#   C -> wing (center slotted onto a wing): smaller penalty than wing->C --
+#     a center is "less defensively intensive" to move off of, per DEVPLAN.md.
+#   wing -> C (winger slotted at center): larger penalty -- center carries
+#     more defensive/faceoff responsibility than either wing slot.
+POSITION_FIT_PENALTY: dict = {
+    ("LW", "RW"): 3,
+    ("RW", "LW"): 3,
+    ("C", "LW"): 2,
+    ("C", "RW"): 2,
+    ("LW", "C"): 8,
+    ("RW", "C"): 8,
+}
+
+# Handedness/side fit penalty (Player.shoots "L"|"R", added to player.py in
+# this same design pass). Applies independently of the position-category
+# penalty above and is smaller than a position-category mismatch.
+#
+# For FORWARDS: LW is the "left side," RW is the "right side," C has no side.
+# A left-shot assigned to RW (or a right-shot assigned to LW) incurs this
+# penalty; a center assignment never incurs a handedness penalty regardless
+# of the player's shoots value (centers play the middle regardless of hand).
+#
+# For D PAIRS: this isn't a per-slot penalty but a pair-composition bonus/
+# penalty -- see team.py's `d_pair_fit_bonus()`, which treats a same-handed
+# pair (both L or both R) as incurring this same penalty magnitude relative
+# to an opposite-handed pair (the real-NHL-preferred shape), all else equal.
+HANDEDNESS_FIT_PENALTY: int = 2
