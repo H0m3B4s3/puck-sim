@@ -408,10 +408,22 @@ def advance_one_day(world: World) -> List[Game]:
     previously flagged as the intended spot for it -- so a player injured in today's own game
     doesn't have his very first day of absence double-counted (a fresh injury only starts
     healing from the NEXT day's tick onward, not the day it happened).
+
+    DEVPLAN.md Step 2.9b-ii: populate ``world.game_results`` with box-score data for each
+    played game so ``GET /season/games/{gid}/boxscore`` can retrieve them later.
     """
     todays = [g for g in world.schedule if g.day == world.day and not g.played]
     for game in todays:
-        sim_one(world, game)
+        result = sim_one(world, game)
+        # Persist box score for later retrieval (Step 2.9b-ii)
+        world.game_results[game.gid] = {
+            'home_score': result.home_score,
+            'away_score': result.away_score,
+            'went_ot': result.went_ot,
+            'went_so': result.went_so,
+            'skater_box': {pid: line.to_dict() for pid, line in result.skater_box.items()},
+            'goalie_box': {pid: line.to_dict() for pid, line in result.goalie_box.items()},
+        }
     _heal_injuries(world)
     world.day += 1
     return todays

@@ -263,3 +263,346 @@ def test_team_colors_present_and_valid_hex_in_standings(client):
         assert _HEX_COLOR_RE.match(entry["secondary_color"]), entry["secondary_color"]
         seen_pairs.add((entry["primary_color"], entry["secondary_color"]))
     assert len(seen_pairs) == 32
+
+
+# ---------------------------------------------------------------------------
+# POST /season/start
+# ---------------------------------------------------------------------------
+def test_start_season_generates_schedule_and_advances_phase(client):
+    """Regression test (found during review): nothing in the web layer originally called
+    sim.season.start_season(), so a fresh career's schedule stayed empty and phase stuck on
+    'preseason' forever -- every other /season/* endpoint was unreachable-in-practice for a
+    real client with no way to call start_season() directly. This pins the fix."""
+    client.post("/career/new", json={"seed": 30})
+
+    before = client.get("/career").json()
+    assert before["phase"] == "preseason"
+    assert client.get("/season/schedule").json() == []
+
+    resp = client.post("/season/start")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["phase"] == "regular_season"
+    assert body["day"] == 0
+
+    schedule = client.get("/season/schedule").json()
+    assert len(schedule) == 1312  # 32 teams * 82 games / 2
+
+
+def test_start_season_twice_is_a_clean_400(client):
+    client.post("/career/new", json={"seed": 31})
+    client.post("/season/start")
+    resp = client.post("/season/start")
+    assert resp.status_code == 400
+
+
+def test_start_season_without_a_session_is_a_clean_404(client):
+    resp = client.post("/season/start")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /season/schedule
+# ---------------------------------------------------------------------------
+def test_schedule_returns_all_games(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 16})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    resp = client.get("/season/schedule")
+    assert resp.status_code == 200
+
+    schedule = resp.json()
+    assert len(schedule) > 0
+    # In a 32-team league with 82 games per team, there should be 32*82/2 = 1312 games
+    assert len(schedule) == 1312
+
+    # Spot-check a game's shape
+    game = schedule[0]
+    assert "gid" in game
+    assert "day" in game
+    assert "home" in game
+    assert "away" in game
+    assert "home_score" in game
+    assert "away_score" in game
+    assert "played" in game
+    assert game["played"] is False  # fresh schedule, no games played yet
+
+
+def test_schedule_without_a_session_is_a_clean_404(client):
+    resp = client.get("/season/schedule")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /season/advance-day
+# ---------------------------------------------------------------------------
+def test_advance_day_simulates_games_and_returns_new_phase(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 17})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    resp = client.post("/season/advance-day")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["day"] == 1
+    assert body["phase"] == "regular_season"
+    # A fresh day should have some games (not all days have games, but most do)
+    # For the first day of a fresh schedule, there should definitely be games
+    assert isinstance(body["games_played"], list)
+
+
+def test_advance_day_changes_world_state(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 18})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    initial = client.get("/career").json()
+    assert initial["day"] == 0
+
+    client.post("/season/advance-day")
+
+    updated = client.get("/career").json()
+    assert updated["day"] == 1
+
+
+def test_advance_day_without_a_session_is_a_clean_404(client):
+    resp = client.post("/season/advance-day")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /season/games/{gid}/sim
+# ---------------------------------------------------------------------------
+def test_sim_single_game_on_demand(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 19})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    # Find an unplayed game
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid = unplayed_game["gid"]
+
+    # Sim it
+    resp = client.post(f"/season/games/{gid}/sim")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["gid"] == gid
+    assert body["home_score"] >= 0
+    assert body["away_score"] >= 0
+    assert isinstance(body["went_ot"], bool)
+    assert isinstance(body["went_so"], bool)
+
+
+def test_sim_single_game_marks_game_as_played(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 20})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid = unplayed_game["gid"]
+
+    client.post(f"/season/games/{gid}/sim")
+
+    # Verify the game is now marked played
+    updated_schedule = client.get("/season/schedule").json()
+    updated_game = next(g for g in updated_schedule if g["gid"] == gid)
+    assert updated_game["played"] is True
+
+
+def test_sim_single_game_updates_team_records_and_standings(client):
+    """Regression test (found during review): an earlier version of this endpoint called
+    sim.engine.simulate_game() directly and reimplemented a partial subset of
+    sim.season._apply_result() inline, silently skipping Team.record_result() -- so a game
+    simmed via this endpoint never showed up in either team's win/loss/streak or in
+    standings points. The endpoint now delegates to sim.season.sim_one() (the same function
+    advance_one_day() calls per game), which correctly applies the full result. This test
+    pins that behavior so a future refactor can't silently regress back to the partial
+    reimplementation."""
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 23})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid, home_id, away_id = unplayed_game["gid"], unplayed_game["home"], unplayed_game["away"]
+
+    before = {e["id"]: e for e in client.get("/career/standings").json()}
+    assert before[home_id]["wins"] + before[home_id]["losses"] + before[home_id]["ot_losses"] == 0
+    assert before[away_id]["wins"] + before[away_id]["losses"] + before[away_id]["ot_losses"] == 0
+
+    client.post(f"/season/games/{gid}/sim")
+
+    after = {e["id"]: e for e in client.get("/career/standings").json()}
+    home_decisions = after[home_id]["wins"] + after[home_id]["losses"] + after[home_id]["ot_losses"]
+    away_decisions = after[away_id]["wins"] + after[away_id]["losses"] + after[away_id]["ot_losses"]
+    assert home_decisions == 1
+    assert away_decisions == 1
+    # Exactly one side won (games created via a fresh regular-season schedule are never ties
+    # under the default "standard" rule this career started with).
+    assert (after[home_id]["wins"] == 1) != (after[away_id]["wins"] == 1)
+
+
+def test_sim_single_game_cant_sim_twice(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 21})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid = unplayed_game["gid"]
+
+    client.post(f"/season/games/{gid}/sim")
+
+    # Try to sim it again -- should fail
+    resp = client.post(f"/season/games/{gid}/sim")
+    assert resp.status_code == 400
+
+
+def test_sim_single_game_nonexistent_game_is_404(client):
+    client.post("/career/new", json={"seed": 22})
+    resp = client.post("/season/games/99999/sim")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /season/games/{gid}/boxscore
+# ---------------------------------------------------------------------------
+def test_boxscore_retrieval_after_sim(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 23})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid = unplayed_game["gid"]
+
+    sim_resp = client.post(f"/season/games/{gid}/sim").json()
+
+    # Now fetch the box score
+    resp = client.get(f"/season/games/{gid}/boxscore")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["gid"] == gid
+    assert body["home_score"] == sim_resp["home_score"]
+    assert body["away_score"] == sim_resp["away_score"]
+    assert body["went_ot"] == sim_resp["went_ot"]
+    assert body["went_so"] == sim_resp["went_so"]
+    assert isinstance(body["skater_box"], dict)
+    assert isinstance(body["goalie_box"], dict)
+
+
+def test_boxscore_not_yet_played_is_400(client):
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 24})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid = unplayed_game["gid"]
+
+    resp = client.get(f"/season/games/{gid}/boxscore")
+    assert resp.status_code == 400
+
+
+def test_boxscore_nonexistent_game_is_404(client):
+    client.post("/career/new", json={"seed": 25})
+    resp = client.get("/season/games/99999/boxscore")
+    assert resp.status_code == 404
+
+
+def test_boxscore_reconciliation_skaters_and_goalies_separate(client):
+    """Box scores have two separate shapes (skaters vs. goalies), per DESIGN.md point 9."""
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 26})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid = unplayed_game["gid"]
+
+    client.post(f"/season/games/{gid}/sim")
+
+    resp = client.get(f"/season/games/{gid}/boxscore").json()
+
+    # Skater box should have skater-specific fields (g, a, sog, etc.)
+    # Goalie box should have goalie-specific fields (shots_faced, saves, etc.)
+    for pid, skater_line in resp["skater_box"].items():
+        assert "g" in skater_line
+        assert "a" in skater_line
+        assert "sog" in skater_line
+
+    for pid, goalie_line in resp["goalie_box"].items():
+        assert "shots_faced" in goalie_line
+        assert "saves" in goalie_line
+        assert "goals_against" in goalie_line
+
+
+# ---------------------------------------------------------------------------
+# GET /season/playoffs/bracket
+# ---------------------------------------------------------------------------
+def test_playoffs_bracket_not_yet_in_playoffs_returns_none(client):
+    client.post("/career/new", json={"seed": 27})
+    resp = client.get("/season/playoffs/bracket")
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+def test_playoffs_bracket_without_session_is_404(client):
+    resp = client.get("/season/playoffs/bracket")
+    assert resp.status_code == 404

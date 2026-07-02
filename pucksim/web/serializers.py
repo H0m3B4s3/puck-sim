@@ -147,3 +147,77 @@ def standings_response(world: World) -> List[StandingsEntryDTO]:
             )
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Box score DTOs (Step 2.9b-ii)
+# ---------------------------------------------------------------------------
+class SkaterBoxScoreDTO(BaseModel):
+    """Per-skater box score line."""
+    gp: int = 0
+    gs: int = 0
+    secs: int = 0
+    g: int = 0
+    a: int = 0
+    sog: int = 0
+    pim: int = 0
+    hits: int = 0
+    blocks: int = 0
+    giveaways: int = 0
+    takeaways: int = 0
+    fo_won: int = 0
+    fo_lost: int = 0
+    plus_minus: int = 0
+    corsi_for: int = 0
+    corsi_against: int = 0
+    fenwick_for: int = 0
+    fenwick_against: int = 0
+
+
+class GoalieBoxScoreDTO(BaseModel):
+    """Per-goalie box score line."""
+    gp: int = 0
+    gs: int = 0
+    secs: int = 0
+    shots_faced: int = 0
+    saves: int = 0
+    goals_against: int = 0
+    wins: int = 0
+    losses: int = 0
+    otl: int = 0
+    shutouts: int = 0
+
+
+class GameSummaryDTO(BaseModel):
+    """A single game in the schedule."""
+    gid: int
+    day: int
+    home: int
+    away: int
+    home_score: int
+    away_score: int
+    played: bool
+    is_playoff: bool
+
+
+def game_summary(game) -> GameSummaryDTO:
+    """Build a :class:`GameSummaryDTO` for a scheduled game."""
+    from pucksim.models.league import Game
+    return GameSummaryDTO(
+        gid=game.gid,
+        day=game.day,
+        home=game.home,
+        away=game.away,
+        home_score=game.home_score,
+        away_score=game.away_score,
+        played=game.played,
+        is_playoff=game.is_playoff,
+    )
+
+
+def boxscore_response(skater_box, goalie_box) -> tuple:
+    """Convert raw stat-line dicts into DTO dicts for a box-score response."""
+    return (
+        {pid: SkaterBoxScoreDTO(**line) for pid, line in skater_box.items()},
+        {pid: GoalieBoxScoreDTO(**line) for pid, line in goalie_box.items()},
+    )
