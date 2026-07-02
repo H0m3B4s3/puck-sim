@@ -24,6 +24,8 @@ saves/
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
 
 # OS / editor
 .DS_Store
