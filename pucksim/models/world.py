@@ -48,6 +48,18 @@ lives in ``config.SALARY_CAP_BASE`` (moved there in Step 2.4 so ``systems/cap.py
 cap-growth mechanism has a stable config-level base to grow from each offseason --
 previously a ``World``-local placeholder since "config.py has no cap dollar constant
 yet").
+
+League history / Hall of Fame (DEVPLAN.md Step 2.7): ``history``/``hall_of_fame``/``retired``
+mirror HoopR's own ``World.history``/``hall_of_fame``/``retired`` fields exactly (see
+``hoopsim/models/world.py``) -- added here following the same precedent Step 2.6 set for
+``bracket``/``playoff_discipline_mode`` (a systems step adding small, additive, per-save
+fields it needs even though its own DEVPLAN "Files" line only names the systems/ modules
+themselves). ``systems/offseason.py`` populates ``history`` once per season (season summary +
+that season's awards); ``systems/legacy.py`` populates ``hall_of_fame``/``retired`` as players
+retire. All three are plain JSON-native ``list[dict]`` (mirrors ``bracket``'s "plain dict, no
+dataclass" reasoning -- these are naturally list-of-self-contained-snapshot shaped already, so
+a list of dicts round-trips through ``to_dict``/``from_dict`` with zero extra serialization
+code, and ``systems/legacy.py`` is the sole owner of each dict's internal shape).
 """
 from __future__ import annotations
 
@@ -100,6 +112,11 @@ class World:
     # out of a World-local placeholder so systems/cap.py's grow_cap() has a stable
     # config-level base to grow from across seasons).
     salary_cap: int = SALARY_CAP_BASE
+
+    # League history / Hall of Fame (DEVPLAN.md Step 2.7 -- see this module's docstring).
+    history: List[dict] = field(default_factory=list)          # one entry per archived season
+    hall_of_fame: List[dict] = field(default_factory=list)     # résumé snapshots of inductees
+    retired: List[dict] = field(default_factory=list)          # résumé snapshots of all retirees
 
     # -- dormant multi-league hook fields (DESIGN.md point 11) ------------------
     # NHL-only in v1; these exist now, empty, so Phase 2 (CHL/NCAA, DEVPLAN.md
