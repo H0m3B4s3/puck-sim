@@ -111,16 +111,21 @@ class Game:
 
     @property
     def is_tie(self) -> bool:
-        """True if the game ended level with no OT/SO played.
+        """True if the game ended level and no shootout occurred.
 
-        Only reachable under the "retro" standings rule, where OT/shootout
-        resolution is skipped entirely (see config.STANDINGS_RULES["retro"]).
-        Under rules with ``has_shootout=True`` (or OT-only rules), the season
-        sim is expected to always resolve a decisive winner, so this should
-        never be True there -- but this property itself doesn't enforce that;
-        it's purely a description of the recorded scoreline/flags.
+        Corrected 2026-07-01 (Step 1.13 integration): earlier revisions of this property also
+        required ``not went_ot``, on the assumption that overtime always ends with a decisive
+        goal. DESIGN.md point 8 says otherwise: regular-season OT is a single sudden-death period
+        played *regardless* of standings rule -- "Retro" just skips the shootout that would
+        normally follow an undecided OT. So a legitimate tie can absolutely have ``went_ot=True``
+        (OT was played and didn't produce a goal); what actually rules out a tie is a shootout
+        occurring (``went_so``), since a shootout by construction always ends decisively. Only
+        reachable in practice under the "retro" standings rule (config.STANDINGS_RULES["retro"]),
+        since "standard"/"three_two_one_zero" always carry the game to a shootout if OT doesn't
+        decide it -- but this property itself doesn't enforce that; it's purely a description of
+        the recorded scoreline/flags.
         """
-        return self.played and self.home_score == self.away_score and not self.went_ot and not self.went_so
+        return self.played and self.home_score == self.away_score and not self.went_so
 
     def involves(self, tid: int) -> bool:
         return self.home == tid or self.away == tid

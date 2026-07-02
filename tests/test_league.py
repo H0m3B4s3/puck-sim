@@ -96,10 +96,21 @@ def test_game_is_tie_only_when_level_and_no_ot_so():
     assert g.loser is None
 
 
-def test_game_not_a_tie_if_went_ot_even_if_scores_equal_by_construction_error():
-    # Scores equal but went_ot=True shouldn't happen in practice (OT implies a
-    # decisive extra goal), but is_tie must respect the flags, not just scores.
+def test_game_with_undecided_ot_is_still_a_tie():
+    # Corrected 2026-07-01: DESIGN.md point 8 -- regular-season OT (a single sudden-death
+    # period) is played regardless of standings rule; "retro" just skips the shootout that
+    # would otherwise follow. So went_ot=True with level scores and no shootout IS a
+    # legitimate tie (OT was played and didn't produce a goal) -- what actually rules out a
+    # tie is a shootout occurring (went_so=True), not went_ot on its own.
     g = Game(gid=5, day=1, home=10, away=20, home_score=2, away_score=2, played=True, went_ot=True)
+    assert g.is_tie
+    assert g.winner is None
+    assert g.loser is None
+
+
+def test_game_with_shootout_is_never_a_tie():
+    g = Game(gid=6, day=1, home=10, away=20, home_score=3, away_score=3, played=True,
+             went_ot=True, went_so=True)
     assert not g.is_tie
 
 
