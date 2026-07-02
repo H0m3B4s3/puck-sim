@@ -18,28 +18,29 @@ The ``sys.path`` insert below is a defensive fallback only, for the case this sc
 somewhere or run with a non-activated/non-editable interpreter -- it costs nothing when the venv
 is already set up correctly.
 
---seasons N -- what this actually means in MVP scope (read this before assuming more):
+--seasons N -- what this actually means TODAY (2026-07-02, read before assuming more):
 ------------------------------------------------------------------------------------------
-PuckSim's MVP has no offseason/draft/free-agency/player-development system yet -- all of that is
-v1/Step 2.x scope (DEVPLAN.md Phase 2). Concretely, that means in this script, "simulate N
-seasons" does NOT mean a realistic multi-year franchise sim: nobody ages, retires, gets drafted,
-signs as a free agent, or changes teams between the N seasons this script runs. What actually
-happens for each season after the first is: call ``start_season(world)`` again, which (per
-``sim/season.py``) resets every team's win/loss/OT-loss record to 0/0/0 and gives every player a
-brand new zeroed season ``StatLine``, then generates a fresh schedule -- and re-run the exact same
-32 teams/rosters through another full schedule. ``world.season_year`` is incremented by this
-script between seasons (``start_season()`` itself does not touch it) purely as a cosmetic label in
-the printed summary header -- it has zero effect on player aging or roster composition, since
-nothing in MVP reads ``season_year`` to drive development. Treat multi-season output here as "N
-independent replays of the same league, with fresh season-stat/record slates each time," not
-franchise progression. Real year-over-year continuity (aging, retirement, draft classes, re-signed
-contracts) arrives once v1's offseason systems (Step 2.7) exist.
+Real offseason systems (cap/trades/free agency/draft/development/aging/retirement -- DEVPLAN.md
+Steps 2.4/2.5/2.7) now EXIST in this codebase (``systems/offseason.py``'s ``run_offseason()``),
+but this SCRIPT does not call them yet -- that's a testkit gap, not an engine gap. What actually
+happens for each season after the first, here, is still: call ``start_season(world)`` again,
+which (per ``sim/season.py``) resets every team's win/loss/OT-loss record to 0/0/0 and gives every
+player a brand new zeroed season ``StatLine``, then generates a fresh schedule -- and re-run the
+exact same 32 teams/rosters through another full schedule. ``world.season_year`` is incremented by
+this script between seasons (``start_season()`` itself does not touch it) purely as a cosmetic
+label in the printed summary header -- it has zero effect on player aging or roster composition,
+since nothing THIS SCRIPT calls reads ``season_year`` to drive development. Treat multi-season
+output here as "N independent replays of the same league, with fresh season-stat/record slates
+each time," not franchise progression -- a human wanting to exercise real year-over-year
+continuity (aging, retirement, draft classes, re-signed contracts, cap growth) should drive
+``systems.offseason.run_offseason(world, champion_tid)`` directly between seasons (see that
+module's docstring for the full call order), or ask for this script to be extended to do so.
 
-Also omitted, deliberately: DEVPLAN.md's done-criteria phrase mentions a "notable injuries"
-summary section. No injury system exists yet in this codebase (Player.injury / Injury is a data
-container only -- see player.py's docstring: "injury-generation logic lands in Step 2.3"), so
-there is nothing to report and this script does not invent injury data. Add an injuries section
-here once Step 2.3 lands.
+Injuries (DEVPLAN.md Step 2.3) DO exist and fire during every simulated game (in-game injury
+rolls, severity bands, day-tick healing) -- this script does not yet print an "notable injuries"
+summary section as DEVPLAN.md's original done-criteria phrase mentions, purely because nobody's
+asked for that output section yet, not because the underlying data doesn't exist
+(``Player.injury``/``GameResult.injuries`` are both real and populated).
 
 Determinism: the whole point of seeding ``build_world(seed=...)`` is that ``python
 testkit/run_season.py --seed 1 --seasons 3`` run twice produces byte-identical stdout both times
@@ -103,12 +104,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "32-team league and simulates one or more full regular seasons with no UI, printing a "
             "standings/top-scorers/top-goalies summary after each season. "
             "\n\n"
-            "IMPORTANT MVP-scope note on --seasons: PuckSim has no offseason/draft/free-agency/"
-            "development system yet, so running --seasons N does NOT model a real multi-year "
-            "franchise (no aging, no retirement, no roster turnover). It re-runs the SAME 32 "
-            "rosters through N independent fresh schedules, resetting records/season stats between "
-            "each one via start_season(). Real year-over-year continuity arrives once v1's "
-            "offseason systems (DEVPLAN.md Step 2.7) exist."
+            "NOTE on --seasons: real offseason systems (cap/trades/FA/draft/development/aging, "
+            "DEVPLAN.md Steps 2.4/2.5/2.7) exist in this codebase now, but THIS SCRIPT doesn't "
+            "call them between seasons yet -- it re-runs the SAME 32 rosters through N independent "
+            "fresh schedules via start_season() (no aging/retirement/roster turnover). See this "
+            "file's module docstring for how to drive systems.offseason.run_offseason() directly "
+            "if you want real year-over-year continuity."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
