@@ -28,26 +28,23 @@ before HoopR's college layer was actually built.
 
 Cap fields stay minimal per DESIGN.md's v1 cap/contract fidelity decision: one flat
 ``salary_cap: int``, no luxury-tax-line/apron complexity (that's HoopR-NBA-specific and
-explicitly deferred past v1 for PuckSim -- see DEVPLAN.md Step 3.1).
+explicitly deferred past v1 for PuckSim -- see DEVPLAN.md Step 3.1). The default value
+lives in ``config.SALARY_CAP_BASE`` (moved there in Step 2.4 so ``systems/cap.py``'s
+cap-growth mechanism has a stable config-level base to grow from each offseason --
+previously a ``World``-local placeholder since "config.py has no cap dollar constant
+yet").
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from pucksim.config import DEFAULT_STANDINGS_RULE, SCHEMA_VERSION
+from pucksim.config import DEFAULT_STANDINGS_RULE, SALARY_CAP_BASE, SCHEMA_VERSION
 from pucksim.models.draft import DraftClass
 from pucksim.models.league import Game, Phase
 from pucksim.models.player import Player
 from pucksim.models.team import Team
 from pucksim.rng import Rng
-
-# v1 has no config.SALARY_CAP constant yet (HoopR's NBA-specific cap dollar figure
-# doesn't have a hockey-tuned equivalent decided at this step) -- a reasonable
-# placeholder flat number lives here, explicitly commented as provisional/tunable,
-# consistent with how config.py itself flags similarly-unresolved constants
-# (e.g. development/aging placeholders) elsewhere in this codebase.
-_DEFAULT_SALARY_CAP = 82_500_000  # provisional placeholder, NHL-scale dollar figure
 
 
 @dataclass
@@ -71,7 +68,10 @@ class World:
     standings_rule: str = DEFAULT_STANDINGS_RULE
 
     # v1 simplified cap model (DESIGN.md): single flat number, no apron/tax tiers.
-    salary_cap: int = _DEFAULT_SALARY_CAP
+    # Default now sourced from config.SALARY_CAP_BASE (DEVPLAN.md Step 2.4 moved this
+    # out of a World-local placeholder so systems/cap.py's grow_cap() has a stable
+    # config-level base to grow from across seasons).
+    salary_cap: int = SALARY_CAP_BASE
 
     # -- dormant multi-league hook fields (DESIGN.md point 11) ------------------
     # NHL-only in v1; these exist now, empty, so Phase 2 (CHL/NCAA, DEVPLAN.md
@@ -220,7 +220,7 @@ class World:
         world.draft_class = DraftClass.from_dict(dc) if dc else None
         world.user_team_id = d.get("user_team_id")
         world.standings_rule = d.get("standings_rule", DEFAULT_STANDINGS_RULE)
-        world.salary_cap = d.get("salary_cap", _DEFAULT_SALARY_CAP)
+        world.salary_cap = d.get("salary_cap", SALARY_CAP_BASE)
         world.mode = d.get("mode", "nhl")
         world.other_teams = {
             int(t): Team.from_dict(td) for t, td in d.get("other_teams", {}).items()

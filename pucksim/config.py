@@ -289,3 +289,58 @@ POSITION_FIT_PENALTY: dict = {
 # pair (both L or both R) as incurring this same penalty magnitude relative
 # to an opposite-handed pair (the real-NHL-preferred shape), all else equal.
 HANDEDNESS_FIT_PENALTY: int = 2
+
+# ---------------------------------------------------------------------------
+# Salary cap / contracts (DEVPLAN.md Step 2.4)
+# ---------------------------------------------------------------------------
+# v1's simplified cap model (DESIGN.md's explicit HoopR-style single-cap-number
+# decision, see models/contract.py's module docstring): one flat cap number, no
+# luxury-tax-line/apron/mid-level-exception machinery. This constant used to be a
+# `World`-local placeholder (`_DEFAULT_SALARY_CAP` in models/world.py) -- it moves
+# here now because Step 2.4's cap-growth mechanism (`systems/cap.py::grow_cap()`)
+# needs a stable config-level base to grow *from* each offseason, and every other
+# tunable constant in this codebase already lives in config.py, not scattered
+# across model modules.
+#
+# PROVISIONAL, first-pass dollar figure -- a round, real-NHL-scale number (the
+# actual 2025-26 NHL cap is in this ballpark); not tuned against any particular
+# in-game economy target. Revisit once player-generation salary distributions
+# exist to sanity-check against.
+SALARY_CAP_BASE = 82_500_000
+
+# Floor salary for any signed contract (entry-level/depth deals never go below
+# this). Real NHL has a real minimum ($775K for 2024-25); this is a round
+# placeholder in the same ballpark, not the exact CBA figure.
+MINIMUM_SALARY = 800_000
+
+# Cap ceiling for a single contract's annual salary, expressed as a fraction of
+# the league cap (real NHL's "20% max AAV" rule of thumb -- no player may sign
+# for more than 20% of the cap in a single season). Applied in
+# `systems/cap.py::max_salary()`.
+MAX_SALARY_CAP_FRACTION = 0.20
+
+# Contract length bounds. Real NHL max is 8 years (7 for a sign-and-trade,
+# simplified away here); rookie-scale (entry-level) deals are always 3 years
+# flat, matching the real ELC's fixed 3-year term regardless of signing age.
+MAX_CONTRACT_YEARS = 8
+ROOKIE_CONTRACT_YEARS = 3
+
+# Rookie-scale (entry-level) pay is a small flat fraction of the cap, not a
+# market-rate salary -- this is what keeps drafted stars cheap for their first
+# three years, same shape as the real ELC's flat, modest cap hit regardless of
+# how good the rookie turns out to be. PROVISIONAL fraction.
+ROOKIE_SALARY_CAP_FRACTION = 0.010   # ~$825K at an $82.5M cap
+
+# Trade salary-matching tolerance (there's no hard NHL retention-percentage/
+# matching-band rule to port -- unlike the NBA's "you must take back within X%"
+# retention math -- so this is a simplified, generous single-number buffer: a
+# team can absorb incoming salary up to its existing cap space plus this flat
+# dollar allowance, mirroring how HoopR's `TRADE_MATCH_BUFFER` gives small deals
+# breathing room without needing to model retained-salary trades (a real NHL
+# mechanic explicitly out of scope for v1 per DESIGN.md's cap-simplicity call).
+TRADE_MATCH_BUFFER = 3_000_000
+
+# How much the cap grows per offseason (`systems/cap.py::grow_cap()`), a flat
+# rate mirroring real-world NHL cap growth (~a few percent most years, though
+# real growth is negotiated and lumpy). PROVISIONAL/tunable.
+CAP_GROWTH_RATE = 0.03
