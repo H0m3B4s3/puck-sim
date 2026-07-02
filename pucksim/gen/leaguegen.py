@@ -39,6 +39,7 @@ from typing import Optional
 from pucksim import config
 from pucksim.gen.playergen import generate_goalie, generate_skater
 from pucksim.models.coach import assign_coach
+from pucksim.models.tactics import Tactics
 from pucksim.models.team import Team, auto_build_lines, seed_chemistry
 from pucksim.models.world import World
 from pucksim.rng import Rng
@@ -239,6 +240,17 @@ def build_world(seed: Optional[int] = None) -> World:
                 # database round-trip.
                 coach = assign_coach(tid, rng)
                 team.coach = coach.to_dict()
+
+                # Team.tactics (DEVPLAN.md Step 2.8): unlike ``coach`` above, ``Tactics`` is
+                # a real dataclass on Team now (Step 2.8 migrated it off the Optional[dict]
+                # placeholder -- see team.py's docstring), so it's stored directly, no
+                # to_dict()-at-rest workaround needed. Every generated team starts on the
+                # balanced/default tactics board (``Tactics()``'s own field defaults); a coach
+                # doesn't get an opinionated starting tactics setup baked in here -- that would
+                # be reading more into "generate a legal starting league" than this step asks
+                # for. A user (or a future AI-tactics-setter) can cycle it later via
+                # ``Tactics.cycle()``.
+                team.tactics = Tactics()
 
                 tid += 1
 

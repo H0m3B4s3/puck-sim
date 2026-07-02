@@ -17,9 +17,14 @@ slot and pair D on either side, at a fit-score cost (see ``position_fit_score()`
 ``config.HANDEDNESS_FIT_PENALTY``). This is consumed only here, in the line-builder -- never by
 ``attributes.overall()``, which stays position-agnostic.
 
-``tactics``/``coach`` are left as ``Optional[dict]`` placeholders -- Step 1.10 (building in
-parallel) owns the real ``Tactics``/``Coach`` classes; this step must not import a module that may
-not exist yet.
+``tactics`` is wired to a real :class:`~pucksim.models.tactics.Tactics` instance as of
+DEVPLAN.md Step 2.8 (it was left as an ``Optional[dict]`` placeholder from Step 1.7, since
+``tactics.py`` was being built in parallel back then and this module couldn't import a
+class that might not exist yet -- that constraint no longer applies). ``coach`` stays an
+``Optional[dict]`` on purpose, unlike ``tactics`` -- see ``sim/engine.py``'s
+``_TeamState._resolve_coach_profile`` docstring for why ``Team.to_dict()`` already commits
+to a serialized-dict-at-rest shape for coach specifically (fixing that is out of bounds for
+this step, which only touches ``tactics``).
 """
 from __future__ import annotations
 
@@ -29,6 +34,7 @@ from typing import Dict, List, Optional, Tuple
 from pucksim.config import HANDEDNESS_FIT_PENALTY, POSITION_FIT_PENALTY
 from pucksim.models.attributes import composite
 from pucksim.models.player import Player
+from pucksim.models.tactics import Tactics
 
 
 @dataclass
@@ -60,11 +66,14 @@ class Team:
 
     chemistry: Dict[str, float] = field(default_factory=dict)  # pair_key(a,b) -> shared secs
 
-    # Placeholders -- Step 1.10 (tactics.py/coach.py) is being built in parallel
-    # and may not exist yet. A later step replaces these with real dataclass
-    # types; keep the field names stable so that migration doesn't need a
-    # schema rewrite.
-    tactics: Optional[dict] = None
+    # ``tactics`` (DEVPLAN.md Step 2.8): a real Tactics instance now (was an Optional[dict]
+    # placeholder from Step 1.7, back when tactics.py didn't exist yet). ``None`` remains a
+    # legal value -- an expansion/freshly-built Team that hasn't had a coach's tactics board
+    # set yet -- consumers should treat ``None`` as "use Tactics() defaults", the same
+    # never-crash-on-missing-data philosophy ``coach.py``'s ``profile_for()`` fallback uses.
+    tactics: Optional[Tactics] = None
+    # ``coach`` stays an Optional[dict] placeholder -- see this module's docstring for why
+    # (Step 2.8 only migrates ``tactics``, not ``coach``).
     coach: Optional[dict] = None
 
     wins: int = 0
@@ -157,7 +166,7 @@ class Team:
             "goalie_starter": self.goalie_starter,
             "goalie_backup": self.goalie_backup,
             "chemistry": {k: round(v, 1) for k, v in self.chemistry.items()},
-            "tactics": dict(self.tactics) if self.tactics else None,
+            "tactics": self.tactics.to_dict() if self.tactics is not None else None,
             "coach": dict(self.coach) if self.coach else None,
             "wins": self.wins,
             "losses": self.losses,
@@ -181,7 +190,7 @@ class Team:
             goalie_starter=d.get("goalie_starter"),
             goalie_backup=d.get("goalie_backup"),
             chemistry={k: float(v) for k, v in d.get("chemistry", {}).items()},
-            tactics=(dict(d["tactics"]) if d.get("tactics") else None),
+            tactics=(Tactics.from_dict(d["tactics"]) if d.get("tactics") else None),
             coach=(dict(d["coach"]) if d.get("coach") else None),
             wins=d.get("wins", 0),
             losses=d.get("losses", 0),

@@ -73,6 +73,61 @@ persisting on ``Player`` across games) in a future game while still recovering.
 ``sim/season.py``'s ``advance_one_day`` heals one game's worth of recovery off every active
 injury right after the day's games are simmed, per that module's own documented hook point.
 
+Coach line-juggling AI (DEVPLAN.md Step 2.8): ``CoachProfile.line_juggling_patience`` (defined
+back in Step 1.10, never consumed until now) finally gets a real consumer -- a patience-gated
+forward-line/D-pair reshuffle trigger, checked once per REGULATION intermission (end of every
+regulation period, 1 through 3, including the intermission right before OT -- a real one too;
+OT/shootout periods themselves are excluded, same ``is_regulation`` gate the goalie-pull
+mechanic above uses). This is a genuinely open-ended mechanic DEVPLAN.md deliberately left unspecified
+beyond naming the knob and a plausible signal ("on-ice goal differential per combo") -- three
+judgment calls made here, each flagged clearly since a future step may want to revisit them:
+
+1. **What "combo" means.** Tracked per SLOT (index into ``team.lines``/``team.pairs`` -- line 0,
+   line 1, D-pair 0, etc.), not per exact personnel set. This coincides exactly with tracking by
+   personnel for as long as a slot goes unshuffled (nothing else in this codebase reorders
+   ``team.lines``/``team.pairs`` mid-game), and a reshuffle deliberately resets the swapped
+   slots' tracked diff back to 0.0 anyway (a freshly-assembled combo has no track record yet) --
+   so the distinction between "slot" and "personnel" never actually matters in practice. Slot
+   tracking is simpler bookkeeping (fixed-size ``Dict[int, float]``, no set-hashing/matching
+   logic for a combo that partially changes via an injury backfill) and was chosen for exactly
+   that reason -- DEVPLAN.md's own "reasonable first pass, don't over-engineer" framing.
+2. **The signal itself: on-ice goal differential per combo, 5v5-only.** ``_update_combo_diff``
+   credits/debits the CURRENT line-slot and pair-slot by +/-1.0 whenever a goal is scored while
+   the strength state is ``STRENGTH_5V5`` -- gated on 5v5 specifically because during a PP/PK the
+   on-ice group is the special-teams unit (``team.pp_unit_1``/``pk_unit_1``), not the normal
+   line/pair rotation; crediting/blaming a round-robin slot for a special-teams goal would
+   misattribute it to whichever combo happens to be next up, not who was actually on the ice.
+   No separate "minimum sample size" gate exists beyond the threshold's own magnitude
+   (``COMBO_COLD_GOAL_DIFF_THRESHOLD``) -- an NHL-shaped game only has ~3 goals/team, so
+   requiring 2 net unanswered goals against the SAME slot to call it "cold" already implies that
+   slot took the ice for a meaningful chunk of the game without answering back, without needing
+   separate shift-count bookkeeping.
+3. **The reshuffle mechanic: a random single-slot-position swap between two lines/pairs**, not a
+   full rebuild. ``_swap_line_slot``/``_swap_pair_slot`` pick one other line/pair at random and
+   swap ONE slot position (e.g. the LW) between the cold combo and that other combo -- a
+   real-hockey-shaped "the coach broke up a cold line by moving one guy" move, not "the coach
+   nuked all 12 forwards and re-drafted from scratch." Deliberately NOT routed through
+   ``auto_build_lines``'s fit-score optimizer -- that function is DETERMINISTIC (always produces
+   the same best-fit assignment for a given roster), so calling it here would either produce no
+   visible change (if it just reproduces the existing best-fit lines) or would silently discard
+   the "shake things up, not optimize" intent of a reactive coach's in-game reshuffle.
+
+Reshuffle probability is patience-gated (``LINE_JUGGLE_BASE_RESHUFFLE_CHANCE * (1.0 -
+patience)`` -- see ``_maybe_juggle_lines_for_team``): a patience-0.0 coach reshuffles a cold
+combo readily (90% per eligible intermission check), a patience-1.0 coach never does (``Rng.
+chance`` returns ``False`` outright for a non-positive probability, no draw consumed) --
+matching the "LOW patience juggles readily, HIGH patience sticks with lines longer" behavior
+``CoachProfile.line_juggling_patience``'s own docstring already promised back in Step 1.10.
+
+This is a LINEUP DECISION, not a realization mechanic (morale/clutch/fatigue/hot-hand) -- the
+codebase's "no upweighting" principle (ratings.py's ``hot_hand_boost()`` docstring) constrains
+mechanics that could push a player's effective rating above its ceiling; reshuffling WHO plays
+together doesn't touch any rating/probability formula, so that principle doesn't apply here.
+Nothing from ``models/tactics.py``'s new PP/PK style fields (``pp_style``/``pk_aggression``,
+also added this step) feeds into any shot-quality/save-probability computation either -- see
+that module's own docstring for why those stay pure data for now, same as ``forecheck_style``
+did through the whole MVP.
+
 Scope constraints this step still does NOT add (do not add scope here -- see DEVPLAN.md's
 explicit exclusions for later steps):
 - OT is still a clearly-commented provisional placeholder (simplified 5v5 sudden death, one
@@ -167,6 +222,30 @@ INJURY_STAMINA_SLOPE = 0.01   # matches HoopR's own durability-modifier slope sh
 # (``goalie_pull_max_deficit``/``goalie_pull_time_threshold_secs``, models/coach.py) -- these are
 # just the mechanic-level constants that aren't coach-specific.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Coach line-juggling AI (DEVPLAN.md Step 2.8). See this module's docstring's "Coach
+# line-juggling AI" section for the full design rationale/judgment calls; these are just the
+# tunable magnitudes.
+# ---------------------------------------------------------------------------
+COMBO_COLD_GOAL_DIFF_THRESHOLD = -2.0   # a line-slot/pair-slot's accumulated 5v5 on-ice goal
+                                        # differential (this game only, reset every game -- no
+                                        # cross-game carryover, same framing as fatigue) at or
+                                        # below this value is "cold" and becomes reshuffle-
+                                        # eligible at the next regulation intermission.
+                                        # Provisional/tunable: with an NHL-shaped game averaging
+                                        # ~3 goals/team, requiring 2 net unanswered goals against
+                                        # the SAME slot is already a real, fairly rare signal, not
+                                        # a hair-trigger that reshuffles on the first bad goal.
+LINE_JUGGLE_BASE_RESHUFFLE_CHANCE = 0.9   # reshuffle probability for the most reactive
+                                          # (line_juggling_patience == 0.0) coach when a combo is
+                                          # cold; scaled down linearly to 0 at patience == 1.0
+                                          # (see _maybe_juggle_lines_for_team). Not literally
+                                          # 100% even for the most reactive coach -- some
+                                          # restraint always, matching every other "coach
+                                          # tendency modulates a probability, never a certainty"
+                                          # pattern elsewhere in this module (goalie-pull,
+                                          # penalty probability, etc.).
+
 EMPTY_NET_GOAL_BASE_P = 0.55   # a shot that reaches an empty net (no goalie to resolve a save
                                # against) scores at a high but not-quite-certain rate per
                                # attempt -- misses/blocks still happen even into an empty net.
@@ -305,6 +384,19 @@ class _TeamState:
         self._line_idx = 0
         self._pair_idx = 0
         self.on_ice: List[int] = []           # 5 (or 6, pulled-goalie) skaters, current shift
+
+        # Line-juggling AI (DEVPLAN.md Step 2.8): the line-slot/pair-slot index actually used
+        # THIS shift (snapshotted in ``_next_normal_group`` before the round-robin pointer
+        # advances) -- ``_score_goal`` reads these to credit/debit the right slot's on-ice
+        # goal-differential tracker. ``line_combo_diff``/``pair_combo_diff`` map slot index ->
+        # accumulated 5v5 on-ice goal differential THIS GAME ONLY (reset every game, same as
+        # fatigue -- no cross-game carryover model exists for this either). See this module's
+        # docstring for why tracking is per-SLOT rather than per-exact-personnel-set.
+        self._current_line_idx = 0
+        self._current_pair_idx = 0
+        self.line_combo_diff: Dict[int, float] = {}
+        self.pair_combo_diff: Dict[int, float] = {}
+        self.reshuffle_count = 0   # total line/pair slot-swaps performed this game (test hook)
         self._normal_group: List[int] = []    # this shift's normal-rotation group, cached so
                                                # mid-shift strength-state changes can rebuild
                                                # on_ice without re-advancing the round-robin
@@ -381,8 +473,10 @@ class _TeamState:
         """
         lines = self.team.lines
         pairs = self.team.pairs
-        line = lines[self._line_idx % len(lines)] if lines else []
-        pair = pairs[self._pair_idx % len(pairs)] if pairs else []
+        self._current_line_idx = self._line_idx % len(lines) if lines else 0
+        self._current_pair_idx = self._pair_idx % len(pairs) if pairs else 0
+        line = lines[self._current_line_idx] if lines else []
+        pair = pairs[self._current_pair_idx] if pairs else []
         self._line_idx = (self._line_idx + 1) % max(1, len(lines))
         self._pair_idx = (self._pair_idx + 1) % max(1, len(pairs))
 
@@ -874,6 +968,12 @@ class GameSim:
             for state in (self.home, self.away):
                 if state.goalie_pulled:
                     self._return_goalie(state)
+            # Coach line-juggling AI (DEVPLAN.md Step 2.8): the intermission is the natural
+            # stoppage point a real coach reworks lines at -- checked here (is_regulation-gated,
+            # same as the goalie-pull return above) so it fires after every regulation period
+            # (including before OT, a real intermission too) but never after an OT/sudden-death
+            # period or the shootout placeholder. See this module's docstring for the full design.
+            self._maybe_juggle_lines_for_all()
 
         self._log(EVENT_PERIOD_END, f"End of period {self.period}")
 
@@ -1500,6 +1600,14 @@ class GameSim:
         # actually scored under (see _log_shot's docstring).
         scoring_strength_state = self.strength.state_for(offense.tid)
 
+        # Line-juggling AI combo-performance signal (DEVPLAN.md Step 2.8): credit/debit the
+        # CURRENT line-slot/pair-slot's on-ice goal differential, 5v5 only -- see this module's
+        # docstring for why PP/PK goals don't feed this tracker (the special-teams unit, not the
+        # normal line/pair rotation, was actually on the ice).
+        if scoring_strength_state == config.STRENGTH_5V5:
+            self._update_combo_diff(offense, 1.0)
+            self._update_combo_diff(defense, -1.0)
+
         # Real-NHL plus/minus rule: a power-play goal is NOT credited to plus/minus at all (for
         # the scoring team's skaters OR the shorthanded team's skaters) -- only even-strength
         # (5v5/4v4/3v3) and shorthanded-goals-for count. On-ice group sizes differ during PP/PK
@@ -1557,6 +1665,96 @@ class GameSim:
                             for pid in remaining]
         secondary = remaining[_weighted_index(self.rng, remaining_weights)]
         return primary, secondary
+
+    # -- coach line-juggling AI (DEVPLAN.md Step 2.8) --------------------------
+    def _update_combo_diff(self, state: _TeamState, delta: float) -> None:
+        """Credit/debit ``delta`` to the CURRENT forward-line-slot and D-pair-slot combo
+        trackers for ``state`` -- the on-ice-goal-differential-per-combo signal this module's
+        docstring describes. Only ever called from ``_score_goal`` for a 5v5 goal (see caller)."""
+        if state.team.lines:
+            idx = state._current_line_idx
+            state.line_combo_diff[idx] = state.line_combo_diff.get(idx, 0.0) + delta
+        if state.team.pairs:
+            idx = state._current_pair_idx
+            state.pair_combo_diff[idx] = state.pair_combo_diff.get(idx, 0.0) + delta
+
+    def _maybe_juggle_lines_for_all(self) -> None:
+        """Patience-gated line/pair reshuffle check for BOTH teams, called once per REGULATION
+        intermission (see ``_play_period``) -- see this module's docstring for the full design
+        rationale/judgment calls behind this mechanic."""
+        for state in (self.home, self.away):
+            self._maybe_juggle_lines_for_team(state)
+
+    def _maybe_juggle_lines_for_team(self, state: _TeamState) -> None:
+        """Check every line-slot/pair-slot combo currently tracked as "cold" (accumulated 5v5
+        on-ice goal differential at or below ``COMBO_COLD_GOAL_DIFF_THRESHOLD``) and roll,
+        independently per cold slot, whether ``state``'s coach reshuffles it -- probability
+        scaled by ``CoachProfile.line_juggling_patience`` (0.0 = readily reshuffles, 1.0 = never
+        does; see ``LINE_JUGGLE_BASE_RESHUFFLE_CHANCE``'s own comment for the exact formula).
+
+        Exposed as its own method (rather than inlined into ``_maybe_juggle_lines_for_all``) so
+        tests can drive it directly against a forced-cold combo dict without needing to actually
+        simulate a losing stretch of real gameplay to reach that state -- the same "drive engine
+        internals directly for a controlled scenario" testing pattern this codebase already uses
+        for pull-the-goalie (see ``tests/test_goalies.py``).
+        """
+        patience = max(0.0, min(1.0, state.coach_profile.line_juggling_patience))
+        reshuffle_p = LINE_JUGGLE_BASE_RESHUFFLE_CHANCE * (1.0 - patience)
+        if reshuffle_p <= 0.0:
+            return
+
+        cold_lines = [i for i, diff in state.line_combo_diff.items()
+                      if diff <= COMBO_COLD_GOAL_DIFF_THRESHOLD]
+        for idx in cold_lines:
+            if self.rng.chance(reshuffle_p):
+                self._swap_line_slot(state, idx)
+
+        cold_pairs = [i for i, diff in state.pair_combo_diff.items()
+                      if diff <= COMBO_COLD_GOAL_DIFF_THRESHOLD]
+        for idx in cold_pairs:
+            if self.rng.chance(reshuffle_p):
+                self._swap_pair_slot(state, idx)
+
+    def _swap_line_slot(self, state: _TeamState, cold_idx: int) -> None:
+        """Reshuffle the cold forward line at ``cold_idx``: pick a different line at random and
+        swap ONE slot position (LW/C/RW, chosen at random) between the two lines -- a
+        real-hockey-shaped "moved one guy to break up a cold line" tweak, not a full rebuild
+        (see this module's docstring point 3). Both swapped slots' tracked diff resets to 0.0
+        (a freshly-assembled combo has no track record yet). No-op if there's no other line to
+        swap with (a one-line roster, an extreme thin-bench edge case)."""
+        lines = state.team.lines
+        if len(lines) < 2 or cold_idx >= len(lines):
+            return
+        other_idx = self.rng.choice([i for i in range(len(lines)) if i != cold_idx])
+        cold_line, other_line = lines[cold_idx], lines[other_idx]
+        if len(cold_line) == 3 and len(other_line) == 3:
+            pos = self.rng.choice([0, 1, 2])
+            cold_line[pos], other_line[pos] = other_line[pos], cold_line[pos]
+        else:
+            # A degenerate (short-bench/injury-shrunk) line can't do a same-slot swap --
+            # fall back to swapping the two lines' personnel wholesale rather than crashing on
+            # a mismatched-length index.
+            lines[cold_idx], lines[other_idx] = other_line, cold_line
+        state.line_combo_diff[cold_idx] = 0.0
+        state.line_combo_diff[other_idx] = 0.0
+        state.reshuffle_count += 1
+
+    def _swap_pair_slot(self, state: _TeamState, cold_idx: int) -> None:
+        """D-pair analog of ``_swap_line_slot``: swap one D (slot 0 or 1) between the cold pair
+        and a randomly chosen other pair, resetting both slots' tracked diff to 0.0."""
+        pairs = state.team.pairs
+        if len(pairs) < 2 or cold_idx >= len(pairs):
+            return
+        other_idx = self.rng.choice([i for i in range(len(pairs)) if i != cold_idx])
+        cold_pair, other_pair = pairs[cold_idx], pairs[other_idx]
+        if len(cold_pair) == 2 and len(other_pair) == 2:
+            pos = self.rng.choice([0, 1])
+            cold_pair[pos], other_pair[pos] = other_pair[pos], cold_pair[pos]
+        else:
+            pairs[cold_idx], pairs[other_idx] = other_pair, cold_pair
+        state.pair_combo_diff[cold_idx] = 0.0
+        state.pair_combo_diff[other_idx] = 0.0
+        state.reshuffle_count += 1
 
     # -- ice time & fatigue ---------------------------------------------------
     def _apply_ice_time(self, shift_secs: float) -> None:
