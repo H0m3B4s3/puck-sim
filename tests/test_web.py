@@ -266,6 +266,275 @@ def test_team_colors_present_and_valid_hex_in_standings(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /transactions/cap
+# ---------------------------------------------------------------------------
+def test_cap_summary_without_session_is_a_clean_404(client):
+    resp = client.get("/transactions/cap")
+    assert resp.status_code == 404
+
+
+def test_cap_summary_returns_payroll_and_space(client):
+    client.post("/career/new", json={"seed": 100})
+    resp = client.get("/transactions/cap")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "payroll" in body
+    assert "cap_space" in body
+    assert "over_cap" in body
+    assert "salary_cap" in body
+    assert body["payroll"] >= 0
+    assert body["cap_space"] >= 0
+    assert isinstance(body["over_cap"], bool)
+    assert body["salary_cap"] > 0
+
+
+# ---------------------------------------------------------------------------
+# GET /transactions/freeagents
+# ---------------------------------------------------------------------------
+def test_free_agents_list_without_session_is_a_clean_404(client):
+    resp = client.get("/transactions/freeagents")
+    assert resp.status_code == 404
+
+
+def test_free_agents_returns_a_list_of_players(client):
+    from pucksim.sim.season import advance_one_day, start_season
+    from pucksim.web.session import session_store, SESSION_COOKIE_NAME
+
+    client.post("/career/new", json={"seed": 101})
+    resp = client.get("/transactions/freeagents")
+    assert resp.status_code == 200
+    agents = resp.json()
+    # Fresh league should have some undrafted free agents
+    assert isinstance(agents, list)
+
+
+# ---------------------------------------------------------------------------
+# POST /transactions/freeagents/{pid}/sign
+# ---------------------------------------------------------------------------
+def test_sign_free_agent_without_session_is_a_clean_404(client):
+    resp = client.post("/transactions/freeagents/1/sign", json={})
+    assert resp.status_code == 404
+
+
+def test_sign_free_agent_end_to_end(client):
+    from pucksim.web.session import session_store, SESSION_COOKIE_NAME
+
+    client.post("/career/new", json={"seed": 102})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    # Release a player to create a free agent
+    user_team = world.teams[world.user_team_id]
+    if not user_team.roster:
+        # If user team has no roster (shouldn't happen), skip this test
+        return
+    pid_to_release = user_team.roster[0]
+    world.release_player(pid_to_release)
+    session_store.save(sid, world)
+
+    # Get free agents
+    fa_resp = client.get("/transactions/freeagents")
+    assert fa_resp.status_code == 200
+    agents = fa_resp.json()
+    assert len(agents) > 0
+    fa_pid = agents[0]["pid"]
+
+    # Sign the free agent
+    sign_resp = client.post(f"/transactions/freeagents/{fa_pid}/sign", json={})
+    assert sign_resp.status_code == 200
+    assert sign_resp.json()["success"] is True
+
+    # Fetch the world again from session store
+    world_after = session_store.get(sid)
+
+    # Verify the player is now on the roster
+    user_team_after = world_after.teams[world_after.user_team_id]
+    assert fa_pid in user_team_after.roster
+
+    # Verify the player is no longer a free agent
+    assert fa_pid not in world_after.free_agents
+
+
+def test_sign_free_agent_with_explicit_terms(client):
+    from pucksim.web.session import session_store, SESSION_COOKIE_NAME
+
+    client.post("/career/new", json={"seed": 103})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    # Release a player to create a free agent
+    user_team = world.teams[world.user_team_id]
+    if not user_team.roster:
+        return
+    pid_to_release = user_team.roster[0]
+    world.release_player(pid_to_release)
+    session_store.save(sid, world)
+
+    # Get a free agent
+    fa_resp = client.get("/transactions/freeagents")
+    agents = fa_resp.json()
+    if not agents:
+        return
+    fa_pid = agents[0]["pid"]
+
+    # Sign with explicit salary and years
+    sign_resp = client.post(
+        f"/transactions/freeagents/{fa_pid}/sign",
+        json={"salary": 5000000, "years": 2},
+    )
+    assert sign_resp.status_code == 200
+
+    # Verify the contract was set
+    world_after = session_store.get(sid)
+    player = world_after.players[fa_pid]
+    assert player.contract.current_salary == 5000000
+    assert player.contract.years_remaining == 2
+
+
+# ---------------------------------------------------------------------------
+# GET /transactions/draft/board
+# ---------------------------------------------------------------------------
+def test_draft_board_without_session_is_a_clean_404(client):
+    resp = client.get("/transactions/draft/board")
+    assert resp.status_code == 404
+
+
+def test_draft_board_empty_preseason(client):
+    client.post("/career/new", json={"seed": 104})
+    resp = client.get("/transactions/draft/board")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["in_draft"] is False
+    assert body["board"] == []
+    assert body["team_on_clock"] is None
+
+
+# ---------------------------------------------------------------------------
+# POST /transactions/draft/pick
+# ---------------------------------------------------------------------------
+def test_draft_pick_without_session_is_a_clean_404(client):
+    resp = client.post("/transactions/draft/pick", json={"prospect_id": 1})
+    assert resp.status_code == 404
+
+
+def test_draft_pick_when_not_on_clock(client):
+    from pucksim.sim.season import advance_one_day, start_season
+    from pucksim.systems.draft_system import setup_draft
+    from pucksim.web.session import session_store, SESSION_COOKIE_NAME
+
+    client.post("/career/new", json={"seed": 105})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    # Setup draft but user's team is not first
+    setup_draft(world)
+    session_store.save(sid, world)
+
+    # Try to make a pick for a prospect
+    prospects = world.draft_class.remaining_prospects()
+    if prospects:
+        resp = client.post("/transactions/draft/pick", json={"prospect_id": prospects[0]})
+        # Should fail because user's team is not on the clock (unless they happen to be first)
+        if world.draft_class.team_on_clock() != world.user_team_id:
+            assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# GET /transactions/awards
+# ---------------------------------------------------------------------------
+def test_awards_without_session_is_a_clean_404(client):
+    resp = client.get("/transactions/awards")
+    assert resp.status_code == 404
+
+
+def test_awards_returns_dict_in_preseason(client):
+    client.post("/career/new", json={"seed": 106})
+    resp = client.get("/transactions/awards")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "season_year" in body
+    assert "awards" in body
+    assert isinstance(body["awards"], dict)
+
+
+# ---------------------------------------------------------------------------
+# POST /transactions/trades/propose
+# ---------------------------------------------------------------------------
+def test_trade_without_session_is_a_clean_404(client):
+    resp = client.post(
+        "/transactions/trades/propose",
+        json={"other_team_id": 1, "user_sends": [], "user_receives": []},
+    )
+    assert resp.status_code == 404
+
+
+def test_trade_propose_empty_is_rejected(client):
+    client.post("/career/new", json={"seed": 107})
+    resp = client.post(
+        "/transactions/trades/propose",
+        json={"other_team_id": 1, "user_sends": [], "user_receives": []},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["accepted"] is False
+    assert "Empty trade" in body["reason"] or "trade" in body["reason"].lower()
+
+
+def test_trade_propose_legal_swap_is_accepted_and_moves_both_rosters(client):
+    """A legal (cap-fitting, roster-membership-valid) trade is executed outright, not
+    subject to a separate AI accept/reject judgment -- systems.trades.propose_trade()'s own
+    docstring is explicit: "no negotiation, the offer is either accepted as constructed or
+    rejected outright." This test exercises that path end-to-end through the endpoint and
+    verifies both teams' rosters actually change (the DEVPLAN.md "sign a free agent" done
+    criterion's trade-equivalent -- a prior version of this test file only covered the
+    empty-trade rejection path, never a real accepted trade)."""
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 108})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    user_team = world.user_team
+    other_team = next(t for t in world.team_list() if t.tid != user_team.tid)
+
+    # Lowest-overall skater on each side -- cheapest, lowest-risk pair to swap without
+    # tripping the cap-matching buffer on a freshly generated (well-under-cap) league.
+    user_pid = min(
+        (pid for pid in user_team.roster if world.players[pid].position != "G"),
+        key=lambda pid: world.players[pid].overall,
+    )
+    other_pid = min(
+        (pid for pid in other_team.roster if world.players[pid].position != "G"),
+        key=lambda pid: world.players[pid].overall,
+    )
+
+    resp = client.post(
+        "/transactions/trades/propose",
+        json={
+            "other_team_id": other_team.tid,
+            "user_sends": [user_pid],
+            "user_receives": [other_pid],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["accepted"] is True
+
+    # Verify both sides of the roster mirror actually moved (via World.transfer_player, not
+    # a one-sided move) -- checked against the live session World, the same source of truth
+    # every other endpoint in this router reads from.
+    world_after = session_store.get(sid)
+    assert other_pid in world_after.team(user_team.tid).roster
+    assert user_pid not in world_after.team(user_team.tid).roster
+    assert user_pid in world_after.team(other_team.tid).roster
+    assert other_pid not in world_after.team(other_team.tid).roster
+    assert world_after.player(user_pid).team_id == other_team.tid
+    assert world_after.player(other_pid).team_id == user_team.tid
+
+
+# ---------------------------------------------------------------------------
 # GET /roster -- full roster
 # ---------------------------------------------------------------------------
 def test_get_roster_requires_session(client):

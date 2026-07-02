@@ -151,6 +151,126 @@ def standings_response(world: World) -> List[StandingsEntryDTO]:
 
 
 # ---------------------------------------------------------------------------
+# Cap summary (Step 2.9b-iii)
+# ---------------------------------------------------------------------------
+class CapSummaryDTO(BaseModel):
+    payroll: int
+    cap_space: int
+    over_cap: bool
+    salary_cap: int
+
+
+def cap_summary(world: World, team: Team) -> CapSummaryDTO:
+    """Cap/payroll summary for a team via ``systems/cap.py``'s existing functions."""
+    from pucksim.systems.cap import cap_space, over_cap, payroll
+
+    return CapSummaryDTO(
+        payroll=payroll(world, team),
+        cap_space=cap_space(world, team),
+        over_cap=over_cap(world, team),
+        salary_cap=world.salary_cap,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Player summary (lightweight, for boards/lists -- free agents, trade targets)
+# ---------------------------------------------------------------------------
+# Named distinctly from roster.py's PlayerSummaryDTO (added in Step 2.9b-i, which carries
+# contract/injury/shoots detail for a roster view) -- this is a deliberately lighter shape for
+# board/list contexts (free-agent board, trade targets) that don't need that detail, and reusing
+# the same class name would have silently shadowed one definition with the other on import.
+class TransactionPlayerSummaryDTO(BaseModel):
+    pid: int
+    name: str
+    position: str
+    age: int
+    overall: int
+    team_id: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# Trade response
+# ---------------------------------------------------------------------------
+class TradeResponseDTO(BaseModel):
+    accepted: bool
+    reason: str
+
+
+# ---------------------------------------------------------------------------
+# Draft board
+# ---------------------------------------------------------------------------
+class DraftBoardEntryDTO(BaseModel):
+    pid: int
+    name: str
+    position: str
+    age: int
+    overall: int
+    scouted_potential: int
+
+
+class DraftBoardDTO(BaseModel):
+    in_draft: bool
+    board: List[DraftBoardEntryDTO] = []
+    team_on_clock: Optional[int] = None
+    round_number: Optional[int] = None
+
+
+def draft_board_dto(world: World) -> DraftBoardDTO:
+    """Current draft board state."""
+    from pucksim.systems.draft_system import draft_board, _round_for_pick
+
+    if world.draft_class is None:
+        return DraftBoardDTO(in_draft=False, board=[], team_on_clock=None, round_number=None)
+
+    board = draft_board(world)
+    entries = [
+        DraftBoardEntryDTO(
+            pid=p.pid,
+            name=p.name,
+            position=p.position,
+            age=p.age,
+            overall=p.overall,
+            scouted_potential=p.scouted_potential(),
+        )
+        for p in board
+    ]
+
+    on_clock = world.draft_class.team_on_clock()
+    round_no = None
+    if on_clock is not None:
+        round_no = _round_for_pick(world.draft_class, world.draft_class.current_pick)
+
+    return DraftBoardDTO(
+        in_draft=True,
+        board=entries,
+        team_on_clock=on_clock,
+        round_number=round_no,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Awards
+# ---------------------------------------------------------------------------
+class AwardsEntryDTO(BaseModel):
+    pid: int
+    name: str
+    team: str
+    position: str
+    overall: int
+    gp: int
+    # Skater fields (optional, present for skaters)
+    g: Optional[int] = None
+    a: Optional[int] = None
+    pts: Optional[int] = None
+    ppg: Optional[float] = None
+    # Goalie fields (optional, present for goalies)
+    wins: Optional[int] = None
+    save_pct: Optional[float] = None
+    gaa: Optional[float] = None
+    shutouts: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
 # Player summary (for roster views)
 # ---------------------------------------------------------------------------
 class ContractSummaryDTO(BaseModel):
