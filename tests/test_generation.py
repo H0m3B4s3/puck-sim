@@ -6,6 +6,8 @@ builder), coach.py, and world.py all at once via `build_world()`.
 """
 from __future__ import annotations
 
+import re
+
 from pucksim import config
 from pucksim.gen import playergen
 from pucksim.gen.leaguegen import build_world
@@ -96,6 +98,34 @@ def test_every_team_has_a_coach():
         # Stored as a dict (see leaguegen.py's Team.coach typing note) --
         # a plain dataclass-shaped dict with at least an archetype name.
         assert "archetype" in team.coach
+
+
+# ---------------------------------------------------------------------------
+# Jersey colors (DEVPLAN.md Step 2.9a)
+# ---------------------------------------------------------------------------
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def test_every_team_has_valid_hex_jersey_colors():
+    world = build_world(seed=42)
+    for team in world.teams.values():
+        assert _HEX_COLOR_RE.match(team.primary_color), team.primary_color
+        assert _HEX_COLOR_RE.match(team.secondary_color), team.secondary_color
+        assert team.primary_color != team.secondary_color
+
+
+def test_every_team_has_a_distinct_color_pair():
+    world = build_world(seed=42)
+    pairs = {(t.primary_color, t.secondary_color) for t in world.teams.values()}
+    assert len(pairs) == len(world.teams)
+
+
+def test_same_seed_produces_same_jersey_colors():
+    world_a = build_world(seed=7)
+    world_b = build_world(seed=7)
+    colors_a = {tid: (t.primary_color, t.secondary_color) for tid, t in world_a.teams.items()}
+    colors_b = {tid: (t.primary_color, t.secondary_color) for tid, t in world_b.teams.items()}
+    assert colors_a == colors_b
 
 
 # ---------------------------------------------------------------------------
