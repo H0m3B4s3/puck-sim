@@ -19,6 +19,29 @@ otherwise -- ``special_teams.on_ice_group_for_state``) whenever the strength sta
 (a penalty drawn, or a penalty expiring mid-shift). The real-NHL "a shorthanded goal ends a
 non-fighting minor penalty early" rule is implemented in ``_score_goal``.
 
+Goalies as a full system (DEVPLAN.md Step 2.2): ``GameSim`` accepts optional
+``home_goalie_id``/``away_goalie_id`` overrides so a caller (``sim/season.py``'s rest-based
+rotation, via ``sim/goalies.py``'s ``choose_starting_goalie``) can start the backup instead of
+``Team.goalie_starter`` for a given game -- see ``_TeamState.__init__``. Two goalie-specific
+mechanics live here:
+
+- **Hot hand** (``_TeamState.goalie_hot_hand``, a small rolling streak counter incremented per
+  consecutive save and reset on a goal against) is read through
+  ``ratings.hot_hand_boost(streak) -> fraction`` and applied ONLY via a gap-closing rescale of
+  ``def_real`` (``effective_def_real = def_real + (1.0 - def_real) * fraction``) -- see
+  ``_resolve_shot_attempt`` and ``ratings.py``'s "no upweighting" docstring for why this
+  replaced an earlier additive nudge that could push a save probability above what a goalie's
+  rating alone would ever produce.
+- **Pull the goalie** (``_maybe_pull_goalie``/``_maybe_return_goalie``, checked once per shift):
+  when a team is trailing by at most ``coach_profile.goalie_pull_max_deficit`` goals with at
+  most ``coach_profile.goalie_pull_time_threshold_secs`` left in REGULATION (never during the
+  OT placeholder -- an empty-net pull is a score-driven regulation decision), that team's
+  goalie is pulled for a 6th skater on their own offensive on-ice group; the opponent then faces
+  an empty net (``_resolve_shot_attempt`` already handled ``goalie is None`` defensively before
+  this step -- pulling makes that path a real, common occurrence instead of a never-hit guard).
+  The goalie returns immediately if the trailing team ties/takes the lead, if the deficit grows
+  past the threshold again, or at the period buzzer.
+
 Mirrors HoopR's ``hoopsim/sim/engine.py`` control-flow shape directly: a ``_TeamState`` inner
 class tracking on-ice personnel/fatigue/ice-time, a ``GameSim`` class, and the resumable-generator
 pattern (``coach_session()`` yields a decision-point view at every natural stoppage -- here, after
@@ -29,7 +52,6 @@ rewrite -- it will plug in by supplying real orders through the same generator s
 
 Scope constraints this step still does NOT add (do not add scope here -- see DEVPLAN.md's
 explicit exclusions for later steps):
-- No goalie-pull / extra-attacker (Step 2.2).
 - Faceoffs still only at period start and immediately after a goal -- penalty-stoppage
   faceoffs (i.e. actually gating post-penalty possession on a fresh faceoff rather than the
   shift loop's existing random-attacker-flip abstraction) are Step 2.3 scope; this step's
@@ -38,8 +60,10 @@ explicit exclusions for later steps):
   extra period, unresolved ties left as ``went_ot=True`` with no shootout) -- real 3-on-3/
   shootout resolution is Step 2.6. Penalties CAN still be drawn during this OT placeholder
   (the penalty engine doesn't gate on period type), which is a reasonable simplification given
-  real 3-on-3 OT is Step 2.6 scope anyway.
-- Fatigue resets every game; it never persists across games in this step (Step 2.2 territory).
+  real 3-on-3 OT is Step 2.6 scope anyway. Goalie-pull is explicitly regulation-only (see above)
+  so it does not interact with this placeholder.
+- Fatigue still resets every game; it never persists across games (still no cross-game fatigue
+  carryover model -- out of scope for this step too).
 """
 from __future__ import annotations
 
@@ -78,10 +102,33 @@ BASE_SHOT_ATTEMPTS_PER_SHIFT = 0.9    # league-average expected shot attempts pe
 FACEOFF_WIN_BASE = 0.50               # coin-flip baseline before rating gap / realization
 FATIGUE_GAIN_PER_SEC = 0.028          # fatigue points gained per second of shift ice time
 FATIGUE_RECOVER_PER_SEC = 0.05        # fatigue points recovered per second on the bench
-GOAL_HOT_HAND_NUDGE = 0.015           # small goalie "hot hand" bump per consecutive save, capped
-GOAL_HOT_HAND_MAX = 0.06
+
+# Goalie "hot hand" streak-tracking cadence (DEVPLAN.md Step 2.2). ``goalie_hot_hand`` is a
+# small rolling counter (see _TeamState), NOT a probability/fraction itself -- it's fed through
+# ``ratings.hot_hand_boost()`` to get a bounded [0, HOT_HAND_MAX_FRACTION] fraction, which then
+# closes part of the gap between def_real and 1.0 (see _resolve_shot_attempt). This replaced an
+# earlier additive nudge applied directly to save_p -- see ratings.py's "no upweighting" note on
+# hot_hand_boost() for exactly why that was a bug, not a design choice, and must not come back.
+GOAL_HOT_HAND_STREAK_INCREMENT = 1.0   # streak credit gained per consecutive save
+GOAL_HOT_HAND_STREAK_MAX = 12.0        # streak counter ceiling (well past hot_hand_boost's own
+                                        # saturation point, just a sanity bound on the counter)
+
 REBOUND_CHANCE_BASE = 0.22            # probability an unconverted on-goal shot produces a rebound
 SHIFT_SECONDS_JITTER = 8.0            # +/- gaussian spread around config.SHIFT_SECONDS_TARGET
+
+# ---------------------------------------------------------------------------
+# Pull-the-goalie / extra-attacker tunables (DEVPLAN.md Step 2.2). The actual trigger thresholds
+# (deficit/time-remaining) come from each team's own CoachProfile
+# (``goalie_pull_max_deficit``/``goalie_pull_time_threshold_secs``, models/coach.py) -- these are
+# just the mechanic-level constants that aren't coach-specific.
+# ---------------------------------------------------------------------------
+EMPTY_NET_GOAL_BASE_P = 0.55   # a shot that reaches an empty net (no goalie to resolve a save
+                               # against) scores at a high but not-quite-certain rate per
+                               # attempt -- misses/blocks still happen even into an empty net.
+PULL_RETURN_LEAD_SWING = 1     # if the pulled team's deficit ever WORSENS by this many goals
+                               # relative to when they pulled, put the goalie back (a blown pull
+                               # attempt shouldn't compound into an even worse empty-net
+                               # disaster) -- see _maybe_return_goalie.
 
 # Zone/shot-type pools (DEVPLAN.md: "invent a reasonable small set"). Zone strings double as a
 # coarse shot-quality signal: danger zones first, low-danger zones last.
@@ -112,7 +159,8 @@ class _TeamState:
     ``Team``/``Player`` models (those are season-persistent; this is scoped to one game).
     """
 
-    def __init__(self, world: World, team: Team, is_home: bool) -> None:
+    def __init__(self, world: World, team: Team, is_home: bool, *,
+                 starter_override: Optional[int] = None) -> None:
         self.team = team
         self.tid = team.tid
         self.abbrev = team.abbrev
@@ -124,14 +172,26 @@ class _TeamState:
         # DEVPLAN.md's explicit instruction).
         self._line_idx = 0
         self._pair_idx = 0
-        self.on_ice: List[int] = []           # 5 skaters, current shift (3F + 2D)
+        self.on_ice: List[int] = []           # 5 (or 6, pulled-goalie) skaters, current shift
         self._normal_group: List[int] = []    # this shift's normal-rotation group, cached so
                                                # mid-shift strength-state changes can rebuild
                                                # on_ice without re-advancing the round-robin
                                                # pointer (see advance_shift's docstring)
-        self.goalie_id: Optional[int] = team.goalie_starter
 
-        # Fatigue (0..100, resets every game -- persistence across games is Step 2.2 scope).
+        # Starting goalie: defaults to Team.goalie_starter, but a caller (sim/season.py's
+        # rest-based rotation, via sim/goalies.py's choose_starting_goalie) can override this to
+        # start the backup instead for a given game (DEVPLAN.md Step 2.2). ``starter_goalie_id``
+        # remembers the ORIGINAL starting goalie for this game (never changes once play begins)
+        # so pull/un-pull logic always restores the right goalie, independent of which one was
+        # actually chosen to start.
+        self.starter_goalie_id: Optional[int] = (
+            starter_override if starter_override is not None else team.goalie_starter
+        )
+        self.goalie_id: Optional[int] = self.starter_goalie_id
+
+        # Fatigue (0..100, resets every game -- persistence across games is out of this step's
+        # scope; rest-based starter ROTATION is handled at the season-orchestration level, see
+        # sim/goalies.py, but in-game fatigue itself still doesn't carry across games).
         self.fatigue: Dict[int, float] = {pid: 0.0 for pid in team.roster}
         self.shift_count: Dict[int, int] = {pid: 0 for pid in team.roster}
 
@@ -141,9 +201,20 @@ class _TeamState:
 
         self.cache: Optional[R.OnIceCache] = None
 
-        # Goalie "hot hand": a small rolling nudge, mean-reverting, reset at game start (simple
-        # fit per DEVPLAN.md -- "you may add a simple goalie hot hand nudge if it's a clean fit").
+        # Goalie "hot hand": a small rolling streak counter, mean-reverting (built up by
+        # consecutive saves, reset by a goal against), reset at game start. Reinterpreted in
+        # this step (DEVPLAN.md Step 2.2) from a direct additive save_p nudge into a streak value
+        # consumed exclusively through ratings.hot_hand_boost()'s gap-closing fraction -- see
+        # this module's docstring and ratings.py's "no upweighting" note. Never applied to the
+        # OTHER team's goalie -- each team's own goalie has independent streak state.
         self.goalie_hot_hand: float = 0.0
+
+        # Pull-the-goalie state (DEVPLAN.md Step 2.2). ``goalie_pulled`` is this team's own
+        # current pulled/not-pulled status; ``pulled_at_deficit`` remembers the goal deficit at
+        # the moment of pulling so _maybe_return_goalie can detect "the deficit got WORSE since
+        # we pulled" (see PULL_RETURN_LEAD_SWING) without re-deriving it from scratch.
+        self.goalie_pulled: bool = False
+        self.pulled_at_deficit: Optional[int] = None
 
     @staticmethod
     def _resolve_coach_profile(team: Team) -> CoachProfile:
@@ -204,6 +275,15 @@ class _TeamState:
         the round-robin pointer again. Safe to call any number of times within a single shift
         (a penalty drawn, then expiring, then another drawn, etc.) without distorting the
         normal-rotation cadence.
+
+        Pull-the-goalie (DEVPLAN.md Step 2.2): if ``self.goalie_pulled`` is set, this team fields
+        one extra skater beyond the normal ``skaters_needed`` count for their OWN offensive
+        on-ice group -- a 6th body (the "extra attacker") spliced onto the end of the on-ice
+        list. This is exactly the "on-ice group is a plain list, not a hard-coded Line/Pair
+        object" flexibility DESIGN.md's Step 1.7 called out: a 6-skater group needs no schema
+        change, just one more id appended to the same ``List[int]`` every other consumer already
+        expects. The extra skater is the best-fit forward not already on the ice this shift
+        (falls back to any rostered skater not already included, never crashes on a thin bench).
         """
         normal_group = self._normal_group
         state = strength_state or config.STRENGTH_5V5
@@ -214,9 +294,25 @@ class _TeamState:
                 self.team, state, normal_group=normal_group,
                 skaters_needed=skaters_needed, penalized_ids=penalized_ids,
             )
+        if self.goalie_pulled:
+            self.on_ice = self._with_extra_attacker(self.on_ice)
         for pid in self.on_ice:
             self.shift_count[pid] = self.shift_count.get(pid, 0) + 1
         self._rebuild_cache()
+
+    def _with_extra_attacker(self, group: List[int]) -> List[int]:
+        """Append one extra skater to ``group`` for a pulled-goalie 6-attacker shift (DEVPLAN.md
+        Step 2.2). Prefers the highest-``overall`` skater on the roster not already in ``group``
+        (a coach sends out the best available extra body, not a random one); falls back to
+        leaving ``group`` unchanged if literally every rostered skater is already on the ice
+        (an extreme-injury/thin-bench edge case -- never crash, just field 5 instead of 6)."""
+        on_ice_set = set(group)
+        candidates = [pid for pid in self.team.roster
+                      if pid not in on_ice_set and pid != self.goalie_id and pid in self.players]
+        if not candidates:
+            return group
+        extra = max(candidates, key=lambda pid: self.players[pid].overall)
+        return list(group) + [extra]
 
     def _rebuild_cache(self) -> None:
         on_ice_players = [self.players[pid] for pid in self.on_ice if pid in self.players]
@@ -244,21 +340,32 @@ class _TeamState:
 # GameSim
 # ---------------------------------------------------------------------------
 class GameSim:
-    """Simulates one 5v5-only game between two teams drawn from ``world``.
+    """Simulates one game between two teams drawn from ``world``.
 
     Usage: ``GameSim(world, home_tid, away_tid).play()`` for headless simulation (this step's
     actual use case). The resumable ``coach_session()`` generator is exposed for a future
     live-coaching consumer (web layer, not built yet) -- ``play()`` is just a synchronous driver
     over it with no real decisions made.
+
+    ``home_goalie_id``/``away_goalie_id`` (DEVPLAN.md Step 2.2): optional per-game starter
+    overrides. ``_TeamState.__init__`` previously always read ``team.goalie_starter`` directly;
+    a caller that has already decided (via ``sim/goalies.py``'s rest-based
+    ``choose_starting_goalie``) that the BACKUP should start this particular game passes that
+    pid here instead. Defaults to ``None`` (falls back to ``team.goalie_starter``, i.e. identical
+    behavior to before this step for any caller that doesn't opt in).
     """
 
     def __init__(self, world: World, home_tid: int, away_tid: int, *,
-                 collect_pbp: bool = False) -> None:
+                 collect_pbp: bool = False,
+                 home_goalie_id: Optional[int] = None,
+                 away_goalie_id: Optional[int] = None) -> None:
         self.world = world
         self.rng = world.rng
         self.collect_pbp = collect_pbp
-        self.home = _TeamState(world, world.team(home_tid), is_home=True)
-        self.away = _TeamState(world, world.team(away_tid), is_home=False)
+        self.home = _TeamState(world, world.team(home_tid), is_home=True,
+                               starter_override=home_goalie_id)
+        self.away = _TeamState(world, world.team(away_tid), is_home=False,
+                               starter_override=away_goalie_id)
         self.result = GameResult(home_tid=home_tid, away_tid=away_tid)
         self.period = 1
         self.game_secs = 0.0     # elapsed game time, monotonically increasing across periods/OT
@@ -297,7 +404,7 @@ class GameSim:
 
         for p in range(1, config.PERIODS + 1):
             self.period = p
-            yield from self._play_period(config.PERIOD_SECONDS)
+            yield from self._play_period(config.PERIOD_SECONDS, is_regulation=True)
 
         # -- provisional OT placeholder -----------------------------------
         # DEVPLAN.md: MVP needs "a clearly-commented provisional tie-break or simple sudden-death
@@ -306,17 +413,26 @@ class GameSim:
         # strength state doesn't exist until Step 2.1) until either team scores or the period time
         # runs out, in which case the game is left as an unresolved tie with went_ot=True and
         # went_so always False (shootouts don't exist yet). Real NHL OT/SO resolution replaces this
-        # whole block in Step 2.6.
+        # whole block in Step 2.6. is_regulation=False here: pull-the-goalie (Step 2.2) is an
+        # explicit regulation-only, score-driven mechanic -- it never triggers (or stays active)
+        # once the game reaches this placeholder period.
         if self.result.home_score == self.result.away_score:
             self._is_ot = True
             self.result.went_ot = True
             self.period += 1
-            yield from self._play_period(config.OT_SECONDS_REGULAR_SEASON, sudden_death=True)
+            yield from self._play_period(config.OT_SECONDS_REGULAR_SEASON, sudden_death=True,
+                                          is_regulation=False)
 
     # -- period / shift loop ---------------------------------------------------
-    def _play_period(self, length_secs: float, sudden_death: bool = False):
+    def _play_period(self, length_secs: float, sudden_death: bool = False, is_regulation: bool = True):
         """Run shifts until ``length_secs`` of clock has elapsed (or, in sudden death, until a goal
-        is scored). A generator: yields a decision-point view immediately after any goal."""
+        is scored). A generator: yields a decision-point view immediately after any goal.
+
+        ``is_regulation`` (DEVPLAN.md Step 2.2): pull-the-goalie is a regulation-only mechanic
+        (see ``_maybe_pull_goalie``) -- the provisional OT placeholder passes ``False`` so a
+        goalie is never pulled/kept-pulled once the game reaches the (still-provisional, Step
+        2.6 territory) OT period.
+        """
         clock = length_secs
         # Faceoff at the start of every period (MVP scope: faceoffs only at period start / after a
         # goal -- no icing/offside/penalty stoppages yet, that's Step 2.3).
@@ -325,6 +441,8 @@ class GameSim:
         while clock > 0:
             shift_secs = max(15.0, self.rng.gauss(config.SHIFT_SECONDS_TARGET, SHIFT_SECONDS_JITTER))
             shift_secs = min(shift_secs, clock)
+            if is_regulation:
+                self._update_goalie_pulls(clock)
             goal_scored = yield from self._play_shift(shift_secs)
             clock -= shift_secs
             self.game_secs += shift_secs
@@ -332,10 +450,23 @@ class GameSim:
                 if sudden_death:
                     clock = 0.0   # sudden death ends immediately on a goal
                     break
+                # A goal just changed the score state -- re-check goalie-pull status right away
+                # (DEVPLAN.md Step 2.2: "un-pull if the trailing team scores") rather than waiting
+                # for next shift's regular _update_goalie_pulls check, so a team that ties/takes
+                # the lead doesn't play even one extra shift 6-on-5 by mistake.
+                if is_regulation:
+                    self._update_goalie_pulls(clock)
                 # Faceoff at center ice restarts play after a goal (MVP scope: the only other
                 # legal faceoff trigger besides period start).
                 if clock > 0:
                     self._log_faceoff()
+
+        # Regulation ends -- any pulled goalie returns for the next period/OT (a coach doesn't
+        # carry an empty net into intermission; see _maybe_return_goalie's time-based fallback).
+        if is_regulation:
+            for state in (self.home, self.away):
+                if state.goalie_pulled:
+                    self._return_goalie(state)
 
         self._log(EVENT_PERIOD_END, f"End of period {self.period}")
 
@@ -398,6 +529,83 @@ class GameSim:
         state_mult = R.strength_state_shot_volume_multiplier(self.strength.state_for(offense.tid))
         mean_interval = config.SHIFT_SECONDS_TARGET / (BASE_SHOT_ATTEMPTS_PER_SHIFT * mult * state_mult)
         return max(2.0, self.rng.gauss(mean_interval, mean_interval * 0.35))
+
+    # -- pull the goalie / extra attacker (DEVPLAN.md Step 2.2) ------------------
+    def _update_goalie_pulls(self, secs_remaining_in_period: float) -> None:
+        """Checked once per shift (regulation periods only -- see ``_play_period``'s
+        ``is_regulation`` gate): decide whether either team should pull its goalie for an extra
+        attacker, or bring an already-pulled goalie back.
+
+        Only the LAST period of regulation matters for a real empty-net pull (no NHL coach pulls
+        the goalie in the first period down a goal), so this is a no-op outside that period --
+        cheap to check unconditionally every shift rather than threading a separate "are we in
+        the third" flag through the caller.
+        """
+        if self.period != config.PERIODS:
+            return
+        for state, other in ((self.home, self.away), (self.away, self.home)):
+            if state.goalie_pulled:
+                self._maybe_return_goalie(state, other, secs_remaining_in_period)
+            else:
+                self._maybe_pull_goalie(state, other, secs_remaining_in_period)
+
+    def _deficit_for(self, state: _TeamState, other: _TeamState) -> int:
+        """How many goals ``state`` currently trails by (0 if tied or leading) -- the "deficit"
+        DEVPLAN.md's coach thresholds are expressed against."""
+        my_score = self.result.home_score if state.is_home else self.result.away_score
+        their_score = self.result.away_score if state.is_home else self.result.home_score
+        return max(0, their_score - my_score)
+
+    def _maybe_pull_goalie(self, state: _TeamState, other: _TeamState,
+                           secs_remaining: float) -> None:
+        """Pull ``state``'s goalie for a 6th attacker if they're trailing by no more than their
+        own coach's ``goalie_pull_max_deficit`` with no more than
+        ``goalie_pull_time_threshold_secs`` left in regulation (DEVPLAN.md Step 2.2, consuming
+        ``CoachProfile`` fields that were defined back in Step 1.10 but unconsumed until now).
+        A team that's tied or leading never pulls (deficit of 0 doesn't clear the "trailing"
+        bar -- pulling the goalie only ever makes sense when behind)."""
+        deficit = self._deficit_for(state, other)
+        if deficit <= 0:
+            return
+        profile = state.coach_profile
+        if (deficit <= profile.goalie_pull_max_deficit
+                and secs_remaining <= profile.goalie_pull_time_threshold_secs):
+            state.goalie_pulled = True
+            state.pulled_at_deficit = deficit
+            # goalie_id -> None: for shot-facing purposes this team's net is now empty (see
+            # _resolve_shot_attempt's already-existing `goalie is None` handling, extended by
+            # this step to resolve sensibly -- an empty net, not a crash). The player is not
+            # removed from the roster/box score; ``starter_goalie_id`` retains who to restore on
+            # an un-pull (see _return_goalie).
+            state.goalie_id = None
+            self._refresh_on_ice_for_all()
+
+    def _maybe_return_goalie(self, state: _TeamState, other: _TeamState,
+                             secs_remaining: float) -> None:
+        """Return an already-pulled goalie if the situation that justified pulling him has
+        resolved: the trailing team tied/took the lead (deficit <= 0), the deficit got
+        meaningfully WORSE than when he was pulled (a blown extra-attacker gamble -- keep
+        piling on an empty net rarely helps once the other team padded the lead further, see
+        ``PULL_RETURN_LEAD_SWING``), or the period is basically over (a very-end-of-period
+        fallback, since ``_play_period`` also force-returns any pulled goalie at the buzzer)."""
+        deficit = self._deficit_for(state, other)
+        if deficit <= 0:
+            self._return_goalie(state)
+            return
+        pulled_at = state.pulled_at_deficit if state.pulled_at_deficit is not None else deficit
+        if deficit - pulled_at >= PULL_RETURN_LEAD_SWING:
+            self._return_goalie(state)
+            return
+        if secs_remaining <= 1.0:
+            self._return_goalie(state)
+
+    def _return_goalie(self, state: _TeamState) -> None:
+        """Put ``state``'s original starting goalie back in net and rebuild on-ice groups so the
+        6-skater extra-attacker group reverts to a normal 5 immediately."""
+        state.goalie_pulled = False
+        state.pulled_at_deficit = None
+        state.goalie_id = state.starter_goalie_id
+        self._refresh_on_ice_for_all()
 
     # -- penalties / strength state ---------------------------------------------
     def _check_for_penalties(self) -> None:
@@ -548,8 +756,16 @@ class GameSim:
         skill gap through the realization model, log the PBPEvent (with full analytics context),
         update box-score counters (SOG/shots_faced/Corsi/Fenwick as a filter over this same event,
         goals/assists/plus_minus on a goal), and return one of "goal"/"save"/"miss"/"block"/
-        "rebound"."""
-        if not offense.on_ice or not defense.on_ice or defense.goalie_id is None:
+        "rebound".
+
+        ``defense.goalie_id is None`` now means a genuinely EMPTY NET (DEVPLAN.md Step 2.2's
+        pull-the-goalie mechanic, ``_maybe_pull_goalie``) rather than an unreachable data-quality
+        guard -- an on-goal attempt against an empty net resolves via ``_resolve_empty_net_shot``
+        (near-certain goal, but still not literally 100%: misses/blocks still happen) instead of
+        being forced to "miss" outright, which is what an earlier revision of this method did
+        (a leftover MVP-era defensive guard from before an empty net was ever a real, reachable
+        game state)."""
+        if not offense.on_ice or not defense.on_ice:
             return SHOT_OUTCOME_MISS
 
         shooter = self._pick_shooter(offense)
@@ -573,6 +789,15 @@ class GameSim:
         if goalie is not None:
             def_real *= R.morale_realization(goalie.morale)
             def_real *= R.fatigue_realization(defense.fatigue.get(goalie.pid, 0.0))
+            # Goalie "hot hand" (DEVPLAN.md Step 2.2): a bounded fraction (ratings.hot_hand_boost,
+            # driven by this goalie's own consecutive-save streak) closes PART of the gap between
+            # def_real and 1.0 -- it can only pull realization UP toward the ceiling, never past
+            # it, and never pulls it down (that's morale/fatigue/chemistry's job above). This
+            # REPLACES an earlier additive nudge that was applied directly to save_p below,
+            # bypassing def_real entirely -- see ratings.py's hot_hand_boost() docstring for why
+            # that was a genuine "players can exceed their rating" violation, not a design choice.
+            hot_hand_fraction = R.hot_hand_boost(defense.goalie_hot_hand)
+            def_real = def_real + (1.0 - def_real) * hot_hand_fraction
 
         gap = (shot_skill - goalie_skill) * 0.0035
         # Small zone/shot-type quality bonus feeds directly into the on-goal/quality of the
@@ -588,8 +813,6 @@ class GameSim:
                       0.5 * _ZONE_QUALITY[zone] + 0.5 * _SHOT_TYPE_QUALITY[shot_type]
                       + strength_quality_delta))
         rush_bonus = 0.03 if rush else 0.0
-
-        goalie_hot_hand = defense.goalie_hot_hand if goalie is not None else 0.0
 
         # -- on-goal (not blocked/missed) probability -----------------------
         on_goal_p = max(0.35, min(0.92, 0.55 + (quality - 0.5) * 0.5 + gap * off_real))
@@ -607,23 +830,28 @@ class GameSim:
             self._apply_corsi_fenwick(offense, defense, blocked=blocked)
             return outcome
 
-        # Attempt reached the goalie: charge SOG + shots_faced, then resolve save vs. goal.
+        # Attempt reached the goalie (or an empty net): charge SOG, then resolve save/goal --
+        # shots_faced is a goalie-box-score stat, so it only accrues when there's actually a
+        # goalie in net to face it (an empty-net attempt has no goalie to charge shots_faced to).
         self.result.skater_line(shooter.pid).sog += 1
         if goalie is not None:
             self.result.goalie_line(goalie.pid).shots_faced += 1
+        else:
+            return self._resolve_empty_net_shot(offense, defense, shooter, zone, shot_type,
+                                                rush, rebound)
 
-        save_p = max(0.55, min(0.97, 0.90 - (quality - 0.5) * 0.35 - rush_bonus
-                                - gap * off_real + goalie_hot_hand))
+        save_p = max(0.55, min(0.97, 0.90 - (quality - 0.5) * 0.35 - rush_bonus - gap * off_real))
         # def_real scales the goalie's realized share of their save probability edge over a
-        # neutral 0.90 baseline, mirroring HoopR's shooter/defender gap-parity approach.
+        # neutral 0.90 baseline, mirroring HoopR's shooter/defender gap-parity approach. Hot hand
+        # is already folded into def_real above -- do NOT add it again here (see this method's
+        # docstring / ratings.hot_hand_boost's "no upweighting" note).
         save_p = max(0.55, min(0.97, 0.90 + (save_p - 0.90) * def_real))
         saved = self.rng.chance(save_p)
 
         if saved:
-            if goalie is not None:
-                self.result.goalie_line(goalie.pid).saves += 1
-                defense.goalie_hot_hand = min(GOAL_HOT_HAND_MAX,
-                                              defense.goalie_hot_hand + GOAL_HOT_HAND_NUDGE)
+            self.result.goalie_line(goalie.pid).saves += 1
+            defense.goalie_hot_hand = min(GOAL_HOT_HAND_STREAK_MAX,
+                                          defense.goalie_hot_hand + GOAL_HOT_HAND_STREAK_INCREMENT)
             self._log_shot(offense, defense, shooter, goalie, zone, shot_type, rush, rebound,
                           SHOT_OUTCOME_SAVE)
             self._apply_corsi_fenwick(offense, defense, blocked=False)
@@ -635,6 +863,28 @@ class GameSim:
         self._apply_corsi_fenwick(offense, defense, blocked=False)
         self._score_goal(offense, defense, shooter, goalie, zone, shot_type, rush, rebound)
         return SHOT_OUTCOME_GOAL
+
+    def _resolve_empty_net_shot(self, offense: _TeamState, defense: _TeamState, shooter: Player,
+                                 zone: str, shot_type: str, rush: bool, rebound: bool) -> str:
+        """Resolve an on-goal attempt against a pulled (empty) net (DEVPLAN.md Step 2.2). No
+        goalie to run a skill-gap save check against, so this isn't a degenerate case of the
+        normal save-probability formula -- it's its own simple, high-but-not-certain scoring
+        roll (``EMPTY_NET_GOAL_BASE_P``, nudged slightly by shot quality): real empty-net attempts
+        do still sail wide or get blocked by a backchecking skater often enough that "always a
+        goal" would be unrealistic. No goalie box-score line exists to credit a save to (there is
+        no goalie in net), so a non-goal outcome here is scored as a miss/block exactly like a
+        normal shot that never reached the goalie."""
+        goal_p = max(0.30, min(0.85, EMPTY_NET_GOAL_BASE_P + (_ZONE_QUALITY[zone] - 0.5) * 0.3))
+        if self.rng.chance(goal_p):
+            self._apply_corsi_fenwick(offense, defense, blocked=False)
+            self._score_goal(offense, defense, shooter, None, zone, shot_type, rush, rebound)
+            return SHOT_OUTCOME_GOAL
+
+        blocked = self.rng.chance(0.35)
+        outcome = SHOT_OUTCOME_BLOCK if blocked else SHOT_OUTCOME_MISS
+        self._log_shot(offense, defense, shooter, None, zone, shot_type, rush, rebound, outcome)
+        self._apply_corsi_fenwick(offense, defense, blocked=blocked)
+        return outcome
 
     def _apply_corsi_fenwick(self, offense: _TeamState, defense: _TeamState, *,
                               blocked: bool) -> None:
@@ -680,7 +930,12 @@ class GameSim:
         # (5 vs 4, or 5 vs 3 on a 5-on-3), so crediting every on-ice skater symmetrically would
         # never net to zero league-wide during special teams anyway -- gating on strength state
         # is both the real-hockey-accurate rule AND what keeps the league-wide net at zero.
-        if scoring_strength_state not in (config.STRENGTH_PP, config.STRENGTH_5V3):
+        # DEVPLAN.md Step 2.2 extends this same real-NHL exclusion to an EMPTY-NET goal
+        # (``goalie is None``): real NHL scorekeeping never credits/debits plus/minus for a
+        # goal scored on a pulled goalie either (same "special situation, doesn't count" logic
+        # as a PP goal) -- also keeps the league-wide net-zero invariant intact for a 6-on-5
+        # situation, which (like PP/5v3) has asymmetric on-ice group sizes.
+        if scoring_strength_state not in (config.STRENGTH_PP, config.STRENGTH_5V3) and goalie is not None:
             for pid in offense.on_ice:
                 self.result.skater_line(pid).plus_minus += 1
             for pid in defense.on_ice:
@@ -689,6 +944,9 @@ class GameSim:
         if goalie is not None:
             self.result.goalie_line(goalie.pid).goals_against += 1
             defense.goalie_hot_hand = 0.0   # a goal resets any hot-hand nudge
+        # else: an empty-net goal (goalie is None -- the defending team pulled theirs) is not
+        # charged as goals_against to anyone -- there is no goalie in net to charge it to, matching
+        # real-NHL scorekeeping (an ENG never counts against a goalie's save percentage/GAA).
 
         # Real-NHL rule (DEVPLAN.md Step 2.1, explicitly not an open design question): a
         # non-fighting MINOR penalty ends immediately if the penalized team is scored on while
@@ -831,6 +1089,15 @@ class GameSim:
 
 
 def simulate_game(world: World, home_tid: int, away_tid: int, *,
-                   collect_pbp: bool = False) -> GameResult:
-    """Convenience wrapper: simulate one game and return its result."""
-    return GameSim(world, home_tid, away_tid, collect_pbp=collect_pbp).play()
+                   collect_pbp: bool = False,
+                   home_goalie_id: Optional[int] = None,
+                   away_goalie_id: Optional[int] = None) -> GameResult:
+    """Convenience wrapper: simulate one game and return its result.
+
+    ``home_goalie_id``/``away_goalie_id`` (DEVPLAN.md Step 2.2) pass through to
+    ``GameSim``'s same-named constructor overrides -- see that class's docstring. Defaults to
+    ``None`` (falls back to each team's ``Team.goalie_starter``), so this is a strict additive
+    extension for any existing caller.
+    """
+    return GameSim(world, home_tid, away_tid, collect_pbp=collect_pbp,
+                   home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id).play()

@@ -16,6 +16,7 @@ group) -- same mechanism, hockey-appropriate name.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import List
 
@@ -178,6 +179,84 @@ def fatigue_realization(fatigue: float) -> float:
     this step (that's Step 2.2 territory)."""
     f = max(0.0, min(100.0, fatigue))
     return max(FATIGUE_R_MIN, 1.0 - f * (1.0 - FATIGUE_R_MIN) / 100.0)
+
+
+# ---------------------------------------------------------------------------
+# Goalie hot hand -- a gap-closing realization factor (DEVPLAN.md Step 2.2).
+# ---------------------------------------------------------------------------
+# THE "NO UPWEIGHTING" PRINCIPLE (reaffirmed in the session that authored this function --
+# read this before touching the shape below):
+#
+#   Players never perform better than their rating implies. No mechanic in this codebase may
+#   push effective performance above a player's rating-implied ceiling ("nobody can give
+#   110%"). Every realization factor above (morale/clutch/familiarity/fatigue) is a
+#   multiplicative scalar bounded in [floor, 1.0] -- capped at exactly 1.0, NEVER higher. The
+#   asymmetry is deliberate: a player doesn't get BETTER under good conditions, he simply keeps
+#   performing at his own ceiling instead of dipping below it ("the good/greats merely continue
+#   to perform at their level in important situations... some players absolutely do choke
+#   though" -- i.e. only decline is modeled as a distinct mechanic; "playing well" is just "not
+#   declining").
+#
+#   A goalie hot-hand mechanic is real (real goaltenders do ride streaks), but it MUST be
+#   implemented as a one-directional pull of ``def_real`` back toward 1.0 -- narrowing the gap
+#   between wherever OTHER realization factors (morale, fatigue, chemistry) have already dragged
+#   a goalie's realized performance and his true rating ceiling -- never as an additive bonus
+#   layered directly onto a raw save probability. An earlier version of this engine DID add a
+#   flat nudge (``goalie_hot_hand``, up to +0.06) straight onto ``save_p`` BEFORE the def_real
+#   rescale -- that let a neutral shot (skill gap == 0, def_real would be exactly 1.0) resolve
+#   above the 0.90 baseline purely from a hot streak, which is a real, measurable violation of
+#   "never above your rating ceiling." This function/its caller in engine.py fix that.
+#
+# The fix -- gap-closing, not additive:
+#
+#     effective_def_real = def_real + (1.0 - def_real) * hot_hand_fraction
+#
+#   ``hot_hand_fraction`` (this function's return value) is bounded to [0, HOT_HAND_MAX_FRACTION]
+#   -- at most, being fully "hot" closes HOT_HAND_MAX_FRACTION of the remaining gap between
+#   wherever def_real currently sits and the 1.0 ceiling. This is mathematically guaranteed to
+#   satisfy the invariant for any def_real in [0, 1] and any fraction in [0, 1]:
+#
+#     def_real <= effective_def_real <= 1.0
+#
+#   -- proof: (1.0 - def_real) >= 0 and hot_hand_fraction in [0, 1], so the added term is always
+#   >= 0 (never pulls DOWN, that's morale/fatigue/chemistry's job, not hot hand's) and always
+#   <= (1.0 - def_real) (so the sum never exceeds 1.0). A neutral shot where def_real is ALREADY
+#   1.0 (no other realization factor is dragging it down) gets effective_def_real == 1.0
+#   regardless of how hot the streak is -- hot hand has *nothing left to close*, which is exactly
+#   the desired "cannot exceed your ceiling" behavior. Do NOT reintroduce an additive nudge here
+#   or in engine.py; if you're tempted to make a goalie "even better than fully realized," that's
+#   the upweighting bug this function exists to prevent.
+# ---------------------------------------------------------------------------
+HOT_HAND_MAX_FRACTION = 0.5     # a maximally "hot" goalie closes at most half the remaining gap
+                                 # to his own ceiling -- provisional/tunable magnitude, same
+                                 # framing as every other first-pass constant in this codebase.
+HOT_HAND_STREAK_SATURATION = 6.0  # streak value (see engine.py's per-save increment cadence) at
+                                   # which hot_hand_fraction reaches its max; a smooth, saturating
+                                   # ramp rather than a hard step so the effect builds gradually
+                                   # over a run of consecutive saves rather than snapping on.
+
+
+def hot_hand_boost(streak_value: float) -> float:
+    """Fraction (0..HOT_HAND_MAX_FRACTION) of the gap between a goalie's currently-realized
+    ``def_real`` and his rating ceiling (1.0) that a save streak closes.
+
+    ``streak_value`` is a small non-negative rolling counter the engine maintains per goalie
+    (incremented a bit per consecutive save, reset/decayed on a goal against -- same
+    streak-tracking cadence the old additive ``goalie_hot_hand`` nudge used, just reinterpreted:
+    see engine.py's ``_TeamState.goalie_hot_hand`` field and ``_score_goal``/
+    ``_resolve_shot_attempt``). Zero streak -> zero fraction (a cold/neutral goalie gets no
+    boost, full stop). The ramp saturates smoothly at HOT_HAND_STREAK_SATURATION consecutive-save
+    "credits" via ``1 - exp(-streak/saturation)``, so the marginal boost from one more save
+    shrinks the hotter the goalie already is (diminishing returns), never overshoots the max
+    fraction, and never goes negative for a non-negative streak value.
+
+    This is consumed EXCLUSIVELY via the gap-closing formula documented above
+    (``effective_def_real = def_real + (1.0 - def_real) * hot_hand_boost(streak)``) -- never
+    added directly to a raw probability. See this module's "no upweighting" note just above.
+    """
+    s = max(0.0, streak_value)
+    ramp = 1.0 - math.exp(-s / HOT_HAND_STREAK_SATURATION)
+    return max(0.0, min(HOT_HAND_MAX_FRACTION, HOT_HAND_MAX_FRACTION * ramp))
 
 
 # ---------------------------------------------------------------------------

@@ -215,7 +215,13 @@ def test_goal_updates_plus_minus_for_on_ice_skaters_both_teams():
 
 
 def test_goal_credits_scorer_and_updates_goalie_goals_against():
-    world, home_tid, away_tid, result = _play(seed=12)
+    """Every goal is charged to SOME goalie's goals_against, with one deliberate real-NHL
+    exception introduced by Step 2.2's pull-the-goalie mechanic: an empty-net goal (scored
+    against a team whose goalie was pulled for an extra attacker, ``goalie_id`` logged as
+    ``None`` on that event) is never charged against any goalie's box score -- matching real NHL
+    scorekeeping, where an ENG doesn't count against a goalie's save percentage/GAA. So the
+    correct invariant is goals_against + empty_net_goals == total goals, not a flat equality."""
+    world, home_tid, away_tid, result = _play(seed=12, collect_pbp=True)
     home_team = world.team(home_tid)
     away_team = world.team(away_tid)
 
@@ -223,7 +229,11 @@ def test_goal_credits_scorer_and_updates_goalie_goals_against():
     away_goalie_ga = result.goalie_box.get(home_team.goalie_starter)
     total_goals_against = (home_goalie_ga.goals_against if home_goalie_ga else 0) \
         + (away_goalie_ga.goals_against if away_goalie_ga else 0)
-    assert total_goals_against == result.home_score + result.away_score
+
+    empty_net_goals = sum(1 for e in result.pbp
+                          if e.event_type == EVENT_GOAL and e.goalie_id is None)
+
+    assert total_goals_against + empty_net_goals == result.home_score + result.away_score
 
 
 # ---------------------------------------------------------------------------

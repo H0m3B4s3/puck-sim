@@ -7,6 +7,13 @@ here -- PuckSim has no injury system yet (that's DEVPLAN.md Step 2.3); a future 
 should hook it into ``advance_one_day()`` right after the day's games are simmed, the same spot
 HoopR's own per-day injury-healing tick lives.
 
+Goalie rest-based starter rotation (DEVPLAN.md Step 2.2): ``sim_one()`` is now the per-game hook
+that decides which of a team's two rostered goalies actually starts (``sim/goalies.py``'s
+``choose_starting_goalie``, backed by a process-local ``GoalieRestState`` tracker -- see
+``_rest_state_for``'s docstring for exactly why that tracker lives here, keyed off the ``World``
+instance, rather than as a new field on ``Player``/``Team``/``World`` itself) before constructing
+the game, rather than letting ``GameSim`` silently default to ``Team.goalie_starter`` every time.
+
 Schedule generation (circle-method round-robin, cycled to reach 82 games):
 --------------------------------------------------------------------------
 A true single round-robin among ``config.NUM_TEAMS`` (32, even) teams produces exactly
@@ -87,7 +94,7 @@ decisive ``winner`` by the time ``points_for_game()``/``standings()`` are called
 """
 from __future__ import annotations
 
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
 from pucksim import config
 from pucksim.models.league import Game, Phase
@@ -96,6 +103,53 @@ from pucksim.models.team import Team
 from pucksim.models.world import World
 from pucksim.sim.boxscore import GameResult
 from pucksim.sim.engine import simulate_game
+from pucksim.sim.goalies import GoalieRestState, choose_starting_goalie
+
+# ---------------------------------------------------------------------------
+# Goalie rest-state tracking (DEVPLAN.md Step 2.2) -- WHERE THIS STATE LIVES, AND WHY:
+#
+# "Games since a goalie last started" has no home anywhere in the permanent data model
+# (Player/Team/World) -- see sim/goalies.py's module docstring for the full reasoning. It's
+# transient game-orchestration bookkeeping this module (the day-by-day season driver) is the
+# natural owner of, but every existing caller of sim_one()/advance_one_day() (tests, testkit,
+# eventually the web layer) calls them with just ``(world, ...)`` and no extra state argument,
+# repeatedly, across an entire season -- threading a new required parameter through every call
+# site would be a much larger, non-additive signature change than this step needs.
+#
+# Compromise: a process-local cache, keyed by ``id(world)`` (NOT the World instance itself --
+# World is a plain ``@dataclass`` with a generated ``__eq__``, which makes it unhashable, so a
+# WeakKeyDictionary keyed on the instance isn't an option) rather than a new World field. This
+# keeps World's schema/save format completely untouched (no migration concerns) while still
+# giving the rotation logic continuity across many sequential advance_one_day() calls against
+# the same World, which is what a real season loop does. A reloaded save (a new World instance,
+# hence a new id()) gets a fresh tracker (goalies treated as fully rested) -- see
+# sim/goalies.py's docstring for why that's an acceptable, clearly-documented simplification.
+#
+# CORRECTNESS NOTE, not just a memory-growth one: the cache value is ``(world, state)``, not just
+# ``state`` -- holding a strong reference to ``world`` itself alongside its state is required, not
+# optional. ``id()`` is only guaranteed unique among currently-alive objects; if a World were
+# garbage-collected and this cache held no reference to it, CPython's allocator could hand that
+# same address to a brand-new, entirely unrelated World (team ids collide across saves/leagues,
+# e.g. always 0..31), and that new World would silently inherit a stale rest-rotation history that
+# has nothing to do with it -- a real, if rare, bug, not a hypothetical one, once anything in this
+# process ever holds more than one World at a time (the planned FastAPI web layer, Step 2.9/2.10,
+# will keep multiple leagues' Worlds alive concurrently). Keeping ``world`` alive in the cache
+# value means an id can never be silently reused out from under an existing entry; the ``is``
+# identity check below is a defensive second layer in case that invariant is ever broken by a
+# future refactor. The tradeoff this accepts (never evicting old entries, so every World that's
+# ever been simmed lives for the rest of the process) is the same one already called out below for
+# memory growth -- this just also closes the correctness gap that tradeoff was quietly leaning on.
+# ---------------------------------------------------------------------------
+_REST_STATE_BY_WORLD_ID: Dict[int, Tuple[World, GoalieRestState]] = {}
+
+
+def _rest_state_for(world: World) -> GoalieRestState:
+    key = id(world)
+    entry = _REST_STATE_BY_WORLD_ID.get(key)
+    if entry is None or entry[0] is not world:
+        entry = (world, GoalieRestState())
+        _REST_STATE_BY_WORLD_ID[key] = entry
+    return entry[1]
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +328,37 @@ def _apply_result(world: World, game: Game, result: GameResult) -> None:
             player.season.add(line)
 
 
+def _choose_and_record_starter(world: World, tid: int, rest_state: GoalieRestState,
+                                day: int) -> Optional[int]:
+    """Pick this team's starting goalie for a game on ``day`` (DEVPLAN.md Step 2.2's rest-based
+    rotation hook) and immediately record the choice into ``rest_state`` so the NEXT game this
+    team plays sees an up-to-date consecutive-starts/back-to-back picture. Returns ``None`` if
+    the team has no goalie at all rostered (shouldn't happen post-leaguegen, but
+    ``choose_starting_goalie``/``GameSim`` both already handle a ``None`` starter gracefully --
+    see their own docstrings -- so this never needs to crash a season run)."""
+    team = world.team(tid)
+    starter_pid = choose_starting_goalie(team, rest_state, day=day, rng=world.rng)
+    if starter_pid is not None:
+        rest_state.record_start(tid, starter_pid, day)
+    return starter_pid
+
+
 def sim_one(world: World, game: Game) -> GameResult:
-    """Simulate and apply a single scheduled game."""
-    result = simulate_game(world, game.home, game.away)
+    """Simulate and apply a single scheduled game.
+
+    Consumes ``sim/goalies.py``'s rest-based rotation (DEVPLAN.md Step 2.2): before
+    constructing the game, decides each team's actual starting goalie for TODAY (which may be
+    the backup, per ``choose_starting_goalie``'s tendency model) via this module's
+    process-local ``GoalieRestState`` tracker (see ``_rest_state_for``), and passes that choice
+    into ``simulate_game`` as an explicit override rather than letting ``GameSim`` silently fall
+    back to ``Team.goalie_starter`` every time.
+    """
+    rest_state = _rest_state_for(world)
+    home_goalie_id = _choose_and_record_starter(world, game.home, rest_state, game.day)
+    away_goalie_id = _choose_and_record_starter(world, game.away, rest_state, game.day)
+
+    result = simulate_game(world, game.home, game.away,
+                           home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id)
     _apply_result(world, game, result)
     return result
 
