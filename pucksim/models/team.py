@@ -45,6 +45,13 @@ class Team:
     conference: str
     division: str = ""
 
+    # Jersey identity (DEVPLAN.md Step 2.9a): hex strings (e.g. "#C8102E"), assigned
+    # deterministically at generation time by gen/leaguegen.py from a curated palette. Default
+    # to a neutral gray pair so a hand-built Team() in a test doesn't need to supply colors --
+    # every generated team gets a real pair, this is just a never-crash fallback.
+    primary_color: str = "#333333"
+    secondary_color: str = "#AAAAAA"
+
     roster: List[int] = field(default_factory=list)          # player ids only, pure data
 
     # On-ice groups: plain lists of ids, deliberately not a Line/Pair class
@@ -158,6 +165,8 @@ class Team:
             "abbrev": self.abbrev,
             "conference": self.conference,
             "division": self.division,
+            "primary_color": self.primary_color,
+            "secondary_color": self.secondary_color,
             "roster": list(self.roster),
             "lines": [list(line) for line in self.lines],
             "pairs": [list(pair) for pair in self.pairs],
@@ -182,6 +191,8 @@ class Team:
             abbrev=d["abbrev"],
             conference=d["conference"],
             division=d.get("division", ""),
+            primary_color=d.get("primary_color", "#333333"),
+            secondary_color=d.get("secondary_color", "#AAAAAA"),
             roster=list(d.get("roster", [])),
             lines=[list(line) for line in d.get("lines", [])],
             pairs=[list(pair) for pair in d.get("pairs", [])],

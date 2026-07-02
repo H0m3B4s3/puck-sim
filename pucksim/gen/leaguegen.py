@@ -75,6 +75,54 @@ _NICKNAMES = (
 _DIVISION_NAMES = ("North", "South")
 
 # ---------------------------------------------------------------------------
+# Jersey colors (DEVPLAN.md Step 2.9a). A curated, fixed palette of 32 distinct
+# (primary, secondary) hex pairs spanning the realistic range of hockey jersey
+# colors -- reds, blues, greens, golds, purples, blacks, oranges, teals, etc.
+# Deliberately avoids pure white (#FFFFFF) and pale ice-blue tones
+# (#F7F9FA/#E8F4FF-ish) since those are reserved for the web frontend's "ice"
+# surface chrome, not team identity (per the Step 2.9a brief). Assignment is
+# deterministic given the world's seed: `build_world()` draws from
+# `world.rng.sample()` (the same seedable RNG every other generated attribute
+# uses, never the global `random` module) so the same seed always produces the
+# same team-to-color mapping.
+# ---------------------------------------------------------------------------
+_JERSEY_COLOR_PAIRS = (
+    ("#C8102E", "#111111"),  # red / black
+    ("#003087", "#B9975B"),  # navy / gold
+    ("#00205B", "#A2AAAD"),  # navy / silver
+    ("#041E42", "#A6192E"),  # midnight navy / crimson
+    ("#154734", "#FFB81C"),  # forest green / gold
+    ("#006272", "#FF6600"),  # teal / orange
+    ("#5F259F", "#FFC72C"),  # purple / gold
+    ("#8A8D8F", "#000000"),  # steel gray / black
+    ("#FF4C00", "#000000"),  # orange / black
+    ("#6F263D", "#FFB81C"),  # maroon / gold
+    ("#002654", "#CE1126"),  # royal blue / red
+    ("#000000", "#C8102E"),  # black / red
+    ("#00843D", "#000000"),  # green / black
+    ("#FFB81C", "#000000"),  # gold / black
+    ("#8B2942", "#A2AAAD"),  # wine / silver
+    ("#0033A0", "#C8102E"),  # blue / red
+    ("#1E4D2B", "#C4CED4"),  # dark green / gray-white
+    ("#B9975B", "#000000"),  # vegas gold / black
+    ("#010101", "#B4975A"),  # black / bronze
+    ("#003E7E", "#77828F"),  # steel blue / slate
+    ("#8C2633", "#000000"),  # brick red / black
+    ("#4E0055", "#000000"),  # deep purple / black
+    ("#C60C30", "#002D62"),  # scarlet / navy
+    ("#013A81", "#FDB827"),  # cobalt / gold
+    ("#006847", "#D9B44A"),  # emerald / gold
+    ("#7A0019", "#FFC72C"),  # dark maroon / yellow
+    ("#00B2A9", "#111111"),  # teal / black
+    ("#582C83", "#B4975A"),  # violet / bronze
+    ("#B5985A", "#002855"),  # tan-gold / navy
+    ("#D50032", "#63666A"),  # crimson / gray
+    ("#00509D", "#EE3124"),  # cerulean / red-orange
+    ("#3A3D40", "#F2A900"),  # graphite / amber
+)
+assert len(_JERSEY_COLOR_PAIRS) == config.NUM_TEAMS
+
+# ---------------------------------------------------------------------------
 # Roster construction shape. Every team gets exactly this many skaters/goalies
 # so `auto_build_lines` always has enough bodies for 4 complete forward lines
 # (needs >=12 forwards) and 3 complete D pairs (needs >=6 D) -- both counts
@@ -204,18 +252,26 @@ def build_world(seed: Optional[int] = None) -> World:
     used_names: set = set()
     used_abbrevs: set = set()
 
+    # Jersey colors: draw one deterministic permutation of the palette (via the seeded
+    # World.rng, same as every other generated attribute -- never the global `random`
+    # module) so each of the 32 teams gets a distinct, seed-reproducible color pair.
+    _color_order = rng.sample(range(len(_JERSEY_COLOR_PAIRS)), len(_JERSEY_COLOR_PAIRS))
+
     tid = 0
     for conference in config.CONFERENCES:
         for division_idx in range(config.DIVISIONS_PER_CONFERENCE):
             division = _DIVISION_NAMES[division_idx % len(_DIVISION_NAMES)]
             for _ in range(config.TEAMS_PER_DIVISION):
                 name, abbrev = _team_name_and_abbrev(rng, used_names, used_abbrevs)
+                primary_color, secondary_color = _JERSEY_COLOR_PAIRS[_color_order[tid]]
                 team = Team(
                     tid=tid,
                     name=name,
                     abbrev=abbrev,
                     conference=conference,
                     division=division,
+                    primary_color=primary_color,
+                    secondary_color=secondary_color,
                 )
                 world.register_team(team)
                 _build_roster(world, team)
