@@ -465,8 +465,22 @@ def roster_tactics_response(team: Team) -> RosterTacticsDTO:
 # ---------------------------------------------------------------------------
 # Box score DTOs (Step 2.9b-ii)
 # ---------------------------------------------------------------------------
+# ``pid``/``name``/``position``/``team_id`` (added post-review, ahead of Step 2.10d): the
+# raw stat-line fields alone give a frontend no way to label a box-score row -- ``pid`` is
+# only available as the *dict key* the router returns these under, and a box score needs to
+# show BOTH teams' players, not just the session's own user_team (whose roster the
+# 2.9b-i ``/roster`` endpoint already exposes with names). ``routers/season.py``'s
+# ``get_boxscore()`` populates these from ``world.players`` at response time -- they are
+# never stored in ``World.game_results`` itself (that dict holds only the raw StatLine
+# ``to_dict()`` output from Step 2.9b-ii, unchanged), so a player traded away after this
+# game was played still resolves correctly (``world.players`` is keyed by pid for the
+# player's whole career, independent of current team).
 class SkaterBoxScoreDTO(BaseModel):
     """Per-skater box score line."""
+    pid: int = 0
+    name: str = ""
+    position: str = ""
+    team_id: Optional[int] = None
     gp: int = 0
     gs: int = 0
     secs: int = 0
@@ -489,6 +503,10 @@ class SkaterBoxScoreDTO(BaseModel):
 
 class GoalieBoxScoreDTO(BaseModel):
     """Per-goalie box score line."""
+    pid: int = 0
+    name: str = ""
+    position: str = ""
+    team_id: Optional[int] = None
     gp: int = 0
     gs: int = 0
     secs: int = 0

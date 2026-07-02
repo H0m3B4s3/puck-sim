@@ -1180,6 +1180,45 @@ def test_boxscore_retrieval_after_sim(client):
     assert isinstance(body["goalie_box"], dict)
 
 
+def test_boxscore_rows_carry_player_identity(client):
+    """Regression test (found during review, ahead of Step 2.10d): the box-score stat-line
+    DTOs originally carried no name/position/team_id at all -- only raw counters keyed by pid
+    in the response dict. A frontend box-score screen needs to label BOTH teams' players, not
+    just the session's own user_team (which /roster already covers with names), so pid alone
+    isn't enough. This pins that get_boxscore() resolves identity from world.players."""
+    from pucksim.sim.season import start_season
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 26})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+    start_season(world)
+    session_store.save(sid, world)
+
+    schedule_resp = client.get("/season/schedule").json()
+    unplayed_game = next(g for g in schedule_resp if not g["played"])
+    gid, home_id, away_id = unplayed_game["gid"], unplayed_game["home"], unplayed_game["away"]
+
+    client.post(f"/season/games/{gid}/sim")
+    box = client.get(f"/season/games/{gid}/boxscore").json()
+
+    assert box["skater_box"], "expected at least one skater in the box score"
+    seen_team_ids = set()
+    for pid_str, line in box["skater_box"].items():
+        assert line["pid"] == int(pid_str)
+        assert line["name"]  # non-empty
+        assert line["position"] in ("LW", "C", "RW", "D")
+        seen_team_ids.add(line["team_id"])
+    # Skaters from both sides of the game are present, not just one team.
+    assert seen_team_ids == {home_id, away_id}
+
+    assert box["goalie_box"], "expected at least one goalie in the box score"
+    for pid_str, line in box["goalie_box"].items():
+        assert line["pid"] == int(pid_str)
+        assert line["name"]
+        assert line["position"] == "G"
+
+
 def test_boxscore_not_yet_played_is_400(client):
     from pucksim.sim.season import start_season
     from pucksim.web.session import session_store
