@@ -171,7 +171,11 @@ def test_shot_attempt_event_carries_full_analytics_context():
     event = shot_events[0]
     assert event.shot_type in SHOT_TYPES
     assert isinstance(event.zone, str) and event.zone
-    assert event.strength_state == config.STRENGTH_5V5
+    # Step 2.1: strength_state is now real, live game state (not an always-5v5 literal) -- any
+    # single sampled event may land during a PP/PK/etc. shift, so just check it's a legal value.
+    # See tests/test_special_teams.py for coverage that PP/PK shifts specifically log the right
+    # strength_state.
+    assert event.strength_state in config.STRENGTH_STATES
     assert isinstance(event.rebound, bool)
     assert isinstance(event.rush, bool)
     assert event.team_id in (home_tid, away_tid)

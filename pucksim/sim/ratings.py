@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
+from pucksim import config
 from pucksim.models.player import Player
 
 # ---------------------------------------------------------------------------
@@ -57,6 +58,60 @@ def shot_quality_bias_delta(shot_quality_bias: float) -> float:
     """
     sqb = max(0.0, min(1.0, shot_quality_bias))
     return SHOT_QUALITY_MIN_BIAS + (SHOT_QUALITY_MAX_BIAS - SHOT_QUALITY_MIN_BIAS) * sqb
+
+
+# ---------------------------------------------------------------------------
+# Strength-state -> shot-probability modifiers (DEVPLAN.md Step 2.1)
+# ---------------------------------------------------------------------------
+# Mirrors the shot_volume_multiplier / shot_quality_bias_delta pattern shape directly above:
+# a strength state maps to a volume multiplier (how many shot attempts get generated) and a
+# quality delta (how much the "quality roll" is skewed), consumed by engine.py's shift/shot
+# loop exactly like the coach tactic modifiers are. PROVISIONAL/TUNABLE constants -- same
+# framing as every other first-pass constant in this codebase (DEVPLAN.md Step 2.1's own
+# "exact strength-state probability tuning is unresolved" note covers these too).
+#
+# Real hockey intuition these are modeling: a power play creates far more zone time and
+# better looks (a extra body creates space/passing lanes) -- both more volume AND higher
+# quality. A penalty kill is the mirror image for the shorthanded team's own offense: fewer
+# looks, and the ones it gets are lower quality (desperate clears, no set breakout). PP/PK
+# also change the QUALITY OF DEFENSE faced (the shorthanded defense should suppress the
+# power play's shot quality somewhat even as the PP still nets a net positive edge) --
+# handled in engine.py by applying the offense's own strength-state modifier only; the
+# defense's suppression is implicit in the offense being at a numbers disadvantage on the PK
+# (fewer skaters to generate their own offense, not a separate defensive-quality knob here).
+STRENGTH_SHOT_VOLUME_MULT = {
+    config.STRENGTH_5V5: 1.0,
+    config.STRENGTH_PP: 1.6,     # man advantage -- meaningfully more attempts
+    config.STRENGTH_PK: 0.55,    # shorthanded -- suppressed offense while defending
+    config.STRENGTH_4V4: 1.05,   # slightly more open ice than 5v5
+    config.STRENGTH_3V3: 1.35,   # OT 3-on-3 -- very open ice, high event rate
+    config.STRENGTH_5V3: 2.1,    # two-man advantage -- a near-guaranteed extended zone time
+}
+
+STRENGTH_SHOT_QUALITY_DELTA = {
+    config.STRENGTH_5V5: 0.0,
+    config.STRENGTH_PP: 0.22,    # man advantage creates meaningfully better looks -- real NHL PP
+                                  # shooting% runs well above 5v5 (roughly 40-70% higher in most
+                                  # seasons), so this needs to be a real, reliably-measurable
+                                  # effect on scoring rate, not just a subtle nudge.
+    config.STRENGTH_PK: -0.18,   # desperation clears / low-quality looks while shorthanded
+    config.STRENGTH_4V4: 0.03,
+    config.STRENGTH_3V3: 0.08,
+    config.STRENGTH_5V3: 0.32,
+}
+
+
+def strength_state_shot_volume_multiplier(strength_state: str) -> float:
+    """Scales expected shot-attempts-per-shift for the offense's current strength state.
+    Unknown/legacy strength-state strings default to a neutral 1.0x rather than raising."""
+    return STRENGTH_SHOT_VOLUME_MULT.get(strength_state, 1.0)
+
+
+def strength_state_shot_quality_delta(strength_state: str) -> float:
+    """Delta added to a shot attempt's "quality roll" for the offense's current strength
+    state (see engine._pick_zone_and_shot_type). Unknown/legacy strength states default to a
+    neutral 0.0 delta rather than raising."""
+    return STRENGTH_SHOT_QUALITY_DELTA.get(strength_state, 0.0)
 
 
 # ---------------------------------------------------------------------------

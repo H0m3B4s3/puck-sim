@@ -154,6 +154,49 @@ MAJOR_PENALTY_SECONDS = 5 * 60
 MISCONDUCT_PENALTY_SECONDS = 10 * 60
 
 # ---------------------------------------------------------------------------
+# Special teams / penalty engine (DEVPLAN.md Step 2.1)
+# ---------------------------------------------------------------------------
+# PROVISIONAL, FIRST-PASS TUNABLES -- exact strength-state probability tuning is an
+# explicitly-flagged open item (DESIGN.md "Open items" / DEVPLAN.md Step 2.1's own note);
+# these are reasonable starting magnitudes, not a tuned model. See
+# ``pucksim/sim/special_teams.py`` for the formula these feed into.
+#
+# Baseline probability that a given shift produces a penalty on a given team, before any
+# discipline/coach-aggression adjustment. Roughly calibrated so a full 60-minute regulation
+# game (~40 shifts across a whole roster's worth of shift-events, per team) nets a handful of
+# penalties per team per game, in the real-hockey ballpark, not exact.
+PENALTY_BASE_PROB_PER_SHIFT = 0.018
+
+# How much a below/above-average `discipline` rating (25-99 scale, centered near 70 like every
+# other rating) moves the base probability. Lower discipline -> more penalties. Expressed as a
+# multiplier delta per rating point away from the 70 "average" anchor.
+PENALTY_DISCIPLINE_SLOPE = 0.006
+
+# How much coach `defensive_risk_tolerance` (0-1) and `forecheck_aggression` (0-1) each scale
+# the penalty probability, centered so the 0.5 "Balanced" archetype nets to a 1.0x multiplier
+# (no change from the discipline-only baseline).
+PENALTY_RISK_TOLERANCE_MAX_MULT = 1.5   # defensive_risk_tolerance = 1.0
+PENALTY_RISK_TOLERANCE_MIN_MULT = 0.7   # defensive_risk_tolerance = 0.0
+PENALTY_FORECHECK_MAX_MULT = 1.3        # forecheck_aggression = 1.0
+PENALTY_FORECHECK_MIN_MULT = 0.85       # forecheck_aggression = 0.0
+
+# Penalty-type weighted pick: minors are by far the most common penalty in real hockey: majors
+# (fighting/spearing/etc.) and misconducts are rare. Weights, not probabilities (normalized at
+# draw time).
+PENALTY_TYPE_WEIGHTS = {
+    "minor": 92.0,
+    "major": 6.0,
+    "misconduct": 2.0,
+}
+
+# Power-play / penalty-kill on-ice group sizes. A PP unit is a full-strength 5 (the shorthanded
+# opponent is down a skater); a PK unit is the shorthanded team's own 4 skaters. 5-on-3 shrinks
+# the box-checking team down to 3 -- see STRENGTH_5V3 handling in special_teams.py.
+PP_UNIT_SIZE = 5
+PK_UNIT_SIZE = 4
+PK_UNIT_SIZE_5V3 = 3
+
+# ---------------------------------------------------------------------------
 # Ratings
 # ---------------------------------------------------------------------------
 # The concrete rating list (skater vs. goalie categories) is owned by

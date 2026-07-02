@@ -25,6 +25,7 @@ from pucksim.models.stats import GoalieStatLine, SkaterStatLine
 EVENT_FACEOFF = "faceoff"
 EVENT_SHOT = "shot"
 EVENT_GOAL = "goal"
+EVENT_PENALTY = "penalty"
 EVENT_PERIOD_END = "period_end"
 EVENT_GAME_END = "game_end"
 
@@ -69,10 +70,16 @@ class PBPEvent:
     # score xG and tally Corsi/Fenwick as a plain filter over this event stream.
     shot_type: Optional[str] = None          # one of SHOT_TYPES
     zone: Optional[str] = None               # e.g. "slot", "point", "high_slot", "bad_angle"
-    strength_state: Optional[str] = None     # config.STRENGTH_5V5 this step, always
+    strength_state: Optional[str] = None     # the REAL strength state at the moment of the
+                                              # attempt (config.STRENGTH_* -- Step 2.1 made this
+                                              # a live value instead of an always-5v5 literal)
     rebound: bool = False
     rush: bool = False
     outcome: Optional[str] = None            # one of the SHOT_OUTCOME_* constants
+
+    # -- penalty context (EVENT_PENALTY only, DEVPLAN.md Step 2.1) ------------
+    penalty_type: Optional[str] = None       # "minor" | "major" | "misconduct"
+    penalty_duration_secs: Optional[float] = None
 
 
 @dataclass

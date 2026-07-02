@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from pucksim.config import HANDEDNESS_FIT_PENALTY, POSITION_FIT_PENALTY
+from pucksim.models.attributes import composite
 from pucksim.models.player import Player
 
 
@@ -46,6 +47,16 @@ class Team:
     pairs: List[List[int]] = field(default_factory=list)
     goalie_starter: Optional[int] = None
     goalie_backup: Optional[int] = None
+
+    # Special-teams units (DEVPLAN.md Step 2.1) -- same "plain list of ids" philosophy as
+    # lines/pairs above, never a hard class. ``pp_unit_1`` is the top power-play unit (4F/1D or
+    # 3F/2D depending on the team's coach ``pp_forwards`` setting -- see
+    # ``auto_build_special_teams_units`` below); ``pk_unit_1`` is the top penalty-kill unit
+    # (typically 2F/2D). Only "unit 1" (each team's best group) is modeled in this step -- a
+    # second-unit PP/PK rotation is a reasonable future refinement, not required here since the
+    # engine only ever needs one PP/PK group on the ice at a time for the v1 penalty model.
+    pp_unit_1: List[int] = field(default_factory=list)
+    pk_unit_1: List[int] = field(default_factory=list)
 
     chemistry: Dict[str, float] = field(default_factory=dict)  # pair_key(a,b) -> shared secs
 
@@ -86,6 +97,8 @@ class Team:
             self.roster.remove(pid)
         self.lines = [[p for p in line if p != pid] for line in self.lines]
         self.pairs = [[p for p in pair if p != pid] for pair in self.pairs]
+        self.pp_unit_1 = [p for p in self.pp_unit_1 if p != pid]
+        self.pk_unit_1 = [p for p in self.pk_unit_1 if p != pid]
         if self.goalie_starter == pid:
             self.goalie_starter = None
         if self.goalie_backup == pid:
@@ -139,6 +152,8 @@ class Team:
             "roster": list(self.roster),
             "lines": [list(line) for line in self.lines],
             "pairs": [list(pair) for pair in self.pairs],
+            "pp_unit_1": list(self.pp_unit_1),
+            "pk_unit_1": list(self.pk_unit_1),
             "goalie_starter": self.goalie_starter,
             "goalie_backup": self.goalie_backup,
             "chemistry": {k: round(v, 1) for k, v in self.chemistry.items()},
@@ -161,6 +176,8 @@ class Team:
             roster=list(d.get("roster", [])),
             lines=[list(line) for line in d.get("lines", [])],
             pairs=[list(pair) for pair in d.get("pairs", [])],
+            pp_unit_1=list(d.get("pp_unit_1", [])),
+            pk_unit_1=list(d.get("pk_unit_1", [])),
             goalie_starter=d.get("goalie_starter"),
             goalie_backup=d.get("goalie_backup"),
             chemistry={k: float(v) for k, v in d.get("chemistry", {}).items()},
@@ -337,6 +354,59 @@ def _build_d_pairs(defensemen: List[Player]) -> List[List[int]]:
         remaining.remove(a)
         remaining.remove(b)
     return pairs
+
+
+# ---------------------------------------------------------------------------
+# Special-teams unit builder (DEVPLAN.md Step 2.1) -- picks a team's top power-play unit
+# and top penalty-kill unit. Reuses attributes.py's composite() machinery rather than
+# inventing a new rating system: PP unit selection ranks by an offense-flavored blend
+# (scoring + playmaking), PK unit selection ranks by the existing "defense" composite.
+# Greedy top-N by composite, same simplicity level as auto_build_lines/_build_d_pairs
+# above -- not a global optimizer.
+# ---------------------------------------------------------------------------
+def _pp_offensive_value(player: Player) -> float:
+    """Composite offensive value driving PP unit selection: a blend of scoring and
+    playmaking (both already-defined composites in attributes.py), not a new formula."""
+    return 0.55 * composite(player.ratings, "scoring") + 0.45 * composite(player.ratings, "playmaking_c")
+
+
+def _pk_defensive_value(player: Player) -> float:
+    """Composite defensive value driving PK unit selection: attributes.py's existing
+    "defense" composite (defensive_awareness/shot_blocking/checking/discipline blend)."""
+    return composite(player.ratings, "defense")
+
+
+def auto_build_special_teams_units(team: Team, players: Dict[int, Player],
+                                    pp_forwards: int = 3) -> None:
+    """Build the team's top power-play unit (``team.pp_unit_1``) and top penalty-kill unit
+    (``team.pk_unit_1``) from its current roster. Mutates both fields in place.
+
+    ``pp_forwards`` (3 or 4, mirrors ``CoachProfile.pp_forwards``) controls the PP unit shape:
+    3 forwards + 2 D (conservative) or 4 forwards + 1 D (aggressive overload). Falls back to
+    whatever the roster can actually supply if it's short on bodies (e.g. an injury-depleted
+    roster) rather than crashing -- a partial/undersized unit is legal, just not ideal, same
+    philosophy as auto_build_lines's "not an optimal solver" framing.
+
+    PK unit is always the classic 2F/2D defensive-shutdown shape (config.PK_UNIT_SIZE == 4).
+
+    A player can appear on both units (real NHL rosters often double up their best two-way
+    players across both special-teams groups) -- no exclusivity is enforced between PP and PK
+    selection, only within each unit's own slot-fill.
+    """
+    roster = roster_players(team, players)
+    forwards = [p for p in roster if p.position in _FORWARD_SLOTS]
+    defensemen = [p for p in roster if p.position == "D"]
+
+    pp_forwards = 4 if pp_forwards == 4 else 3
+    pp_d = 5 - pp_forwards
+
+    top_forwards = sorted(forwards, key=_pp_offensive_value, reverse=True)[:pp_forwards]
+    top_pp_d = sorted(defensemen, key=_pp_offensive_value, reverse=True)[:pp_d]
+    team.pp_unit_1 = [p.pid for p in top_forwards] + [p.pid for p in top_pp_d]
+
+    top_pk_forwards = sorted(forwards, key=_pk_defensive_value, reverse=True)[:2]
+    top_pk_d = sorted(defensemen, key=_pk_defensive_value, reverse=True)[:2]
+    team.pk_unit_1 = [p.pid for p in top_pk_forwards] + [p.pid for p in top_pk_d]
 
 
 def rotation_pool(team: Team, players: Dict[int, Player]) -> List[int]:
