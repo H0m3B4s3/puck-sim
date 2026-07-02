@@ -117,6 +117,16 @@ class Player:
     # None for everyone else.
     pre_draft: Optional[Dict] = None
 
+    # Which feeder path this prospect came up through -- DESIGN.md point 11's
+    # CHL/NCAA mutual-exclusivity fork (Canadian major junior forfeits NCAA
+    # eligibility, unlike basketball's overlapping college/G-League routes).
+    # Always "none" (config.DEFAULT_LEAGUE_ORIGIN) in v1/Phase 2 -- there is no
+    # feeder-league layer yet, every prospect is just "generic." This field
+    # exists now, populated with the inert default, purely so Phase 2's CHL/NCAA
+    # fork (DEVPLAN.md Step 3.2) doesn't need a save-migration rewrite to add it
+    # later. See config.LEAGUE_ORIGIN_CHOICES for the legal values.
+    league_origin: str = "none"
+
     # How the player entered the league: {"year", "round", "pick", "team"} or
     # None if undrafted/not yet drafted.
     draft: Optional[Dict] = None
@@ -199,6 +209,7 @@ class Player:
             "injury": self.injury.to_dict() if self.injury else None,
             "pre_draft": dict(self.pre_draft) if self.pre_draft else None,
             "draft": dict(self.draft) if self.draft else None,
+            "league_origin": self.league_origin,
             "season": self.season.to_dict(),
             "playoffs": self.playoffs.to_dict(),
             "career": list(self.career),
@@ -232,6 +243,7 @@ class Player:
             injury=Injury.from_dict(d["injury"]) if d.get("injury") else None,
             pre_draft=(dict(d["pre_draft"]) if d.get("pre_draft") else None),
             draft=(dict(d["draft"]) if d.get("draft") else None),
+            league_origin=d.get("league_origin", "none"),
             season=stat_cls.from_dict(d.get("season", {})),
             playoffs=stat_cls.from_dict(d.get("playoffs", {})),
             career=list(d.get("career", [])),

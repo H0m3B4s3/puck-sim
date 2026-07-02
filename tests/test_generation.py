@@ -7,7 +7,10 @@ builder), coach.py, and world.py all at once via `build_world()`.
 from __future__ import annotations
 
 from pucksim import config
+from pucksim.gen import playergen
 from pucksim.gen.leaguegen import build_world
+from pucksim.models import attributes as attr
+from pucksim.rng import Rng
 
 
 # ---------------------------------------------------------------------------
@@ -137,3 +140,96 @@ def test_generated_overall_distribution_is_believable():
 
     # Legal rating bounds never violated.
     assert all(config.RATING_MIN <= o <= config.RATING_MAX for o in overalls)
+
+
+# ---------------------------------------------------------------------------
+# Rare/"unicorn" archetype rarity gate (BUG FIX, 2026-07-02 -- see
+# gen/playergen.py's _RARE_ARCHETYPE_MIN_OVERALL/_RARE_ARCHETYPE_CHANCE
+# comment for the full derivation). attributes.py's RARE_ARCHETYPES
+# docstring has always claimed "Generational Forward"/"Unicorn Defenseman"
+# are "generated only on elite-ceiling players... and never in the normal
+# pool" -- that gate was never actually wired up before this fix, so a
+# completely average target_overall had the same shot at "Generational
+# Forward" as a true superstar target. These tests pin the fix: (a) a
+# below-threshold target_overall can NEVER produce a rare archetype, (b)
+# even among elite-ceiling targets the rare archetype is genuinely scarce
+# (a small fraction, not a coin flip) -- consistent with the "once a decade
+# league-wide" design intent (a Crosby/McDavid-caliber prospect should be
+# rare, not common).
+# ---------------------------------------------------------------------------
+def test_rare_archetype_never_rolled_below_elite_ceiling_threshold():
+    rng = Rng(seed=100)
+    below = playergen._RARE_ARCHETYPE_MIN_OVERALL - 1
+    hits = sum(
+        1 for _ in range(20_000)
+        if playergen._choose_archetype(
+            rng, "C", below, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
+        ).name == "Generational Forward"
+    )
+    assert hits == 0
+
+
+def test_rare_archetype_never_rolled_below_elite_ceiling_threshold_defenseman():
+    rng = Rng(seed=101)
+    below = playergen._RARE_ARCHETYPE_MIN_OVERALL - 1
+    hits = sum(
+        1 for _ in range(20_000)
+        if playergen._choose_archetype(
+            rng, "D", below, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
+        ).name == "Unicorn Defenseman"
+    )
+    assert hits == 0
+
+
+def test_rare_archetype_is_genuinely_scarce_even_at_elite_ceiling():
+    """Even a maxed-out target_overall should land the rare archetype only a
+    small fraction of the time -- not a coin flip, not "common." Bounds are
+    loose (statistical sweep, not an exact-probability test) but rule out
+    both "never happens" and "happens constantly."""
+    rng = Rng(seed=102)
+    elite = 99
+    n = 50_000
+    hits = sum(
+        1 for _ in range(n)
+        if playergen._choose_archetype(
+            rng, "C", elite, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
+        ).name == "Generational Forward"
+    )
+    frac = hits / n
+    assert 0.0 < frac < 0.10   # genuinely rare even among the best prospects
+
+
+def test_rare_archetype_chance_matches_documented_value_at_elite_ceiling():
+    """The elite-ceiling roll itself should land close to the documented
+    _RARE_ARCHETYPE_CHANCE (2.5%, derived in playergen.py's module comment to
+    target roughly once per decade of combined leaguegen + draft-class
+    generation volume) -- pins the exact tunable, not just "somewhere
+    small," so a future change to the constant is caught here."""
+    rng = Rng(seed=103)
+    elite = playergen._RARE_ARCHETYPE_MIN_OVERALL
+    n = 100_000
+    hits = sum(
+        1 for _ in range(n)
+        if playergen._choose_archetype(
+            rng, "C", elite, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
+        ).name == "Generational Forward"
+    )
+    frac = hits / n
+    assert abs(frac - playergen._RARE_ARCHETYPE_CHANCE) < 0.01
+
+
+def test_generate_skater_end_to_end_respects_the_gate():
+    """Integration check through the full generate_skater() pipeline (not just
+    the internal _choose_archetype helper): a below-threshold target_overall
+    generated many times should never crash and should stay within legal
+    rating bounds across the gate boundary -- exact archetype-name detection
+    is covered by the _choose_archetype-level tests above (which are exact
+    rather than inferred from ratings, since Archetype identity isn't stored
+    on the returned Player)."""
+    rng = Rng(seed=104)
+    below_players = [
+        playergen.generate_skater(i, rng, age=25, target_overall=70, position="C")
+        for i in range(500)
+    ]
+    assert len(below_players) == 500
+    assert all(config.RATING_MIN <= p.overall <= config.RATING_MAX for p in below_players)

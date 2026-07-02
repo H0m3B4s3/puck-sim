@@ -1,0 +1,343 @@
+"""Tests for pucksim.systems.draft_system + pucksim.gen.prospectgen --
+DEVPLAN.md Step 2.5 done-criteria.
+
+``tests/test_draft.py`` (Step 1.10) already covers the model-layer
+``DraftPick``/``DraftClass`` state machine (pick-order advancement,
+``record_pick`` validation, serialization) -- this file does NOT duplicate
+that coverage. It focuses on this step's actual new work: the system-layer
+engine that drives ``DraftClass`` (order-by-standings, prospect generation,
+the pick flow, entry-level signing via Step 2.4's cap system), per DEVPLAN.md's
+explicit Done criteria: "draft order matches inverse standings (straight
+order, no lottery); picks recorded correctly via World; drafted players get
+entry-level contracts from Step 2.4's cap system (is_rookie_scale=True via
+sign_rookie/flat_contract)."
+"""
+from __future__ import annotations
+
+from pucksim import config
+from pucksim.gen import prospectgen
+from pucksim.models.contract import flat_contract
+from pucksim.models.league import Game, standings
+from pucksim.models.player import Player
+from pucksim.models.team import Team
+from pucksim.models.world import World
+from pucksim.rng import Rng
+from pucksim.systems import draft_system as ds
+
+SEED = 42
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def build_world_with_teams(n_teams: int = 8, cap_value: int = 90_000_000,
+                            roster_headroom: int = 5) -> World:
+    """A small World with N empty-ish teams and no prospects yet.
+
+    ``roster_headroom`` pads each team's roster with filler signed players so
+    ``ROSTER_MAX`` isn't hit trivially on the very first pick of a test
+    (mirrors real-generated-league headroom, see draft_system.py's
+    ``make_pick`` docstring on why roster-full is a real, not hypothetical,
+    case for this step).
+    """
+    world = World(rng=Rng(seed=SEED))
+    world.salary_cap = cap_value
+    world.season_year = 2026
+    for tid in range(1, n_teams + 1):
+        conf = "Eastern" if tid % 2 == 0 else "Western"
+        team = Team(tid=tid, name=f"Team {tid}", abbrev=f"T{tid:02d}", conference=conf)
+        world.register_team(team)
+        for i in range(roster_headroom):
+            filler = Player(
+                pid=world.new_pid(),
+                name=f"Filler {tid}-{i}",
+                age=27,
+                position="D",
+                ratings={r: 65 for r in prospectgen.SKATER_POSITIONS and ()} or _skater_ratings(),
+                contract=flat_contract(1_000_000, 2),
+            )
+            world.add_player(filler)
+            world.sign_player(filler.pid, tid)
+    return world
+
+
+def _skater_ratings(value: int = 65) -> dict:
+    from pucksim.models import attributes as attr
+    return {name: value for name in attr.ALL_RATINGS}
+
+
+def _play_fake_season(world: World, seed: int = 99) -> None:
+    """Give every team a distinct, deterministic win total so standings() has
+    a clean, unambiguous inverse order to check against (no ties, no shared
+    point totals -- avoids the standings tiebreaker chain making the
+    "expected" order ambiguous for this test)."""
+    rng = Rng(seed=seed)
+    tids = sorted(world.teams.keys())
+    gid = 1
+    # Round-robin: each team i wins exactly i games (0-indexed) against a
+    # fixed set of opponents, giving every team a distinct points total.
+    for i, tid in enumerate(tids):
+        wins_for_this_team = i
+        for w in range(len(tids) - 1):
+            opp = tids[(i + 1 + w) % len(tids)]
+            home_score, away_score = (5, 2) if w < wins_for_this_team else (1, 4)
+            g = Game(gid=gid, day=gid, home=tid, away=opp,
+                     home_score=home_score, away_score=away_score, played=True)
+            world.schedule.append(g)
+            gid += 1
+
+
+# ---------------------------------------------------------------------------
+# Prospect generation (gen/prospectgen.py)
+# ---------------------------------------------------------------------------
+def test_generate_prospect_pool_produces_requested_size():
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=60)
+    assert len(pool) == 60
+
+
+def test_generated_prospects_are_draft_age_and_unteamed():
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=40)
+    lo, hi = prospectgen.PROSPECT_AGE_RANGE
+    for p in pool:
+        assert lo <= p.age <= hi
+        assert p.team_id is None
+        assert p.is_free_agent
+
+
+def test_generated_prospects_have_pre_draft_bio_populated():
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=40)
+    for p in pool:
+        assert p.pre_draft is not None
+        assert p.pre_draft["gp"] > 0
+        if p.is_goalie:
+            assert "save_pct" in p.pre_draft
+        else:
+            assert "pts" in p.pre_draft
+
+
+def test_generated_prospects_have_inert_league_origin():
+    """DESIGN.md point 11 / DEVPLAN.md Step 2.5's open item: every v1 prospect
+    is tagged with the generic/inert league_origin, a forward-compat hook for
+    the future CHL/NCAA fork (Step 3.2) -- not a design task now, just a field
+    that must actually be present and set."""
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=40)
+    for p in pool:
+        assert p.league_origin == config.DEFAULT_LEAGUE_ORIGIN == "none"
+        assert p.league_origin in config.LEAGUE_ORIGIN_CHOICES
+
+
+def test_prospect_pool_includes_some_goalies():
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=100)
+    goalies = [p for p in pool if p.is_goalie]
+    assert len(goalies) >= 1
+
+
+def test_same_seed_generates_identical_prospect_pool():
+    def _gen():
+        rng = Rng(seed=SEED)
+        counter = iter(range(1, 10_000))
+        return prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=30)
+
+    pool_a = _gen()
+    pool_b = _gen()
+    assert [p.to_dict() for p in pool_a] == [p.to_dict() for p in pool_b]
+
+
+# ---------------------------------------------------------------------------
+# Draft order (worst-first, straight, no lottery)
+# ---------------------------------------------------------------------------
+def test_draft_order_matches_inverse_standings():
+    world = build_world_with_teams(n_teams=8)
+    _play_fake_season(world)
+
+    order = ds.compute_draft_order(world)
+
+    ranked_best_first = standings(world.team_list(), world.schedule, world.standings_rule)
+    expected_worst_first = [t.tid for t in reversed(ranked_best_first)]
+    assert order == expected_worst_first
+
+
+def test_draft_order_is_straight_no_lottery_reweighting():
+    """The literal worst team is always slot 0 -- no probabilistic lottery
+    reordering (DEVPLAN.md's explicit "straight order, no lottery" default)."""
+    world = build_world_with_teams(n_teams=8)
+    _play_fake_season(world)
+    order = ds.compute_draft_order(world)
+    worst_team = min(world.team_list(),
+                      key=lambda t: standings(world.team_list(), world.schedule,
+                                               world.standings_rule).index(t))
+    # Recompute directly: the last-ranked team in standings() must be order[0].
+    ranked_best_first = standings(world.team_list(), world.schedule, world.standings_rule)
+    assert order[0] == ranked_best_first[-1].tid
+
+
+def test_setup_draft_repeats_round1_order_every_round_straight():
+    world = build_world_with_teams(n_teams=8)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=3)
+    n = len(world.teams)
+    round1 = dc.order[:n]
+    round2 = dc.order[n:2 * n]
+    round3 = dc.order[2 * n:3 * n]
+    assert round1 == round2 == round3
+    assert dc.total_picks == n * 3
+
+
+# ---------------------------------------------------------------------------
+# Pick flow + World integration
+# ---------------------------------------------------------------------------
+def test_setup_draft_registers_prospects_on_world():
+    world = build_world_with_teams(n_teams=8)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=2, pool_size=40)
+    assert len(dc.prospect_ids) == 40
+    for pid in dc.prospect_ids:
+        assert pid in world.players
+        assert world.players[pid].team_id is None
+
+
+def test_make_pick_records_via_world_and_draft_class():
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=1, pool_size=20)
+
+    on_clock = dc.team_on_clock()
+    pid = ds.best_available(world)
+    signed = ds.make_pick(world, pid)
+
+    assert signed is True
+    assert (pid, on_clock) in dc.picks_made
+    player = world.player(pid)
+    assert player.team_id == on_clock
+    assert pid in world.teams[on_clock].roster
+    assert pid not in world.free_agents
+
+
+def test_drafted_player_gets_entry_level_rookie_scale_contract():
+    """DEVPLAN.md's core Done criterion: drafted players sign via Step 2.4's
+    existing sign_rookie() path -- is_rookie_scale=True, flat salary."""
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    ds.setup_draft(world, rounds=1, pool_size=20)
+
+    pid = ds.best_available(world)
+    ds.make_pick(world, pid)
+    player = world.player(pid)
+
+    assert player.contract.is_rookie_scale is True
+    assert len(player.contract.salaries) == config.ROOKIE_CONTRACT_YEARS
+    assert len(set(player.contract.salaries)) == 1          # flat contract
+    assert player.contract.salaries[0] > 0
+
+
+def test_make_pick_populates_draft_bio():
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=1, pool_size=20)
+    on_clock = dc.team_on_clock()
+    pid = ds.best_available(world)
+    ds.make_pick(world, pid)
+    player = world.player(pid)
+    assert player.draft is not None
+    assert player.draft["year"] == world.season_year
+    assert player.draft["round"] == 1
+    assert player.draft["pick"] == 1
+    assert player.draft["team"] == world.teams[on_clock].abbrev
+
+
+def test_make_pick_rejects_illegal_pick_via_draft_class_guard():
+    """make_pick leans on DraftClass.record_pick()'s existing validation --
+    an already-picked or unavailable prospect still raises ValueError."""
+    import pytest
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=1, pool_size=20)
+    pid = ds.best_available(world)
+    ds.make_pick(world, pid)
+    with pytest.raises(ValueError):
+        ds.make_pick(world, pid)   # already drafted
+
+
+def test_auto_complete_draft_finishes_every_pick():
+    world = build_world_with_teams(n_teams=6, roster_headroom=3)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=2, pool_size=40)
+    result = ds.auto_complete_draft(world)
+    assert dc.complete
+    assert result["picks_made"] == dc.total_picks == 12
+    # Every team drafted exactly 2 (one per round, straight order).
+    picks_by_team = {}
+    for _pid, tid in dc.picks_made:
+        picks_by_team[tid] = picks_by_team.get(tid, 0) + 1
+    assert all(count == 2 for count in picks_by_team.values())
+
+
+def test_full_roster_gracefully_leaves_drafted_player_unsigned_not_crashed():
+    """Real, not hypothetical, v1 edge case (see draft_system.py's make_pick
+    docstring): a team with a full 23-man roster can still draft a player
+    (draft rights recorded) even though there's no room to sign them yet --
+    this must not raise or corrupt DraftClass state."""
+    world = build_world_with_teams(n_teams=2, roster_headroom=config.ROSTER_MAX)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=1, pool_size=10)
+
+    pid = ds.best_available(world)
+    on_clock_before = dc.team_on_clock()
+    signed = ds.make_pick(world, pid)
+
+    assert signed is False
+    player = world.player(pid)
+    assert player.team_id is None            # never joined the roster
+    assert player.is_free_agent
+    assert player.draft is not None           # draft rights still recorded
+    assert player.draft["team"] == world.teams[on_clock_before].abbrev
+    assert (pid, on_clock_before) in dc.picks_made
+    assert dc.team_on_clock() != on_clock_before or dc.complete  # clock advanced
+
+
+def test_run_draft_headless_end_to_end():
+    world = build_world_with_teams(n_teams=8, roster_headroom=1)
+    _play_fake_season(world)
+    result = ds.run_draft(world, rounds=2, pool_size=60)
+
+    assert result["picks_made"] == result["total_picks"]
+    assert world.draft_class.complete
+    assert result["signed"] <= result["picks_made"]
+    assert result["undrafted"] == 60 - result["picks_made"]
+
+
+def test_effective_rounds_clamps_when_pool_too_small():
+    """8 teams * 5 requested rounds = 40 picks, but a 24-player pool can only
+    support 3 full rounds (24 // 8) -- setup_draft must clamp instead of
+    running DraftClass.record_pick() out of prospects mid-draft."""
+    world = build_world_with_teams(n_teams=8, roster_headroom=1)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=5, pool_size=24)
+    assert dc.total_picks == 24        # 3 effective rounds * 8 teams, not 40
+    result = ds.auto_complete_draft(world)
+    assert dc.complete
+    assert result["picks_made"] == 24
+
+
+# ---------------------------------------------------------------------------
+# Determinism
+# ---------------------------------------------------------------------------
+def test_same_seed_produces_identical_draft_outcome():
+    def _run():
+        world = build_world_with_teams(n_teams=6, roster_headroom=2)
+        _play_fake_season(world)
+        ds.run_draft(world, rounds=2, pool_size=30)
+        return [(pid, tid, world.players[pid].contract.is_rookie_scale)
+                for pid, tid in world.draft_class.picks_made]
+
+    assert _run() == _run()

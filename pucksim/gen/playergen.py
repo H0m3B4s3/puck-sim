@@ -10,7 +10,9 @@ resulting overall lands close to the target" -- is, concretely:
     1. Pick a position (if not supplied) and an archetype for that position
        (``ARCHETYPES_BY_POSITION``/``GOALIE_ARCHETYPES_BY_POSITION`` almost
        always, ``RARE_ARCHETYPES_BY_POSITION``/``RARE_GOALIE_ARCHETYPES_BY_POSITION``
-       rarely -- see ``_RARE_ARCHETYPE_CHANCE`` below).
+       only for an elite-ceiling ``target_overall`` that also wins a
+       low-probability roll on top -- see ``_RARE_ARCHETYPE_MIN_OVERALL``/
+       ``_RARE_ARCHETYPE_CHANCE`` below for the full gate and its derivation).
     2. Build a *baseline* ratings dict: every rating in the position's
        vocabulary (``ALL_RATINGS`` for skaters, ``ALL_GOALIE_RATINGS`` for
        goalies) drawn independently near ``target_overall`` with Gaussian
@@ -52,9 +54,61 @@ from pucksim.models.contract import Contract, flat_contract
 from pucksim.models.player import Player
 from pucksim.rng import Rng
 
-# How often a rare/"unicorn" archetype is chosen instead of the normal pool,
-# per DEVPLAN.md's "~5% of the time" guidance. Provisional/tunable.
-_RARE_ARCHETYPE_CHANCE = 0.05
+# --- Rare/"unicorn" archetype gate (BUG FIX, 2026-07-02) -------------------
+# attributes.py's RARE_ARCHETYPES docstring has always claimed these are
+# "generated only on elite-ceiling players... and never in the normal pool"
+# (see attributes.py's "Generational Forward"/"Unicorn Defenseman" -- the
+# former is literally commented "McDavid/Crosby-style generational forward").
+# That gate was never actually implemented: _choose_archetype() below used to
+# roll the rare chance unconditionally for every generated skater/goalie
+# regardless of target_overall, so a replacement-level player had the exact
+# same shot at "Generational Forward" as a true superstar target. Root-caused
+# and fixed here (not special-cased in gen/prospectgen.py's draft-prospect
+# path) since _choose_archetype/generate_skater/generate_goalie are shared by
+# both the base leaguegen.py roster-fill pipeline and the draft-prospect
+# pipeline -- a fix that only lived in one caller would leave the other
+# caller with the exact same bug.
+#
+# Two-stage gate now required (mirrors DEVPLAN.md Step 2.7's not-yet-built
+# gk_consistency rarity design -- "high skill alone isn't enough to be rare;
+# it should require winning an independent, low-probability roll ON TOP of
+# already being elite-ceiling", same shape applied here for consistency):
+#   1. target_overall must clear _RARE_ARCHETYPE_MIN_OVERALL at all -- below
+#      that, a rare archetype is categorically unreachable, no roll happens.
+#   2. Only among that already-elite-ceiling slice does the (now much lower)
+#      _RARE_ARCHETYPE_CHANCE roll apply.
+#
+# Threshold choice (82): roughly the top ~6% of leaguegen.py's full-roster
+# target_overall distribution (_OVERALL_MU=66.0, _OVERALL_SIGMA=10.0) and the
+# top ~0.05% of gen/prospectgen.py's draft-prospect target_overall
+# distribution (_PROSPECT_OVERALL_MU=52.0 -- prospects target a LOWER current
+# overall than veterans by design, since their draft value is about
+# potential/ceiling, not polish; only a truly precocious, already-dominant
+# prospect clears 82). One shared threshold across both pipelines rather than
+# a per-caller value, since both ultimately feed the same target_overall
+# parameter into the same shared function.
+_RARE_ARCHETYPE_MIN_OVERALL = 82
+
+# Chance derivation, worked explicitly (this codebase's convention for
+# probability tunables -- see e.g. Step 2.7's design note in DEVPLAN.md):
+#   leaguegen.py generates ~640 skaters ONE TIME at league creation (32 teams
+#     * 20 skaters/team); ~6.06% of a Gaussian(66.0, 10.0) sample clears 82
+#     => ~38.8 elite-ceiling-eligible skaters, once.
+#   gen/prospectgen.py generates ~135 skater prospects PER SEASON (150-player
+#     pool * ~90% skaters); ~0.049% of a Gaussian(52.0, 9.0) sample clears 82
+#     => ~0.066 elite-ceiling-eligible prospects/season, ~0.66 over a decade.
+#   Total elite-ceiling-eligible skaters over a 10-season span:
+#     ~38.8 (one-time roster fill) + ~0.66 (draft classes) =~ 39.4.
+# Target: "once a decade" for Generational Forward/Unicorn Defenseman
+# specifically (per direct design input -- Crosby/McDavid-caliber prospects
+# should be that rare). chance = 1 / eligible_count =~ 1/39.4 =~ 0.0254;
+# rounded to a clean 0.025 (2.5%) -- roughly HALF of one expected
+# "generational" skater across a decade of both pipelines combined, since a
+# rare archetype assignment alone doesn't guarantee the FINAL calibrated
+# player actually lands at true generational overall after skew+calibration
+# (see _build_calibrated_ratings) -- erring rare rather than exactly-one
+# keeps the "once-a-decade" framing as a ceiling, not a guarantee.
+_RARE_ARCHETYPE_CHANCE = 0.025
 
 # Noise (std dev, rating points) applied per-rating when building the baseline
 # ratings dict before archetype skews are applied. Provisional/tunable -- a
@@ -82,11 +136,29 @@ def _pick_shoots(rng: Rng) -> str:
     return rng.weighted_one(("L", "R"), (_SHOOTS_L_WEIGHT, _SHOOTS_R_WEIGHT))
 
 
-def _choose_archetype(rng: Rng, position: str, normal_pool: Dict[str, List[Archetype]],
+def _choose_archetype(rng: Rng, position: str, target_overall: int,
+                       normal_pool: Dict[str, List[Archetype]],
                        rare_pool: Dict[str, List[Archetype]]) -> Archetype:
-    """Pick an archetype for ``position``: normal pool most of the time, rare pool rarely."""
+    """Pick an archetype for ``position``: normal pool the vast majority of the time,
+    rare/"unicorn" pool only for a genuinely elite-ceiling target AND only after also
+    winning a low-probability roll on top of that -- see the module-level comment above
+    ``_RARE_ARCHETYPE_MIN_OVERALL``/``_RARE_ARCHETYPE_CHANCE`` for the full derivation
+    of both numbers. A ``target_overall`` below the threshold makes a rare archetype
+    categorically unreachable (no roll even happens) -- this is the gate that was
+    missing before this function took ``target_overall`` at all.
+    """
     rare_choices = rare_pool.get(position, [])
-    if rare_choices and rng.chance(_RARE_ARCHETYPE_CHANCE):
+    # NOTE on RNG-draw ordering: `rng.chance()` is called unconditionally (not
+    # short-circuited behind the `target_overall` check) so this function burns the
+    # same one random draw per call regardless of whether a given player clears the
+    # elite-ceiling threshold. This keeps the RNG call sequence for the (overwhelming
+    # majority) below-threshold case identical to this function's pre-fix behavior --
+    # purely an RNG-determinism hygiene choice for this already-seeded-everywhere
+    # codebase, not something the gate's correctness depends on (the threshold check
+    # below still makes a rare archetype categorically unreachable below
+    # _RARE_ARCHETYPE_MIN_OVERALL regardless of the roll's outcome).
+    rolled_rare = rng.chance(_RARE_ARCHETYPE_CHANCE)
+    if rare_choices and target_overall >= _RARE_ARCHETYPE_MIN_OVERALL and rolled_rare:
         return rng.choice(rare_choices)
     return rng.choice(normal_pool[position])
 
@@ -171,7 +243,8 @@ def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
     target, and constructs a full ``Player`` with ``team_id=None``.
     """
     position = position or rng.choice(SKATER_POSITIONS)
-    archetype = _choose_archetype(rng, position, ARCHETYPES_BY_POSITION, RARE_ARCHETYPES_BY_POSITION)
+    archetype = _choose_archetype(rng, position, target_overall,
+                                   ARCHETYPES_BY_POSITION, RARE_ARCHETYPES_BY_POSITION)
     ratings = _build_calibrated_ratings(rng, position, target_overall, ALL_RATINGS, archetype)
     final_ovr = overall(position, ratings)
 
@@ -197,7 +270,8 @@ def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int) -> Player
     """
     position = "G"
     archetype = _choose_archetype(
-        rng, position, GOALIE_ARCHETYPES_BY_POSITION, RARE_GOALIE_ARCHETYPES_BY_POSITION
+        rng, position, target_overall,
+        GOALIE_ARCHETYPES_BY_POSITION, RARE_GOALIE_ARCHETYPES_BY_POSITION
     )
     ratings = _build_calibrated_ratings(rng, position, target_overall, ALL_GOALIE_RATINGS, archetype)
     final_ovr = overall(position, ratings)
