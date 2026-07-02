@@ -246,7 +246,21 @@ class StrengthStateMachine:
         return config.STRENGTH_4V4
 
     def skaters_on_ice_for(self, tid: int) -> int:
-        """How many skaters ``tid`` fields right now, given the current strength state."""
+        """How many skaters ``tid`` fields right now, given the current strength state.
+
+        Bug fix (DEVPLAN.md Step 2.3, found while reworking faceoff/injury on-ice-group logic
+        in this same territory): STRENGTH_4V4 previously fell through to the ``return 5``
+        default below, which is wrong on its face (a "4v4" state fielding 5-a-side) and had a
+        real, demonstrable consequence -- ``special_teams.on_ice_group_for_state`` would ask for
+        5 skaters at 4v4, but the offending team's own penalized player is excluded from its
+        ``normal_group`` (only 5 bodies to begin with) with no bench to pad from in that
+        function's fallback loop, so one side would silently end up with 4 on-ice skaters while
+        the other had 5 -- breaking the plus/minus net-zero invariant on any goal scored during
+        that mismatched 4v4 shift (a pre-existing bug, not something this step's faceoff/injury
+        changes introduced, but exposed more often once this step's injury-aware backfill
+        started producing more frequent size-mismatch scenarios generally). Fixed at the source:
+        4v4 now correctly asks for 4 skaters per side, matching the state's own name.
+        """
         state = self.state_for(tid)
         if state == config.STRENGTH_PP:
             return config.PP_UNIT_SIZE
@@ -257,7 +271,9 @@ class StrengthStateMachine:
             if self.active_penalty_count(tid) >= 2:
                 return config.PK_UNIT_SIZE_5V3
             return config.PP_UNIT_SIZE
-        return 5   # 5v5 / 4v4 offsetting-penalty collapse -- 5 skaters per side in this model
+        if state == config.STRENGTH_4V4:
+            return 4   # offsetting penalties both ways -- 4 skaters per side, not 5.
+        return 5   # 5v5 -- 5 skaters per side.
 
     def penalized_player_ids(self, tid: int) -> List[int]:
         """Player ids currently serving time in the box for ``tid`` (any penalty type,

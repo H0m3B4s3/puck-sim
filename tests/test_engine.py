@@ -42,7 +42,18 @@ def test_goals_reconcile_with_team_score():
 
 
 def test_sog_reconciles_with_opposing_goalie_shots_faced():
-    world, home_tid, away_tid, result = _play(seed=2)
+    """SOG should reconcile with the opposing goalie's shots_faced -- WITH one deliberate,
+    real-NHL-accurate exception (same one ``test_goal_credits_scorer_and_updates_goalie_goals_
+    against`` already documents just below): an on-goal attempt against a pulled (empty) net
+    still counts as a shot on goal for the shooter (``SkaterStatLine.sog``), but there is no
+    goalie in net to charge ``shots_faced`` to (see engine.py's ``_resolve_shot_attempt``/
+    ``_resolve_empty_net_shot``). ``collect_pbp=True`` here (an earlier version of this test
+    didn't collect PBP and simply asserted flat equality -- that only ever held by coincidence,
+    whether a goalie happened to get pulled within this test's specific seed; discovered while
+    reworking on-ice-group/possession logic in this same territory for DEVPLAN.md Step 2.3) so
+    empty-net on-goal attempts can be identified and excluded from the reconciliation, same as
+    goals already are."""
+    world, home_tid, away_tid, result = _play(seed=2, collect_pbp=True)
     home_team = world.team(home_tid)
     away_team = world.team(away_tid)
 
@@ -51,12 +62,23 @@ def test_sog_reconciles_with_opposing_goalie_shots_faced():
     away_sog = sum(result.skater_box[pid].sog for pid in away_team.roster
                   if pid in result.skater_box)
 
+    # Empty-net on-goal attempts (goalie_id is None on the logged event) by each team -- these
+    # inflate the shooting team's sog with no corresponding shots_faced to reconcile against.
+    home_empty_net_attempts = sum(
+        1 for e in result.pbp
+        if e.event_type in (EVENT_SHOT, EVENT_GOAL) and e.team_id == home_tid and e.goalie_id is None
+    )
+    away_empty_net_attempts = sum(
+        1 for e in result.pbp
+        if e.event_type in (EVENT_SHOT, EVENT_GOAL) and e.team_id == away_tid and e.goalie_id is None
+    )
+
     # Home team's shots on goal all went at the away goalie, and vice versa.
     away_goalie_faced = result.goalie_box[away_team.goalie_starter].shots_faced
     home_goalie_faced = result.goalie_box[home_team.goalie_starter].shots_faced
 
-    assert home_sog == away_goalie_faced
-    assert away_sog == home_goalie_faced
+    assert home_sog - home_empty_net_attempts == away_goalie_faced
+    assert away_sog - away_empty_net_attempts == home_goalie_faced
 
 
 def test_every_boxed_player_has_positive_ice_time():
@@ -200,15 +222,39 @@ def test_rebound_flag_is_set_on_the_attempt_following_an_unconverted_save():
 # Plus/minus on goals
 # ---------------------------------------------------------------------------
 def test_goal_updates_plus_minus_for_on_ice_skaters_both_teams():
-    """Statistical property over several simulated games: the sum of every skater's plus_minus on
-    a team should be net-zero across both teams for any single game (every +1 for a scoring team's
-    on-ice skaters is balanced by a -1 for the conceding team's on-ice skaters), and at least one
-    player somewhere should show a nonzero plus_minus given goals were scored."""
+    """Statistical property over several simulated games: the sum of every skater's plus_minus
+    on a team is net-zero across both teams FOR EVEN-STRENGTH GOALS specifically (every +1 for
+    a scoring team's on-ice skaters at even strength is balanced by a -1 for the conceding
+    team's on-ice skaters, since both sides field the same number of skaters), and at least one
+    player somewhere should show a nonzero plus_minus given goals were scored.
+
+    NOT a claim that plus_minus nets to zero for the WHOLE game unconditionally -- a real-NHL
+    accurate detail, and a deliberate one (see engine.py's _score_goal docstring): a shorthanded
+    goal-for is correctly credited to plus/minus (that's real hockey), but the two on-ice groups
+    are asymmetric-by-definition on a PK goal (4 skaters for vs. 5 skaters against), so that
+    single event nets to -1, not 0 -- exactly matching real NHL scorekeeping, where plus/minus
+    is not a globally net-zero stat once shorthanded goals happen. An earlier version of this
+    test asserted a flat "nets to zero across the whole game" invariant, which only ever held
+    by coincidence (whether a shorthanded goal happened to occur within this test's specific
+    seed range) rather than because it was actually true in general -- discovered while
+    reworking on-ice-group sizing in this same territory for DEVPLAN.md Step 2.3 (see also the
+    real STRENGTH_4V4 on/off-ice-size bug this step fixed in special_teams.py, a separate,
+    genuine bug that could ALSO break net-zero even at even strength before that fix)."""
     any_nonzero = False
     for seed in range(1, 6):
-        world, home_tid, away_tid, result = _play(seed=seed)
+        world, home_tid, away_tid, result = _play(seed=seed, collect_pbp=True)
+        sh_goals_for = sum(
+            1 for ev in result.pbp
+            if ev.event_type == EVENT_GOAL and ev.strength_state == config.STRENGTH_PK
+        )
         total_pm = sum(line.plus_minus for line in result.skater_box.values())
-        assert total_pm == 0, f"plus_minus should net to zero league-wide, got {total_pm}"
+        # Each shorthanded goal-for nets to exactly -1 (4 PK skaters credited +1, 5 PP skaters
+        # charged -1); every other counted goal (even-strength) nets to 0. So the whole-game
+        # total must land at exactly -1 * (number of shorthanded goals-for).
+        assert total_pm == -sh_goals_for, (
+            f"plus_minus should net to -{sh_goals_for} (one per shorthanded goal-for) given "
+            f"{sh_goals_for} SH goals this game, got {total_pm}"
+        )
         if any(line.plus_minus != 0 for line in result.skater_box.values()):
             any_nonzero = True
     assert any_nonzero

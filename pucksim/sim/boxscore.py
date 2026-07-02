@@ -17,7 +17,7 @@ goals) rather than only a human-readable ``description``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from pucksim.models.stats import GoalieStatLine, SkaterStatLine
 
@@ -26,6 +26,7 @@ EVENT_FACEOFF = "faceoff"
 EVENT_SHOT = "shot"
 EVENT_GOAL = "goal"
 EVENT_PENALTY = "penalty"
+EVENT_INJURY = "injury"          # DEVPLAN.md Step 2.3
 EVENT_PERIOD_END = "period_end"
 EVENT_GAME_END = "game_end"
 
@@ -81,6 +82,19 @@ class PBPEvent:
     penalty_type: Optional[str] = None       # "minor" | "major" | "misconduct"
     penalty_duration_secs: Optional[float] = None
 
+    # -- faceoff context (EVENT_FACEOFF only, DEVPLAN.md Step 2.3) ------------
+    # ``stoppage_type`` records WHY this faceoff happened (see engine.py's FACEOFF_STOPPAGE_*
+    # constants: period start, after a goal, icing, offside, or a drawn penalty) -- useful
+    # play-by-play flavor and a hook for a future zone/possession-quality model, not itself a
+    # tracked box-score stat. ``won_off_tie`` distinguishes a clean center-vs-center win from a
+    # three-way-roll tie that was resolved by the wingers' secondary roll (DEVPLAN.md Step 2.3's
+    # "Three-way faceoff resolution" design note) -- ``fo_won``/``fo_lost`` stay strictly binary
+    # regardless of which path produced the winner; this field is the only place the distinction
+    # is recorded, since it's useful future signal (a scrum-then-recovery draw is a believably
+    # worse start to a shift than a clean win) but not a real NHL box-score category today.
+    stoppage_type: Optional[str] = None
+    won_off_tie: bool = False
+
 
 @dataclass
 class GameResult:
@@ -99,6 +113,13 @@ class GameResult:
     # memory down over many simulated games -- mirrors HoopR's ``GameSim(..., collect_pbp=...)``
     # toggle.
     pbp: List[PBPEvent] = field(default_factory=list)
+
+    # In-game injuries (DEVPLAN.md Step 2.3), collected regardless of ``collect_pbp`` (this is
+    # season-persistent state the caller MUST apply, not optional PBP flavor) -- mirrors HoopR's
+    # ``GameResult.injuries`` list of ``(pid, games_remaining, description, severity)`` tuples.
+    # ``sim/season.py``'s ``_apply_result`` reads this after every game to update
+    # ``Player.injury``.
+    injuries: List[Tuple[int, int, str, str]] = field(default_factory=list)
 
     @property
     def winner(self) -> Optional[int]:

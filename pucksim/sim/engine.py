@@ -50,12 +50,31 @@ every goal -- resumable via ``.send(orders)``; ``play()`` drives it synchronousl
 feature per DESIGN.md), but the scaffolding is built now so that consumer never needs an engine
 rewrite -- it will plug in by supplying real orders through the same generator seam.
 
+Faceoffs, injuries, icing/offside stoppages (DEVPLAN.md Step 2.3): faceoffs now happen at every
+stoppage type -- period start, after a goal, a drawn penalty, AND two new stoppage types this
+step adds (icing, offside), each rolled for once per shift of continued play per
+``FACEOFF_STOPPAGE_*`` constants below -- and the winner now actually GATES the following shift's
+starting possession (``_play_shift`` no longer flips a raw 50/50 coin for the starting
+offense/defense; it reads the just-resolved faceoff winner instead). Faceoff resolution itself is
+a three-way roll (home center clean win / away center clean win / a contested tie), not a two-way
+coin flip -- see ``_resolve_faceoff``'s docstring for the full shape, including the winger
+secondary roll that breaks a tie. ``_current_center`` no longer assumes LW-C-RW list ordering
+(that assumption silently broke for a PP/PK on-ice group, which is ranked by composite score, not
+position) -- it now looks up each on-ice player's actual ``position`` field.
+
+In-game injuries (DEVPLAN.md Step 2.3): ``_injury_check`` rolls each on-ice skater, once per
+shift, for an in-game injury (``config.IN_GAME_INJURY_RATE``, ported from HoopR's sport-agnostic
+shape -- see ``_injury_severity``); an injured player is pulled from their team's rotation pool
+for the REST OF THE GAME (``_TeamState.unavailable``) and a fresh on-ice group is rebuilt
+immediately. Line/pair construction and the shift rotation pool both route through
+``models.team.available_players``-equivalent filtering (``Player.available``) so an injured
+player is never iced again once hurt, whether mid-game or (via ``Injury.games_remaining``
+persisting on ``Player`` across games) in a future game while still recovering.
+``sim/season.py``'s ``advance_one_day`` heals one game's worth of recovery off every active
+injury right after the day's games are simmed, per that module's own documented hook point.
+
 Scope constraints this step still does NOT add (do not add scope here -- see DEVPLAN.md's
 explicit exclusions for later steps):
-- Faceoffs still only at period start and immediately after a goal -- penalty-stoppage
-  faceoffs (i.e. actually gating post-penalty possession on a fresh faceoff rather than the
-  shift loop's existing random-attacker-flip abstraction) are Step 2.3 scope; this step's
-  penalty engine changes strength state and on-ice personnel, not the faceoff/stoppage model.
 - OT is still a clearly-commented provisional placeholder (simplified 5v5 sudden death, one
   extra period, unresolved ties left as ``went_ot=True`` with no shootout) -- real 3-on-3/
   shootout resolution is Step 2.6. Penalties CAN still be drawn during this OT placeholder
@@ -72,7 +91,7 @@ from typing import Dict, List, Optional, Tuple
 from pucksim import config
 from pucksim.models.coach import Coach, CoachProfile
 from pucksim.models.player import Player
-from pucksim.models.team import Team, lineup_familiarity_secs
+from pucksim.models.team import Team, available_players, lineup_familiarity_secs
 from pucksim.models.world import World
 from pucksim.sim import ratings as R
 from pucksim.sim import special_teams as ST
@@ -80,6 +99,7 @@ from pucksim.sim.boxscore import (
     EVENT_FACEOFF,
     EVENT_GAME_END,
     EVENT_GOAL,
+    EVENT_INJURY,
     EVENT_PENALTY,
     EVENT_PERIOD_END,
     EVENT_SHOT,
@@ -99,7 +119,6 @@ from pucksim.sim.boxscore import (
 # until this step ships.
 # ---------------------------------------------------------------------------
 BASE_SHOT_ATTEMPTS_PER_SHIFT = 0.9    # league-average expected shot attempts per shift, per team
-FACEOFF_WIN_BASE = 0.50               # coin-flip baseline before rating gap / realization
 FATIGUE_GAIN_PER_SEC = 0.028          # fatigue points gained per second of shift ice time
 FATIGUE_RECOVER_PER_SEC = 0.05        # fatigue points recovered per second on the bench
 
@@ -117,6 +136,32 @@ REBOUND_CHANCE_BASE = 0.22            # probability an unconverted on-goal shot 
 SHIFT_SECONDS_JITTER = 8.0            # +/- gaussian spread around config.SHIFT_SECONDS_TARGET
 
 # ---------------------------------------------------------------------------
+# In-game injuries (DEVPLAN.md Step 2.3). ``config.IN_GAME_INJURY_RATE`` is the shared
+# per-on-ice-player, per-shift base rate (already tuned to a "per shift" cadence, not HoopR's
+# "per possession" one -- see config.py's own comment: "a full-game player faces roughly 20-25
+# shifts"); everything below is the hockey-specific severity/duration model layered on top,
+# ported near-verbatim in SHAPE from HoopR's ``_injury_severity()`` (see that function's
+# docstring in hoopsim/sim/engine.py) with hockey-appropriate games-missed bands (an NHL season
+# is 82 games, materially longer than an NBA season pass-through would imply, so the bands below
+# are hockey's own magnitudes, not a literal copy of HoopR's numbers).
+# ---------------------------------------------------------------------------
+INJURY_MINOR_P = 0.60      # cumulative probability roll lands in the "minor" band (roughy
+                           # "day-to-day", a game or two)
+INJURY_MODERATE_P = 0.90   # cumulative through "moderate" (a couple of weeks) -- the remaining
+                           # 1.0 - 0.90 tail is "major" (a long-term IR-type absence)
+INJURY_MINOR_GAMES = (1, 3)
+INJURY_MODERATE_GAMES = (4, 12)
+INJURY_MAJOR_GAMES = (15, 45)
+
+# Durability proxy (DEVPLAN.md doesn't define a standalone "durability" skater rating -- see
+# attributes.py's ALL_RATINGS; unlike HoopR, which has one). ``stamina`` (Physical group) is the
+# closest existing fit conceptually (a wearier/less conditioned player is more injury-prone), so
+# it's reused here as the modifier input rather than inventing a new rating this step wasn't
+# asked to add. Centered on the same 70 "average" anchor used everywhere else in this codebase.
+INJURY_STAMINA_ANCHOR = 70
+INJURY_STAMINA_SLOPE = 0.01   # matches HoopR's own durability-modifier slope shape/magnitude
+
+# ---------------------------------------------------------------------------
 # Pull-the-goalie / extra-attacker tunables (DEVPLAN.md Step 2.2). The actual trigger thresholds
 # (deficit/time-remaining) come from each team's own CoachProfile
 # (``goalie_pull_max_deficit``/``goalie_pull_time_threshold_secs``, models/coach.py) -- these are
@@ -129,6 +174,55 @@ PULL_RETURN_LEAD_SWING = 1     # if the pulled team's deficit ever WORSENS by th
                                # relative to when they pulled, put the goalie back (a blown pull
                                # attempt shouldn't compound into an even worse empty-net
                                # disaster) -- see _maybe_return_goalie.
+
+# ---------------------------------------------------------------------------
+# Faceoff stoppage types (DEVPLAN.md Step 2.3). ``EVENT_FACEOFF``'s new ``stoppage_type`` PBP
+# context field is populated with one of these strings so a later step can tell WHY a faceoff
+# happened, not just that it happened. "penalty" faceoffs are logged from the same call site
+# that already refreshes on-ice groups for a newly-drawn penalty (_draw_penalty) -- a real
+# stoppage in real hockey, and this step's own intro note explicitly calls out that a
+# penalty-drawn stoppage's faceoff needed Step 2.1's penalty engine to exist first.
+# ---------------------------------------------------------------------------
+FACEOFF_PERIOD_START = "period_start"
+FACEOFF_AFTER_GOAL = "after_goal"
+FACEOFF_ICING = "icing"
+FACEOFF_OFFSIDE = "offside"
+FACEOFF_PENALTY = "penalty"
+
+# Icing/offside stoppage probabilities (DEVPLAN.md: "invent a reasonable small set" framing
+# extends to these too -- no real NHL icing/offside-rate data is being fit here, just plausible
+# per-shot-attempt-cycle magnitudes). Checked once per shot-attempt interval within a shift (the
+# same cadence _play_shift already advances the strength clock at) rather than continuously, so
+# a busy shift with more attempts has proportionally more chances to see a stoppage -- a
+# reasonable proxy for "more zone-entry/clearing attempts happened this shift."
+ICING_CHANCE_PER_ATTEMPT_CYCLE = 0.030   # a clearing attempt sails the length of the ice untouched
+OFFSIDE_CHANCE_PER_ATTEMPT_CYCLE = 0.025  # a zone entry is blown offside
+
+# ---------------------------------------------------------------------------
+# Faceoff resolution (DEVPLAN.md Step 2.3's "Three-way faceoff resolution" design note). See
+# _resolve_faceoff's docstring for the full three-way-roll + winger-tiebreak shape this feeds.
+# ---------------------------------------------------------------------------
+FACEOFF_WIN_BASE = 0.50               # coin-flip baseline before rating gap / realization
+                                       # (unchanged from the old two-way model's baseline --
+                                       # this is still the anchor a dead-even center matchup
+                                       # centers on before the tie slice is carved out)
+FACEOFF_TIE_BASE_P = 0.18             # baseline probability a center-vs-center draw is
+                                       # genuinely contested (a scrum) rather than a clean win
+                                       # for either side, before any rating-gap adjustment --
+                                       # provisional/tunable, same framing as every other
+                                       # first-pass constant in this codebase. A larger rating
+                                       # gap between the two centers makes a clean win more
+                                       # likely and a tie less likely (a mismatched draw is
+                                       # less often a genuine 50/50 scrum) -- see
+                                       # _resolve_faceoff for the exact shape.
+FACEOFF_TIE_GAP_SUPPRESSION = 0.004   # how much a |rating gap| point reduces the tie
+                                       # probability below FACEOFF_TIE_BASE_P
+
+# Winger secondary roll (the tie-break path): same realization-scaled gap-to-probability shape
+# as the primary center roll (FACEOFF_WIN_BASE/the 0.004 gap coefficient in _resolve_faceoff),
+# just over a different rating blend (puck_handling + offensive_awareness/defensive_awareness
+# -- DEVPLAN.md's explicit "hockey IQ" proxy, since no standalone rating exists for that).
+FACEOFF_WINGER_GAP_COEFFICIENT = 0.004
 
 # Zone/shot-type pools (DEVPLAN.md: "invent a reasonable small set"). Zone strings double as a
 # coarse shot-quality signal: danger zones first, low-danger zones last.
@@ -151,6 +245,20 @@ def _weighted_index(rng, weights: List[float]) -> int:
     return rng.choices(range(len(weights)), weights=weights, k=1)[0]
 
 
+def _winger_iq_score(player: Player) -> float:
+    """Winger secondary-faceoff-tiebreak composite (DEVPLAN.md Step 2.3's design note): puck
+    handling + an offensive/defensive-awareness blend, this codebase's closest existing proxy
+    for "hockey IQ" / hands in a scrum (no standalone rating exists for either, per
+    ``models/attributes.py``). Both awareness ratings contribute (a winger who reads the play
+    offensively AND defensively is better positioned to pounce on a loose puck either way),
+    weighted evenly since neither is obviously more relevant to a 50/50 scrum recovery than the
+    other."""
+    r = player.ratings
+    return (0.5 * r.get("puck_handling", 25)
+            + 0.25 * r.get("offensive_awareness", 25)
+            + 0.25 * r.get("defensive_awareness", 25))
+
+
 # ---------------------------------------------------------------------------
 # _TeamState -- one side's in-game personnel/fatigue/ice-time bookkeeping.
 # ---------------------------------------------------------------------------
@@ -166,6 +274,19 @@ class _TeamState:
         self.abbrev = team.abbrev
         self.is_home = is_home
         self.players: Dict[int, Player] = {pid: world.player(pid) for pid in team.roster}
+
+        # In-game-injury tracking (DEVPLAN.md Step 2.3). ``unavailable`` starts seeded with
+        # anyone ALREADY injured coming into this game -- via team.py's ``available_players()``
+        # filter (the same helper DEVPLAN.md's Step 2.3 assignment calls out to confirm/wire in),
+        # inverted to the roster ids NOT in that available set, since _TeamState needs a live set
+        # it can keep adding to mid-game, not a one-shot list -- so a player still recovering
+        # from a previous game's injury is never iced; ``_injury_check`` adds to this set for a
+        # freshly-injured player mid-game. Every rotation-pool consumer below (the line/pair
+        # round-robin, PP/PK unit selection, the pulled-goalie extra-attacker pick) filters
+        # through this set so an unavailable player never gets fielded, whether hurt before
+        # puck-drop or mid-shift.
+        available_ids = {p.pid for p in available_players(team, self.players)}
+        self.unavailable: set = {pid for pid in team.roster if pid not in available_ids}
 
         # Round-robin rotation pointers into team.lines / team.pairs (MVP: no line-juggling AI,
         # just a fixed deterministic rotation so ice time distributes across the whole roster --
@@ -237,15 +358,50 @@ class _TeamState:
         ``refresh_on_ice_for_strength_state`` instead of calling this again, or the round-robin
         pointer would skip an extra line/pair every time a penalty is drawn or expires mid-shift
         (a real bug this split specifically guards against).
+
+        Injury-aware (DEVPLAN.md Step 2.3): any id in ``self.unavailable`` (injured, this game or
+        carried in from a previous one) is dropped from the line/pair before it's returned, and
+        backfilled from ``rotation_pool``-equivalent bench bodies (any healthy rostered skater not
+        already in the group this shift) so an injury never simply shrinks the on-ice group to 4
+        -- a real coach fills the hole from the bench, not leaves a gap. ``team.lines``/
+        ``team.pairs`` themselves are left untouched (static roster structure owned by
+        ``auto_build_lines``, not a per-game mutation target); this is a per-shift read-time
+        filter only.
         """
         lines = self.team.lines
         pairs = self.team.pairs
         line = lines[self._line_idx % len(lines)] if lines else []
         pair = pairs[self._pair_idx % len(pairs)] if pairs else []
-        group = list(line) + list(pair)
         self._line_idx = (self._line_idx + 1) % max(1, len(lines))
         self._pair_idx = (self._pair_idx + 1) % max(1, len(pairs))
+
+        healthy_line = [pid for pid in line if pid not in self.unavailable]
+        healthy_pair = [pid for pid in pair if pid not in self.unavailable]
+        group = healthy_line + healthy_pair
+        if len(healthy_line) < len(line) or len(healthy_pair) < len(pair):
+            group = self._backfill_from_bench(group, len(line) + len(pair))
         return group
+
+    def _backfill_from_bench(self, group: List[int], target_size: int) -> List[int]:
+        """Top ``group`` back up to ``target_size`` bodies from any healthy rostered skater not
+        already in it (DEVPLAN.md Step 2.3: an injured player's normal-rotation slot must be
+        filled from the bench, not left empty). Goalies are never eligible fill-in bodies. Falls
+        back to leaving ``group`` short if the whole roster is somehow already accounted for (an
+        extreme-injury edge case) -- never crashes, matching this codebase's "thin bench" fallback
+        philosophy elsewhere (e.g. ``_with_extra_attacker``)."""
+        if len(group) >= target_size:
+            return group
+        on_ice_set = set(group)
+        candidates = [pid for pid in self.team.roster
+                      if pid not in on_ice_set and pid not in self.unavailable
+                      and pid in self.players and self.players[pid].position != "G"]
+        candidates.sort(key=lambda pid: self.players[pid].overall, reverse=True)
+        result = list(group)
+        for pid in candidates:
+            if len(result) >= target_size:
+                break
+            result.append(pid)
+        return result
 
     def advance_shift(self, strength_state: Optional[str] = None,
                        skaters_needed: int = 5, penalized_ids: Optional[List[int]] = None) -> None:
@@ -284,15 +440,24 @@ class _TeamState:
         change, just one more id appended to the same ``List[int]`` every other consumer already
         expects. The extra skater is the best-fit forward not already on the ice this shift
         (falls back to any rostered skater not already included, never crashes on a thin bench).
+
+        Injury-aware (DEVPLAN.md Step 2.3): ``self.unavailable`` is folded into the
+        ``penalized_ids`` set passed to ``special_teams.on_ice_group_for_state`` -- that function
+        already excludes any id in ``penalized_ids`` from BOTH the special-teams unit
+        (``team.pp_unit_1``/``pk_unit_1``, which are static rosters that don't themselves know
+        about injuries) and its bench-padding fallback, so this is the one seam that keeps an
+        injured player off a PP/PK unit too, not just the normal-rotation line/pair path already
+        handled in ``_next_normal_group``.
         """
         normal_group = self._normal_group
         state = strength_state or config.STRENGTH_5V5
+        excluded_ids = set(penalized_ids or []) | self.unavailable
         if state == config.STRENGTH_5V5:
             self.on_ice = normal_group
         else:
             self.on_ice = ST.on_ice_group_for_state(
                 self.team, state, normal_group=normal_group,
-                skaters_needed=skaters_needed, penalized_ids=penalized_ids,
+                skaters_needed=skaters_needed, penalized_ids=excluded_ids,
             )
         if self.goalie_pulled:
             self.on_ice = self._with_extra_attacker(self.on_ice)
@@ -308,7 +473,8 @@ class _TeamState:
         (an extreme-injury/thin-bench edge case -- never crash, just field 5 instead of 6)."""
         on_ice_set = set(group)
         candidates = [pid for pid in self.team.roster
-                      if pid not in on_ice_set and pid != self.goalie_id and pid in self.players]
+                      if pid not in on_ice_set and pid != self.goalie_id and pid in self.players
+                      and pid not in self.unavailable]
         if not candidates:
             return group
         extra = max(candidates, key=lambda pid: self.players[pid].overall)
@@ -376,6 +542,12 @@ class GameSim:
         # special_teams.StrengthStateMachine's docstring).
         self.strength = ST.StrengthStateMachine(home_tid=home_tid, away_tid=away_tid)
 
+        # Faceoff-gated possession (DEVPLAN.md Step 2.3): the ``_TeamState`` that won the most
+        # recently resolved faceoff, consumed by the next ``_play_shift`` call to set that
+        # shift's starting offense/defense instead of a raw coin flip -- see _play_shift's
+        # docstring. ``None`` only before the very first faceoff of the game is resolved.
+        self._pending_faceoff: Optional[_TeamState] = None
+
     # -- public API -----------------------------------------------------------
     def play(self) -> GameResult:
         """Play the whole game, driving the resumable generator to completion with no real
@@ -434,9 +606,9 @@ class GameSim:
         2.6 territory) OT period.
         """
         clock = length_secs
-        # Faceoff at the start of every period (MVP scope: faceoffs only at period start / after a
-        # goal -- no icing/offside/penalty stoppages yet, that's Step 2.3).
-        self._log_faceoff()
+        # Faceoff at the start of every period (DEVPLAN.md Step 2.3: the winner now gates the
+        # first shift's starting possession -- see _play_shift's use of self._pending_faceoff).
+        self._pending_faceoff = self._log_faceoff(FACEOFF_PERIOD_START)
 
         while clock > 0:
             shift_secs = max(15.0, self.rng.gauss(config.SHIFT_SECONDS_TARGET, SHIFT_SECONDS_JITTER))
@@ -456,10 +628,12 @@ class GameSim:
                 # the lead doesn't play even one extra shift 6-on-5 by mistake.
                 if is_regulation:
                     self._update_goalie_pulls(clock)
-                # Faceoff at center ice restarts play after a goal (MVP scope: the only other
-                # legal faceoff trigger besides period start).
+                # Faceoff at center ice restarts play after a goal -- the only other legal
+                # faceoff trigger besides period start until DEVPLAN.md Step 2.3 added
+                # icing/offside/penalty stoppages (those are now rolled for mid-shift instead,
+                # see _play_shift).
                 if clock > 0:
-                    self._log_faceoff()
+                    self._pending_faceoff = self._log_faceoff(FACEOFF_AFTER_GOAL)
 
         # Regulation ends -- any pulled goalie returns for the next period/OT (a coach doesn't
         # carry an empty net into intermission; see _maybe_return_goalie's time-based fallback).
@@ -473,17 +647,33 @@ class GameSim:
     def _play_shift(self, shift_secs: float):
         """Resolve one shift: check for a drawn penalty, possession from the faceoff/rush, a
         sequence of shot attempts (ticking the strength-state clock and reacting to mid-shift
-        strength-state expiry between attempts) until the shift clock elapses or a goal is
-        scored, then apply ice-time/fatigue and rotate both teams' on-ice groups for next shift.
-        Returns True (via StopIteration value on `yield from` callers, or just the return value
-        here) if a goal was scored this shift. A generator only insofar as it yields at a goal
-        stoppage (see coach_session's docstring) -- for a shift with no goal it never yields."""
+        strength-state expiry between attempts) until the shift clock elapses, a goal is scored,
+        or an icing/offside stoppage cuts the shift short, then apply ice-time/fatigue/injury
+        checks and rotate both teams' on-ice groups for next shift. Returns True (via
+        StopIteration value on `yield from` callers, or just the return value here) if a goal
+        was scored this shift. A generator only insofar as it yields at a goal stoppage (see
+        coach_session's docstring) -- for a shift with no goal it never yields.
+
+        Faceoff-gated possession (DEVPLAN.md Step 2.3): the shift's starting offense/defense is
+        now read from ``self._pending_faceoff`` (the ``_TeamState`` that just won the faceoff
+        that opened this shift -- set by ``_play_period``/``_draw_penalty``/this method's own
+        icing/offside handling) instead of a raw ``rng.chance(0.5)`` coin flip. Falls back to a
+        neutral coin flip only if no faceoff has been resolved yet (shouldn't happen in normal
+        play -- every shift boundary in this engine follows a faceoff -- but defensive rather
+        than crashing on an unexpected ``None``).
+        """
         self._check_for_penalties()
 
-        offense, defense = (self.home, self.away) if self.rng.chance(0.5) else (self.away, self.home)
+        if self._pending_faceoff is not None:
+            offense, defense = (self._pending_faceoff,
+                               self.away if self._pending_faceoff is self.home else self.home)
+        else:
+            offense, defense = (self.home, self.away) if self.rng.chance(0.5) else (self.away, self.home)
+        self._pending_faceoff = None   # consumed -- the NEXT stoppage sets a fresh one
 
         elapsed = 0.0
         goal_scored = False
+        stoppage = False   # set True by an icing/offside mid-shift stoppage -- ends the shift
         rush = True       # the first shot attempt of a shift is off the initial entry
         rebound = False   # set True for the attempt immediately following an unconverted on-goal shot
         while elapsed < shift_secs:
@@ -498,6 +688,18 @@ class GameSim:
             # very next attempt reflects the correct personnel/strength state.
             if self._advance_penalty_clock(attempt_gap):
                 offense, defense = self._reorient_after_strength_change(offense, defense)
+
+            # Icing/offside stoppage check (DEVPLAN.md Step 2.3): rolled once per attempt cycle,
+            # same cadence the strength clock advances at (see this method's docstring / the
+            # ICING_CHANCE_PER_ATTEMPT_CYCLE/OFFSIDE_CHANCE_PER_ATTEMPT_CYCLE constants' own
+            # comments). A stoppage ends the shift immediately (real hockey: play stops dead) and
+            # sets ``self._pending_faceoff`` from the resulting faceoff's winner so the NEXT
+            # shift's possession is gated by it, exactly like a period-start/after-goal faceoff.
+            stoppage_type = self._roll_for_icing_or_offside()
+            if stoppage_type is not None:
+                stoppage = True
+                self._pending_faceoff = self._log_faceoff(stoppage_type)
+                break
 
             outcome = self._resolve_shot_attempt(offense, defense, rush=rush, rebound=rebound)
             rush = False
@@ -518,8 +720,25 @@ class GameSim:
                 offense, defense = defense, offense
 
         self._apply_ice_time(shift_secs)
+        self._injury_check()
+        # self._pending_faceoff is already correctly set for the NEXT shift by this point: an
+        # icing/offside stoppage set it directly (see the loop above), a goal will get one from
+        # _play_period's post-goal branch, and a clock-expiry shift with no stoppage leaves it
+        # None until the next period/OT boundary's own _log_faceoff call sets it -- no action
+        # needed here in any case.
         self._advance_shift_for_all()
         return goal_scored
+
+    def _roll_for_icing_or_offside(self) -> Optional[str]:
+        """Roll once for an icing or offside stoppage this attempt cycle (DEVPLAN.md Step 2.3).
+        Independent rolls (icing checked first, arbitrarily -- both are rare enough that the
+        order has no meaningful effect on the resulting rate of either). Returns the stoppage
+        type string if one fires, else ``None``."""
+        if self.rng.chance(ICING_CHANCE_PER_ATTEMPT_CYCLE):
+            return FACEOFF_ICING
+        if self.rng.chance(OFFSIDE_CHANCE_PER_ATTEMPT_CYCLE):
+            return FACEOFF_OFFSIDE
+        return None
 
     def _shot_attempt_interval(self, offense: _TeamState) -> float:
         """Seconds until the next shot attempt, scaled by the offense's coach shot_volume AND
@@ -619,10 +838,17 @@ class GameSim:
                 self._draw_penalty(state, on_ice_players)
 
     def _draw_penalty(self, offending: _TeamState, on_ice_players: List[Player]) -> None:
-        """Register a newly-drawn penalty against ``offending``'s team, log it, and rebuild both
+        """Register a newly-drawn penalty against ``offending``'s team, log it, rebuild both
         teams' on-ice groups immediately so the rest of THIS shift plays out at the new strength
         state (a penalty stops play in real hockey -- the very next attempt should already
-        reflect the man advantage/disadvantage)."""
+        reflect the man advantage/disadvantage), and roll a fresh faceoff for the stoppage
+        (DEVPLAN.md Step 2.3 -- a drawn penalty is a real stoppage, not a play-through event).
+
+        Called from ``_check_for_penalties()`` at the very TOP of ``_play_shift``, before that
+        method reads ``self._pending_faceoff`` to decide the shift's starting
+        offense/defense -- so setting it here means THIS shift's possession is correctly gated
+        by the penalty-stoppage faceoff's winner, not last shift's stale one.
+        """
         penalty_type = ST.roll_penalty_type(self.rng)
         offender = ST.pick_offending_player(self.rng, on_ice_players)
         offender_pid = offender.pid if offender is not None else None
@@ -641,6 +867,7 @@ class GameSim:
         # the rest of THIS shift reflects the new strength state without skipping a line/pair in
         # the normal round-robin rotation (see _TeamState.advance_shift's docstring).
         self._refresh_on_ice_for_all()
+        self._pending_faceoff = self._log_faceoff(FACEOFF_PENALTY)
 
     def _advance_penalty_clock(self, elapsed_secs: float) -> bool:
         """Tick the strength-state machine's active penalty timers by ``elapsed_secs``. Returns
@@ -688,29 +915,19 @@ class GameSim:
         return offense, defense
 
     # -- faceoffs ---------------------------------------------------------------
-    def _log_faceoff(self) -> None:
-        """Resolve a faceoff between the two current on-ice centers (contested by `faceoffs`
-        rating, realization-scaled coin flip) purely for box-score/PBP bookkeeping -- MVP doesn't
-        gate subsequent possession on the faceoff winner (the shift loop already randomizes the
-        starting attacker), but every faceoff still needs to be logged and tallied per DEVPLAN.md's
-        "faceoffs are contested... determining puck possession for the shift's start" requirement."""
-        home_center = self._current_center(self.home)
-        away_center = self._current_center(self.away)
-        winner_state, winner_pid, loser_pid = self.home, home_center, away_center
-        if home_center is not None and away_center is not None:
-            home_p = self.home.players[home_center]
-            away_p = self.away.players[away_center]
-            home_fo = home_p.rating("faceoffs")
-            away_fo = away_p.rating("faceoffs")
-            real = R.morale_realization(home_p.morale)
-            gap = (home_fo - away_fo) * real * 0.004
-            home_win_p = max(0.20, min(0.80, FACEOFF_WIN_BASE + gap))
-            if self.rng.chance(home_win_p):
-                winner_state, winner_pid, loser_pid = self.home, home_center, away_center
-            else:
-                winner_state, winner_pid, loser_pid = self.away, away_center, home_center
-        elif away_center is not None:
-            winner_state, winner_pid, loser_pid = self.away, away_center, home_center
+    def _log_faceoff(self, stoppage_type: str = FACEOFF_PERIOD_START) -> _TeamState:
+        """Resolve a faceoff for the given ``stoppage_type`` (DEVPLAN.md Step 2.3 -- period
+        start, after a goal, a drawn penalty, icing, or offside; see the FACEOFF_* constants),
+        log it (tallying the binary ``fo_won``/``fo_lost`` box-score fields and the PBP event's
+        ``stoppage_type``/``won_off_tie`` context), and return the WINNING ``_TeamState`` so the
+        caller (``_play_shift``) can gate the shift's starting possession on it -- this is the
+        step that finally makes a faceoff outcome matter beyond box-score flavor (MVP's
+        ``_log_faceoff`` explicitly did not gate possession; this version does).
+
+        Delegates the actual three-way-roll/winger-tiebreak resolution to ``_resolve_faceoff``
+        (kept separate so that pure resolution logic is testable without also exercising the
+        logging/box-score side effects)."""
+        winner_state, winner_pid, loser_pid, won_off_tie = self._resolve_faceoff()
 
         if winner_pid is not None:
             self.result.skater_line(winner_pid).fo_won += 1
@@ -718,17 +935,136 @@ class GameSim:
             self.result.skater_line(loser_pid).fo_lost += 1
 
         self._log(EVENT_FACEOFF, "Faceoff", team_id=winner_state.tid if winner_pid else None,
-                  player_id=winner_pid)
+                  player_id=winner_pid, stoppage_type=stoppage_type, won_off_tie=won_off_tie)
+        return winner_state
+
+    def _resolve_faceoff(self) -> Tuple[_TeamState, Optional[int], Optional[int], bool]:
+        """The three-way faceoff roll (DEVPLAN.md Step 2.3's "Three-way faceoff resolution"
+        design note): home center clean win / away center clean win / a contested TIE, resolved
+        via a secondary winger roll rather than a plain two-way coin flip.
+
+        Returns ``(winner_state, winner_pid, loser_pid, won_off_tie)``. ``won_off_tie`` is True
+        only when the primary center roll landed on the tie slice and the SECONDARY winger roll
+        is what actually decided it -- ``fo_won``/``fo_lost`` are credited identically either way
+        (the winning CENTER, not a winger, always gets the box-score credit -- see the design
+        note: "credited as the faceoff winner... exactly as if their center had won cleanly"),
+        this flag exists purely as extra PBP context.
+
+        Shape, mirroring the old two-way model's realization-scaled gap-to-probability pattern
+        (``ratings.morale_realization`` scaling the *gap*, never the base rate -- consistent with
+        this codebase's "no upweighting" principle: realization can only pull a result back
+        toward a 50/50 neutral, never push a probability further from it than the raw rating gap
+        alone would):
+          1. If either team has no identifiable center on the ice (should be rare -- only a
+             thin-bench/heavy-injury edge case), the other team's center wins uncontested; if
+             neither has a center, nobody wins/loses anything (skip -- no PBP-worthy event).
+          2. Otherwise roll a three-way split: a `home_fo`/`away_fo` rating gap sets a home-clean-
+             win probability exactly like the old model, but a TIE slice is carved out of the
+             middle first (``FACEOFF_TIE_BASE_P``, shrinking as the rating gap widens -- a
+             lopsided matchup is less often a genuine scrum) so the three outcomes partition
+             [0, 1] as [0, away_p) / [away_p, away_p + tie_p) / [away_p + tie_p, 1.0].
+          3. A tie roll triggers the winger secondary roll (``_resolve_winger_tiebreak``) between
+             the two teams' on-ice wingers, same gap-to-probability shape, over a
+             puck_handling + offensive_awareness/defensive_awareness blend (DEVPLAN.md's explicit
+             "hockey IQ" proxy) -- whichever team wins THAT roll has its CENTER credited as the
+             faceoff winner (not the winger -- see the design note).
+        """
+        home_center = self._current_center(self.home)
+        away_center = self._current_center(self.away)
+
+        if home_center is None and away_center is None:
+            return self.home, None, None, False
+        if home_center is None:
+            return self.away, away_center, None, False
+        if away_center is None:
+            return self.home, home_center, None, False
+
+        home_p = self.home.players[home_center]
+        away_p = self.away.players[away_center]
+        home_fo = home_p.rating("faceoffs")
+        away_fo = away_p.rating("faceoffs")
+        rating_gap = home_fo - away_fo
+
+        real = R.morale_realization(home_p.morale)
+        win_gap = rating_gap * real * 0.004
+        # Carve the tie slice out of the middle, shrinking with |rating_gap| (a lopsided
+        # matchup is less often a genuine 50/50 scrum) but never going negative.
+        tie_p = max(0.0, FACEOFF_TIE_BASE_P - abs(rating_gap) * FACEOFF_TIE_GAP_SUPPRESSION)
+        # Split the remaining (1 - tie_p) probability mass between home/away using the same
+        # gap-to-probability shape the old two-way model used, then re-scale so the three
+        # outcomes partition [0, 1] exactly (home_p + away_p + tie_p == 1.0).
+        home_share = max(0.20, min(0.80, FACEOFF_WIN_BASE + win_gap))
+        home_p_final = home_share * (1.0 - tie_p)
+        away_p_final = (1.0 - home_share) * (1.0 - tie_p)
+
+        roll = self.rng.random()
+        if roll < home_p_final:
+            return self.home, home_center, away_center, False
+        if roll < home_p_final + away_p_final:
+            return self.away, away_center, home_center, False
+
+        # Tie -- resolve via the winger secondary roll (DEVPLAN.md's design note). The winning
+        # team's CENTER (not the winger who actually recovered the puck) is credited, since real
+        # NHL box scores have no separate "won it off a scrum" faceoff stat.
+        tie_winner_state = self._resolve_winger_tiebreak()
+        if tie_winner_state is self.home:
+            return self.home, home_center, away_center, True
+        return self.away, away_center, home_center, True
+
+    def _resolve_winger_tiebreak(self) -> _TeamState:
+        """Secondary roll between the two teams' on-ice WINGERS (not centers -- the centers are
+        the ones who just tied each other up) to decide who jumps on a loose scrum puck first,
+        per DEVPLAN.md's "Three-way faceoff resolution" design note. Weighted by
+        ``puck_handling + offensive_awareness``/``defensive_awareness`` (this codebase has no
+        standalone "hockey IQ" rating -- the note explicitly names these as the closest existing
+        fit), same realization-scaled gap-to-probability shape as the primary center roll (extends
+        the existing pattern, not a new mechanic). Falls back to a neutral coin flip if either
+        team has no identifiable winger on the ice (thin-bench/PP-PK-unit edge case)."""
+        home_wingers = self._current_wingers(self.home)
+        away_wingers = self._current_wingers(self.away)
+        if not home_wingers or not away_wingers:
+            return self.home if self.rng.chance(0.5) else self.away
+
+        home_score = sum(_winger_iq_score(self.home.players[pid]) for pid in home_wingers) / len(home_wingers)
+        away_score = sum(_winger_iq_score(self.away.players[pid]) for pid in away_wingers) / len(away_wingers)
+        # Realization scalar on the gap (same role the primary roll's home-center
+        # morale_realization plays): the home on-ice group's already-computed average morale
+        # realization (``OnIceCache.avg_morale_real``, built once per shift) stands in for a
+        # bespoke per-winger loop -- same multiplicative, floor-capped shape as every other
+        # realization factor in this codebase, just reusing an aggregate that already exists.
+        real = self.home.cache.avg_morale_real if self.home.cache is not None else 1.0
+        gap = (home_score - away_score) * real * FACEOFF_WINGER_GAP_COEFFICIENT
+        home_win_p = max(0.20, min(0.80, FACEOFF_WIN_BASE + gap))
+        return self.home if self.rng.chance(home_win_p) else self.away
 
     @staticmethod
     def _current_center(state: _TeamState) -> Optional[int]:
-        """Best-effort "center" for a faceoff: the middle slot (index 1) of the current forward
-        line if available, else None. On-ice group stays a plain list (DESIGN.md point 1); this
-        just reads index 1 by the line-builder's LW/C/RW convention (team.py's
-        _build_forward_lines) rather than encoding any position metadata on the group itself."""
-        if len(state.on_ice) >= 2:
-            return state.on_ice[1]
+        """The actual on-ice CENTER for a faceoff, looked up by ``Player.position`` rather than
+        assuming index 1 of ``state.on_ice`` (DEVPLAN.md Step 2.3's ``_current_center`` bug fix --
+        the old index-based assumption silently broke for a PP/PK on-ice group, which
+        ``special_teams.on_ice_group_for_state`` builds ranked by composite score, not
+        LW/C/RW position, so index 1 wasn't reliably a center in that case).
+
+        Prefers a rostered "C" among the current on-ice group; if none is on the ice (an
+        undersized/all-wing PK unit, or a center-less thin-bench edge case), falls back to the
+        first on-ice skater so a faceoff still has SOMEONE to credit rather than silently
+        crediting nobody -- matches the old function's "best-effort" framing, just correctly
+        position-aware now instead of position-order-assuming."""
+        for pid in state.on_ice:
+            player = state.players.get(pid)
+            if player is not None and player.position == "C":
+                return pid
         return state.on_ice[0] if state.on_ice else None
+
+    @staticmethod
+    def _current_wingers(state: _TeamState) -> List[int]:
+        """The on-ice LW/RW skaters for the winger secondary tiebreak roll (DEVPLAN.md Step
+        2.3), looked up by ``Player.position`` -- same position-aware approach as
+        ``_current_center`` rather than an index assumption. Returns an empty list (never
+        crashes) if no on-ice skater is currently a winger (e.g. a PK unit built entirely from
+        D/C by defensive-composite score)."""
+        return [pid for pid in state.on_ice
+                if state.players.get(pid) is not None and state.players[pid].position in ("LW", "RW")]
 
     # -- shot resolution ----------------------------------------------------
     def _pick_zone_and_shot_type(self, offense: _TeamState) -> Tuple[str, str]:
@@ -1007,6 +1343,54 @@ class GameSim:
                     100.0, state.fatigue.get(state.goalie_id, 0.0)
                     + shift_secs * FATIGUE_GAIN_PER_SEC * 0.4)   # goalies tire slower than skaters
 
+    # -- in-game injuries (DEVPLAN.md Step 2.3) -------------------------------
+    def _injury_check(self) -> None:
+        """Roll every currently-on-ice SKATER (both teams) for an in-game injury, once per
+        shift -- HoopR's ``_injury_check`` sport-agnostic shape (per-on-court/on-ice-player,
+        per-possession/per-shift roll), ported to hockey's shift-based cadence rather than
+        basketball's possession-based one (see this module's docstring). Goalies are
+        deliberately excluded (matches HoopR's own scope -- that function only ever iterates
+        skater-equivalents; a goalie-injury/backup-swap interaction would cross into Step 2.2's
+        goalie-rotation territory, out of bounds for this step).
+
+        A freshly-injured player is added to their team's ``unavailable`` set immediately (so
+        the very next ``_advance_shift_for_all`` call already routes around them -- see
+        ``_TeamState._next_normal_group``/``refresh_on_ice_for_strength_state``) and recorded
+        into ``self.result.injuries`` for ``sim/season.py``'s ``_apply_result`` to apply onto
+        ``Player.injury`` once the game is over.
+        """
+        for state in (self.home, self.away):
+            for pid in list(state.on_ice):
+                player = state.players.get(pid)
+                if player is None or pid in state.unavailable:
+                    continue
+                rate = config.IN_GAME_INJURY_RATE * (1.0 + (INJURY_STAMINA_ANCHOR
+                                                            - player.rating("stamina", 70))
+                                                      * INJURY_STAMINA_SLOPE)
+                if self.rng.chance(max(0.0, rate)):
+                    games, severity = self._injury_severity()
+                    self.result.injuries.append((pid, games, "in-game injury", severity))
+                    state.unavailable.add(pid)
+                    self._log(EVENT_INJURY, f"{player.short_name} is injured and leaves the game",
+                              team_id=state.tid, player_id=pid)
+
+    def _injury_severity(self) -> Tuple[int, str]:
+        """Roll an injury's severity band + games-missed count within that band (DEVPLAN.md
+        Step 2.3, hockey-appropriate magnitudes -- see INJURY_MINOR_GAMES/INJURY_MODERATE_GAMES/
+        INJURY_MAJOR_GAMES's own comments for why these differ from HoopR's basketball-season
+        numbers). Same three-tier cumulative-probability shape as HoopR's ``_injury_severity``:
+        most in-game injuries are minor (day-to-day), a minority are moderate (a couple of
+        weeks), and a rare tail is major (long-term IR)."""
+        roll = self.rng.random()
+        if roll < INJURY_MINOR_P:
+            lo, hi = INJURY_MINOR_GAMES
+            return self.rng.randint(lo, hi), "minor"
+        if roll < INJURY_MODERATE_P:
+            lo, hi = INJURY_MODERATE_GAMES
+            return self.rng.randint(lo, hi), "moderate"
+        lo, hi = INJURY_MAJOR_GAMES
+        return self.rng.randint(lo, hi), "major"
+
     # -- decision-point view (resumable generator scaffolding) ---------------
     def _decision_view(self) -> "GameSim":
         """The object yielded at a stoppage. Currently just ``self`` -- there's no real
@@ -1019,7 +1403,8 @@ class GameSim:
     # -- logging ----------------------------------------------------------------
     def _log(self, event_type: str, description: str, *, team_id: Optional[int] = None,
               player_id: Optional[int] = None, penalty_type: Optional[str] = None,
-              penalty_duration_secs: Optional[float] = None) -> None:
+              penalty_duration_secs: Optional[float] = None,
+              stoppage_type: Optional[str] = None, won_off_tie: bool = False) -> None:
         if not self.collect_pbp:
             return
         self.result.pbp.append(PBPEvent(
@@ -1027,6 +1412,7 @@ class GameSim:
             description=description, home_score=self.result.home_score,
             away_score=self.result.away_score, team_id=team_id, player_id=player_id,
             penalty_type=penalty_type, penalty_duration_secs=penalty_duration_secs,
+            stoppage_type=stoppage_type, won_off_tie=won_off_tie,
         ))
 
     def _log_shot(self, offense: _TeamState, defense: _TeamState, shooter: Player,

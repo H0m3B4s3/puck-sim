@@ -2,10 +2,16 @@
 
 Mirrors HoopR's ``hoopsim/sim/season.py`` (154 lines) shape directly: ``generate_schedule()``
 (circle-method round-robin, DESIGN.md's explicit sport-agnostic carryover), ``_apply_result()``/
-``sim_one()``/``advance_one_day()``/``start_season()``. No ``_heal_injuries()``-equivalent exists
-here -- PuckSim has no injury system yet (that's DEVPLAN.md Step 2.3); a future step that adds one
-should hook it into ``advance_one_day()`` right after the day's games are simmed, the same spot
-HoopR's own per-day injury-healing tick lives.
+``sim_one()``/``advance_one_day()``/``start_season()``.
+
+Injuries (DEVPLAN.md Step 2.3): ``_apply_result()`` now applies every in-game injury
+``sim/engine.py``'s ``GameResult.injuries`` collected (ONLY upgrading -- never downgrading -- an
+existing injury, mirroring HoopR's own "the worse of the two" comparison, since a player already
+out longer for an earlier knock shouldn't have that shortened by a lesser injury sustained before
+he's even healed). ``_heal_injuries()`` (this step's addition, hooked into ``advance_one_day()``
+right after the day's games are simmed -- exactly the spot this module's own docstring previously
+flagged as the intended hook point, and the same spot HoopR's per-day injury-healing tick lives)
+ticks ``games_remaining`` down by one for every active injury and clears it once healed.
 
 Goalie rest-based starter rotation (DEVPLAN.md Step 2.2): ``sim_one()`` is now the per-game hook
 that decides which of a team's two rostered goalies actually starts (``sim/goalies.py``'s
@@ -98,6 +104,7 @@ from typing import Dict, List, Optional, Tuple
 
 from pucksim import config
 from pucksim.models.league import Game, Phase
+from pucksim.models.player import Injury
 from pucksim.models.stats import GoalieStatLine, SkaterStatLine
 from pucksim.models.team import Team
 from pucksim.models.world import World
@@ -327,6 +334,19 @@ def _apply_result(world: World, game: Game, result: GameResult) -> None:
         if player is not None and isinstance(player.season, GoalieStatLine):
             player.season.add(line)
 
+    # Apply in-game injuries (DEVPLAN.md Step 2.3) -- only UPGRADE an existing injury, never
+    # shorten one, mirroring HoopR's own "games > player.injury.games_remaining" comparison: a
+    # player already out for a longer-remaining injury shouldn't have that clock reset by a
+    # lesser knock (this only matters in the rare case a player who's somehow still marked
+    # injured suffers a second in-game injury -- shouldn't happen given engine.py's
+    # unavailable-filtering, but a defensive comparison here costs nothing).
+    for pid, games, desc, severity in result.injuries:
+        player = world.players.get(pid)
+        if player is None:
+            continue
+        if player.injury is None or games > player.injury.games_remaining:
+            player.injury = Injury(desc, games, severity)
+
 
 def _choose_and_record_starter(world: World, tid: int, rest_state: GoalieRestState,
                                 day: int) -> Optional[int]:
@@ -364,17 +384,39 @@ def sim_one(world: World, game: Game) -> GameResult:
 
 
 # ---------------------------------------------------------------------------
+# Injury healing (DEVPLAN.md Step 2.3)
+# ---------------------------------------------------------------------------
+def _heal_injuries(world: World) -> None:
+    """Tick every active injury's ``games_remaining`` down by one calendar day's worth of
+    recovery, clearing it once healed. Near-verbatim port of HoopR's ``_heal_injuries`` (see
+    that function in hoopsim/sim/season.py) -- one day of recovery per call, so this must be
+    called exactly once per day advanced (see ``advance_one_day``, its sole caller), same as
+    HoopR's own per-day cadence.
+    """
+    for player in world.players.values():
+        if player.injury is not None:
+            player.injury.games_remaining -= 1
+            if player.injury.games_remaining <= 0:
+                player.injury = None
+
+
+# ---------------------------------------------------------------------------
 # Day advancement
 # ---------------------------------------------------------------------------
 def advance_one_day(world: World) -> List[Game]:
-    """Simulate every unplayed game scheduled on ``world.day``, then advance the day counter.
+    """Simulate every unplayed game scheduled on ``world.day``, heal one day's worth of injury
+    recovery, then advance the day counter.
 
-    Returns the list of ``Game`` objects played today. No injury-healing tick exists here (see
-    module docstring) -- no injury system exists yet (DEVPLAN.md Step 2.3).
+    Returns the list of ``Game`` objects played today. ``_heal_injuries`` (DEVPLAN.md Step 2.3)
+    runs AFTER the day's games are simmed -- exactly the hook point this module's docstring
+    previously flagged as the intended spot for it -- so a player injured in today's own game
+    doesn't have his very first day of absence double-counted (a fresh injury only starts
+    healing from the NEXT day's tick onward, not the day it happened).
     """
     todays = [g for g in world.schedule if g.day == world.day and not g.played]
     for game in todays:
         sim_one(world, game)
+    _heal_injuries(world)
     world.day += 1
     return todays
 
