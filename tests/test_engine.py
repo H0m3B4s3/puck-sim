@@ -1,10 +1,13 @@
-"""Tests for pucksim.sim.engine -- Step 1.12 done-criteria.
+"""Tests for pucksim.sim.engine -- Step 1.12 done-criteria (updated by Step 2.6 for real
+OT/shootout resolution -- see the "Every game under a has_shootout=True rule resolves
+decisively" section near the bottom).
 
 Uses ``pucksim.gen.leaguegen.build_world(seed=...)`` for realistic populated Worlds (per
 DEVPLAN.md's explicit suggestion), then drives ``GameSim(...).play()`` and checks internal
 box-score consistency, determinism, a light-weight many-game "doesn't crash" sweep, shot-attempt
-event context, plus_minus correctness, and that no game in this step's scope ever resolves via a
-shootout (``went_so`` stays False everywhere -- shootouts don't exist until Step 2.6).
+event context, and plus_minus correctness. Real OT/shootout-specific coverage (3-on-3 OT, real
+shootout point awards, playoff 5-on-5 sudden death, the playoff discipline mode) lives in
+``tests/test_ot_shootout.py``/``tests/test_playoffs.py``, not here.
 """
 from __future__ import annotations
 
@@ -162,9 +165,15 @@ def test_different_seeds_produce_different_results():
 
 
 # ---------------------------------------------------------------------------
-# Many-game sweep -- doesn't crash, no shootouts.
+# Many-game sweep -- doesn't crash.
 # ---------------------------------------------------------------------------
 def test_sweep_of_games_across_matchups_and_seeds_does_not_crash():
+    """DEVPLAN.md Step 2.6: went_so=True is now a legitimate, expected outcome (real 3-on-3 OT ->
+    shootout resolution for a has_shootout=True default-standings-rule game) -- an earlier
+    version of this test asserted went_so is always False, which was an MVP-scope-only invariant
+    Step 2.6 explicitly obsoletes (see tests/test_ot_shootout.py for the real shootout-specific
+    coverage this step adds). This test's own job is unchanged: a many-game sweep across varied
+    seeds/matchups must not crash and must always produce a non-negative, decisive score."""
     results = []
     for seed in range(1, 6):
         world = build_world(seed=seed)
@@ -178,8 +187,9 @@ def test_sweep_of_games_across_matchups_and_seeds_does_not_crash():
     for result in results:
         assert result.home_score >= 0
         assert result.away_score >= 0
-        # MVP scope: shootouts don't exist yet -- never set went_so=True.
-        assert result.went_so is False
+        # Every game under the default "standard" (has_shootout=True) standings rule must now
+        # resolve decisively straight from the engine -- no unresolved ties.
+        assert result.winner is not None
 
 
 # ---------------------------------------------------------------------------
@@ -283,15 +293,26 @@ def test_goal_credits_scorer_and_updates_goalie_goals_against():
 
 
 # ---------------------------------------------------------------------------
-# went_so never True this step
+# Every game under a has_shootout=True rule resolves decisively (DEVPLAN.md Step 2.6).
 # ---------------------------------------------------------------------------
-def test_went_so_is_never_true_across_many_games():
+def test_every_game_resolves_decisively_under_default_standings_rule():
+    """DEVPLAN.md Step 2.6 superseded this test's original MVP-scope premise (an earlier version
+    asserted went_so is NEVER true, since no shootout existed yet). Now the inverse invariant
+    holds: build_world()'s default standings_rule ("standard", has_shootout=True) means every
+    game -- however it gets there (regulation, 3-on-3 OT, or a real shootout) -- must come back
+    with a decisive winner and legal went_ot/went_so flags. See tests/test_ot_shootout.py for
+    shootout-specific coverage (point awards, retro's legitimate-tie exception, etc.)."""
     for seed in range(20, 26):
         world = build_world(seed=seed)
         tids = sorted(world.teams.keys())
         for home_tid, away_tid in itertools.islice(itertools.combinations(tids, 2), 3):
             result = GameSim(world, home_tid, away_tid).play()
-            assert result.went_so is False
+            assert result.winner is not None
+            # went_so=True only ever accompanies went_ot=True (a shootout is always preceded by
+            # an undecided OT period) -- never the reverse implication (plenty of games decide in
+            # regulation or in OT without needing a shootout at all).
+            if result.went_so:
+                assert result.went_ot is True
 
 
 # ---------------------------------------------------------------------------

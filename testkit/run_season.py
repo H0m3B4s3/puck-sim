@@ -56,7 +56,7 @@ import argparse
 import os
 import sys
 import time
-from typing import List
+from typing import Dict, List
 
 # Defensive fallback only -- see module docstring. Ensures the project root (this script's
 # parent directory) is importable even if `pucksim` somehow isn't already on sys.path (e.g. venv
@@ -72,6 +72,7 @@ from pucksim.models.stats import GoalieStatLine, SkaterStatLine  # noqa: E402
 from pucksim.models.team import Team  # noqa: E402
 from pucksim.models.world import World  # noqa: E402
 from pucksim.save.serialize import save_world  # noqa: E402
+from pucksim.sim import playoffs as PO  # noqa: E402
 from pucksim.sim.season import (  # noqa: E402
     advance_one_day,
     generate_schedule,
@@ -135,6 +136,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=sorted(config.STANDINGS_RULES.keys()),
         default=config.DEFAULT_STANDINGS_RULE,
         help=f"Standings points rule to use (default: {config.DEFAULT_STANDINGS_RULE!r}).",
+    )
+    parser.add_argument(
+        "--playoff-discipline",
+        choices=list(config.PLAYOFF_DISCIPLINE_MODE_CHOICES),
+        default=config.DEFAULT_PLAYOFF_DISCIPLINE_MODE,
+        help=(
+            "Playoff officiating/discipline mode (DEVPLAN.md Step 2.6): 'realistic' (default) "
+            "calls meaningfully fewer penalties in playoff games; 'regular_season' uses identical "
+            f"penalty rates to the regular season. Only matters if --playoffs is given "
+            f"(default: {config.DEFAULT_PLAYOFF_DISCIPLINE_MODE!r})."
+        ),
+    )
+    parser.add_argument(
+        "--playoffs",
+        action="store_true",
+        help=(
+            "After each regular season completes, also simulate the full playoff bracket "
+            "(DEVPLAN.md Step 2.6: conference seeding, best-of-7 series, real 5-on-5 sudden-"
+            "death OT, no shootout) to a champion and print a bracket summary."
+        ),
     )
     return parser
 
@@ -268,6 +289,37 @@ def _print_season_summary(world: World, season_num: int, games_per_season: int) 
 
 
 # ---------------------------------------------------------------------------
+# Playoff bracket summary (DEVPLAN.md Step 2.6)
+# ---------------------------------------------------------------------------
+def _print_playoff_bracket(world: World) -> None:
+    """Print every series' final result, grouped by round, then the champion. Only meaningful
+    after ``PO.run_full_playoffs(world)`` has completed -- called from ``main()`` right after
+    that call."""
+    print(f"\nPlayoffs (playoff_discipline_mode={world.playoff_discipline_mode!r})")
+    print("=========")
+    if not world.bracket:
+        print("(no bracket -- start_playoffs was never called)")
+        return
+
+    by_round: Dict[str, List[dict]] = {}
+    for s in world.bracket["all_series"]:
+        by_round.setdefault(s["round"], []).append(s)
+
+    for rnd in ("R1", "R2", "CF", "Finals"):
+        series_list = by_round.get(rnd)
+        if not series_list:
+            continue
+        print(f"\n-- {PO.ROUND_LABELS.get(rnd, rnd)} --")
+        for s in series_list:
+            winner_name = world.teams[s["winner"]].abbrev if s["winner"] is not None else "?"
+            print(f"  {PO.series_status(world, s)}  (winner: {winner_name})")
+
+    champ_tid = PO.champion(world)
+    if champ_tid is not None:
+        print(f"\nChampion: {world.teams[champ_tid].name}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 def main(argv: List[str] = None) -> int:
@@ -278,6 +330,7 @@ def main(argv: List[str] = None) -> int:
 
     world = build_world(seed=args.seed)
     world.standings_rule = args.standings_rule
+    world.playoff_discipline_mode = args.playoff_discipline
 
     for season_num in range(1, args.seasons + 1):
         if season_num > 1:
@@ -287,6 +340,16 @@ def main(argv: List[str] = None) -> int:
             world.season_year += 1
         _run_one_season(world, args.games_per_season)
         _print_season_summary(world, season_num, args.games_per_season)
+
+        if args.playoffs:
+            # DEVPLAN.md Step 2.6: real playoff bracket simulation, chained directly onto this
+            # season's just-finished regular-season standings. No offseason/draft/FA system
+            # exists yet (same MVP-scope caveat as --seasons above), so a subsequent season (if
+            # any) still just re-runs a fresh schedule for the same 32 rosters -- the playoff
+            # bracket itself does not feed back into roster composition for the next season.
+            PO.start_playoffs(world)
+            PO.run_full_playoffs(world)
+            _print_playoff_bracket(world)
 
     if args.save_path:
         save_world(world, args.save_path)

@@ -82,13 +82,23 @@ def forecheck_multiplier(forecheck_aggression: float) -> float:
 
 
 def penalty_probability_for_shift(on_ice_players: List[Player],
-                                   coach_profile: CoachProfile) -> float:
+                                   coach_profile: CoachProfile, *,
+                                   playoff_multiplier: float = 1.0) -> float:
     """Probability the offending team's on-ice group draws a penalty this shift.
 
     Uses the LOWEST discipline rating among the on-ice group (the most-likely offender sets
     the floor -- a shift with one undisciplined player is meaningfully more penalty-prone than
     its average would suggest, since real penalties are drawn by individuals, not team
     averages) scaled by the team's coach tendencies. Returns a probability in [0, 1].
+
+    ``playoff_multiplier`` (DEVPLAN.md Step 2.6's "Playoff officiating/discipline mode" design
+    note): a new multiplicative factor on top of the existing discipline/risk-tolerance/
+    forecheck chain. Defaults to ``1.0`` -- a strict no-op for every regular-season call site and
+    every existing caller that doesn't pass it. Only ever passed ``< 1.0`` by ``engine.py`` when
+    the currently-simulating game is a playoff game under ``World.playoff_discipline_mode ==
+    "realistic"`` (see ``config.PLAYOFF_REALISTIC_PENALTY_MULTIPLIER``); "regular_season" mode
+    always passes ``1.0``, identical to a non-playoff game. This is a magnitude tweak on an
+    existing knob, not a new penalty mechanic -- see this module's docstring.
     """
     if not on_ice_players:
         return 0.0
@@ -96,13 +106,18 @@ def penalty_probability_for_shift(on_ice_players: List[Player],
     p = (config.PENALTY_BASE_PROB_PER_SHIFT
          * discipline_multiplier(worst_discipline)
          * risk_tolerance_multiplier(coach_profile.defensive_risk_tolerance)
-         * forecheck_multiplier(coach_profile.forecheck_aggression))
+         * forecheck_multiplier(coach_profile.forecheck_aggression)
+         * playoff_multiplier)
     return max(0.0, min(1.0, p))
 
 
-def roll_for_penalty(rng, on_ice_players: List[Player], coach_profile: CoachProfile) -> bool:
-    """Convenience wrapper: roll the rng against penalty_probability_for_shift's result."""
-    return rng.chance(penalty_probability_for_shift(on_ice_players, coach_profile))
+def roll_for_penalty(rng, on_ice_players: List[Player], coach_profile: CoachProfile, *,
+                      playoff_multiplier: float = 1.0) -> bool:
+    """Convenience wrapper: roll the rng against penalty_probability_for_shift's result.
+
+    ``playoff_multiplier`` passes straight through -- see that function's docstring."""
+    return rng.chance(penalty_probability_for_shift(
+        on_ice_players, coach_profile, playoff_multiplier=playoff_multiplier))
 
 
 def pick_offending_player(rng, on_ice_players: List[Player]) -> Optional[Player]:
@@ -166,11 +181,21 @@ class StrengthStateMachine:
 
     ``home_tid``/``away_tid`` identify the two sides so ``state_for(tid)`` can answer "is this
     team currently on the PP, the PK, or at a neutral strength" from either team's perspective.
+
+    ``base_state`` (DEVPLAN.md Step 2.6): the "no active penalties" neutral strength state --
+    defaults to ``config.STRENGTH_5V5`` (regulation), but ``engine.py`` swaps this to
+    ``config.STRENGTH_3V3`` for regular-season OT (real 3-on-3 sudden death) or leaves it at
+    ``STRENGTH_5V5`` for playoff OT (full 5-on-5 sudden death -- a different OT shape per
+    DESIGN.md point 8). A penalty drawn DURING 3-on-3 OT still stacks a real disadvantage on top
+    of this base (e.g. a minor during 3v3 OT plays out 3-on-2, not 4-on-3 -- see
+    ``skaters_on_ice_for``'s handling below), matching real NHL OT penalty rules. Swapping this
+    field never touches ``_timers`` -- any already-active penalty keeps ticking exactly as before.
     """
 
     home_tid: int
     away_tid: int
     _timers: List[_PenaltyTimer] = field(default_factory=list)
+    base_state: str = config.STRENGTH_5V5
 
     # -- mutation -----------------------------------------------------------
     def add_penalty(self, team_tid: int, player_id: Optional[int], penalty_type: str) -> _PenaltyTimer:
@@ -222,17 +247,25 @@ class StrengthStateMachine:
     def state_for(self, tid: int) -> str:
         """Current strength state from ``tid``'s own perspective: STRENGTH_PP if the other
         team is short, STRENGTH_PK if this team is short, STRENGTH_5V3 for a double
-        disadvantage, STRENGTH_5V5 otherwise. Handles the simple/common cases; exotic overlaps
-        beyond 5v3 (e.g. simultaneous penalties both ways) collapse to the closest reasonable
-        state rather than modeling every possible NHL rulebook edge case (DEVPLAN.md: "don't
-        over-engineer exotic edge cases, a reasonable simple model is fine").
+        disadvantage, ``self.base_state`` otherwise (STRENGTH_5V5 in regulation/playoff-OT,
+        STRENGTH_3V3 in regular-season OT -- see this class's docstring). Handles the simple/
+        common cases; exotic overlaps beyond 5v3 (e.g. simultaneous penalties both ways) collapse
+        to the closest reasonable state rather than modeling every possible NHL rulebook edge
+        case (DEVPLAN.md: "don't over-engineer exotic edge cases, a reasonable simple model is
+        fine").
+
+        A penalty during 3-on-3 OT (``base_state == STRENGTH_3V3``) still reports STRENGTH_PP/PK
+        from each side's perspective -- real NHL 3-on-3 OT penalties genuinely do create a
+        below-3-skater disadvantage (3-on-2), which ``skaters_on_ice_for`` below handles by
+        subtracting from ``base_state``'s own skater count rather than assuming the regulation
+        5-a-side baseline.
         """
         other_tid = self.away_tid if tid == self.home_tid else self.home_tid
         own_penalties = self.active_penalty_count(tid)
         other_penalties = self.active_penalty_count(other_tid)
 
         if own_penalties == 0 and other_penalties == 0:
-            return config.STRENGTH_5V5
+            return self.base_state
         if own_penalties > 0 and other_penalties == 0:
             # This team is shorthanded. Cap the modeled disadvantage at a 5-on-3 (never worse
             # in real hockey -- a 3rd simultaneous minor is served consecutively, not
@@ -260,20 +293,28 @@ class StrengthStateMachine:
         changes introduced, but exposed more often once this step's injury-aware backfill
         started producing more frequent size-mismatch scenarios generally). Fixed at the source:
         4v4 now correctly asks for 4 skaters per side, matching the state's own name.
+
+        3-on-3 OT extension (DEVPLAN.md Step 2.6): when ``self.base_state == STRENGTH_3V3``, a
+        penalty subtracts from the 3-skater OT baseline instead of the regulation 5-skater one
+        (a 3-on-3 OT minor plays out 3-on-2, not 4-on-3) -- real NHL OT penalty shape. The
+        double-minor/5v3-equivalent floor is capped at 1 skater (never lower -- a real referee
+        would not reduce a team below what's needed to field a goalie-plus-one, and this
+        codebase's "don't over-engineer exotic edge cases" framing applies here too).
         """
         state = self.state_for(tid)
+        base_skaters = 3 if self.base_state == config.STRENGTH_3V3 else 5
         if state == config.STRENGTH_PP:
-            return config.PP_UNIT_SIZE
+            return base_skaters
         if state == config.STRENGTH_PK:
-            return config.PK_UNIT_SIZE
+            return max(1, base_skaters - 1)
         if state == config.STRENGTH_5V3:
-            # 5v3: the team taking two minors drops to 3, per config.PK_UNIT_SIZE_5V3.
+            # A double disadvantage: two skaters down from the base count.
             if self.active_penalty_count(tid) >= 2:
-                return config.PK_UNIT_SIZE_5V3
-            return config.PP_UNIT_SIZE
+                return max(1, base_skaters - 2)
+            return base_skaters
         if state == config.STRENGTH_4V4:
             return 4   # offsetting penalties both ways -- 4 skaters per side, not 5.
-        return 5   # 5v5 -- 5 skaters per side.
+        return base_skaters   # neutral strength -- base_state's own skater count.
 
     def penalized_player_ids(self, tid: int) -> List[int]:
         """Player ids currently serving time in the box for ``tid`` (any penalty type,

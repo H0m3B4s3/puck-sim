@@ -18,6 +18,21 @@ standings math is rule-parameterized (Step 1.8 / config.STANDINGS_RULES). ``conf
 holds the three presets as data; ``World.standings_rule`` is the *per-save* selection of
 which preset is active, consumed by ``league.standings()``/``points_for_game()``.
 
+Playoff officiating/discipline mode (DEVPLAN.md Step 2.6): same per-save-selectable-string
+pattern as ``standings_rule`` immediately above -- ``World.playoff_discipline_mode`` (legal
+values ``config.PLAYOFF_DISCIPLINE_MODE_CHOICES``, default ``config.
+DEFAULT_PLAYOFF_DISCIPLINE_MODE``) is consumed by ``sim/engine.py``'s penalty-probability call
+sites to decide whether a playoff game's ``playoff_multiplier`` is scaled down ("realistic") or
+left at a no-op ``1.0`` ("regular_season"). Round-trips through ``to_dict``/``from_dict`` exactly
+like ``standings_rule``.
+
+Playoff bracket (DEVPLAN.md Step 2.6): ``World.bracket`` is a JSON-native ``dict`` (or ``None``
+before/after the playoffs) holding the current best-of-7 bracket state -- mirrors HoopR's own
+``world.bracket`` pattern (``hoopsim/sim/playoffs.py``) exactly, including WHY it's a plain dict
+rather than a dataclass: series/round-advancement bookkeeping is naturally tree-shaped and
+JSON-native already, so a dict round-trips through ``to_dict``/``from_dict`` with zero extra
+serialization code, and ``sim/playoffs.py`` is the sole owner of its internal shape.
+
 Multi-league hook fields (DESIGN.md point 11 / "What carries over directly from HoopR" /
 "Multi-league expansion" section): ``mode``, ``other_teams``, ``recruits``, and
 ``pipeline`` are dormant in v1 (NHL-only) -- they exist now, empty and unused, purely so
@@ -39,7 +54,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from pucksim.config import DEFAULT_STANDINGS_RULE, SALARY_CAP_BASE, SCHEMA_VERSION
+from pucksim.config import (
+    DEFAULT_PLAYOFF_DISCIPLINE_MODE,
+    DEFAULT_STANDINGS_RULE,
+    SALARY_CAP_BASE,
+    SCHEMA_VERSION,
+)
 from pucksim.models.draft import DraftClass
 from pucksim.models.league import Game, Phase
 from pucksim.models.player import Player
@@ -66,6 +86,14 @@ class World:
     # Per-save standings-rule selection (Step 1.8's three presets live in
     # config.STANDINGS_RULES; this is just the active key).
     standings_rule: str = DEFAULT_STANDINGS_RULE
+
+    # Per-save playoff officiating/discipline mode selection (DEVPLAN.md Step 2.6 -- see this
+    # module's docstring). Legal values: config.PLAYOFF_DISCIPLINE_MODE_CHOICES.
+    playoff_discipline_mode: str = DEFAULT_PLAYOFF_DISCIPLINE_MODE
+
+    # Current playoff bracket state, or None outside the playoffs (DEVPLAN.md Step 2.6 -- see
+    # this module's docstring / sim/playoffs.py, which owns the dict's internal shape).
+    bracket: Optional[dict] = None
 
     # v1 simplified cap model (DESIGN.md): single flat number, no apron/tax tiers.
     # Default now sourced from config.SALARY_CAP_BASE (DEVPLAN.md Step 2.4 moved this
@@ -196,6 +224,8 @@ class World:
             "draft_class": self.draft_class.to_dict() if self.draft_class else None,
             "user_team_id": self.user_team_id,
             "standings_rule": self.standings_rule,
+            "playoff_discipline_mode": self.playoff_discipline_mode,
+            "bracket": self.bracket,
             "salary_cap": self.salary_cap,
             "mode": self.mode,
             "other_teams": {str(t): team.to_dict() for t, team in self.other_teams.items()},
@@ -220,6 +250,10 @@ class World:
         world.draft_class = DraftClass.from_dict(dc) if dc else None
         world.user_team_id = d.get("user_team_id")
         world.standings_rule = d.get("standings_rule", DEFAULT_STANDINGS_RULE)
+        world.playoff_discipline_mode = d.get(
+            "playoff_discipline_mode", DEFAULT_PLAYOFF_DISCIPLINE_MODE
+        )
+        world.bracket = d.get("bracket")
         world.salary_cap = d.get("salary_cap", SALARY_CAP_BASE)
         world.mode = d.get("mode", "nhl")
         world.other_teams = {

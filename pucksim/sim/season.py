@@ -47,56 +47,56 @@ This is deliberately simple (DEVPLAN.md: "keep this reasonably simple, it doesn'
 real NHL's divisional-weighted scheduling, v2+ defers that fidelity") -- it does not attempt
 divisional/conference weighting, back-to-back avoidance, or travel modeling.
 
-Tie-reconciliation (the core design decision of this step):
--------------------------------------------------------------
-The MVP engine (Step 1.12) has a provisional OT placeholder: a game tied after regulation plays
-one extra simplified sudden-death period; if STILL tied, the game comes back from
-``simulate_game()`` as an **unresolved tie** (``GameResult.winner is None``, ``went_ot=True``,
-``went_so=False`` always -- real 3-on-3/shootout resolution is Step 2.6, not built yet).
+Tie-reconciliation (DEVPLAN.md Step 2.6 replaced this step's original design):
+-------------------------------------------------------------------------------
+The MVP engine (Step 1.12) had a provisional OT placeholder that could leave a game as an
+**unresolved tie** (``GameResult.winner is None``); this module used to paper over that with a
+"MVP-era placeholder tiebreak" (a skill-weighted coin flip, ``_placeholder_tiebreak_winner``,
+manufacturing a decisive winner + bumping the score by one goal whenever a ``has_shootout=True``
+rule saw an unresolved tie come back from the engine).
 
-Separately, standings math (Step 1.8) is rule-parameterized. Under ``"retro"`` a tie is a fully
-legal outcome (``points_for_game()`` awards ``rule["tie"]`` to both teams). Under ``"standard"``/
-``"three_two_one_zero"`` (``config.STANDINGS_RULES[rule]["has_shootout"] is True``) there is NO
-tie point value -- ``points_for_game()`` raises ``ValueError`` if ever called on a tied ``Game``
-under those rules, because a real shootout guarantees a decisive winner in real hockey.
+DEVPLAN.md Step 2.6 replaced the engine's OT placeholder with REAL resolution
+(``sim/engine.py``'s ``GameSim.coach_session``/``_resolve_shootout``): regular season now plays
+3-on-3 sudden death, then (under a ``has_shootout=True`` standings rule) a real separate
+shootout-simulation model; under "retro" an undecided 3-on-3 period stands as a legitimate tie.
+Playoffs play full 5-on-5 sudden death instead, repeated until decided, never a shootout. The
+practical consequence: the engine itself now ALWAYS returns a decisive ``winner`` for a
+``has_shootout=True`` game (``result.winner is not None``) -- there is no longer anything for a
+season-level placeholder to reconcile on that path, so ``_placeholder_tiebreak_winner`` and its
+call site were REMOVED here (not left disabled/unused -- DEVPLAN.md's explicit instruction: don't
+leave two competing tie-resolution mechanisms coexisting once the engine makes the season-level
+one obsolete).
 
-``_apply_result()`` reconciles this every time, BEFORE recording the ``Game``, based on
-``world.standings_rule``:
+``_apply_result()``'s remaining job on this front is much simpler than before: standings math
+(Step 1.8) is still rule-parameterized (``"retro"`` legally allows a tie via ``rule["tie"]``;
+``"standard"``/``"three_two_one_zero"`` have no tie point value and raise via
+``points_for_game()`` if ever handed one), but since the engine no longer PRODUCES an unresolved
+tie under a ``has_shootout=True`` rule, this function simply records whatever the engine already
+decided (score, ``went_ot``, ``went_so``) with no massaging.
 
-  - ``"retro"``: an unresolved tie is legitimate. Record the game with ``played=True``, scores and
-    ``went_ot`` exactly as the engine returned them (``went_ot=True`` -- the OT placeholder period
-    was played and didn't produce a goal), and ``went_so=False``. ``league.py``'s ``Game.is_tie``
-    correctly reads this as a tie (it only requires level scores and no shootout, NOT "no OT" --
-    DESIGN.md point 8 confirms regular-season OT is played regardless of standings rule; "retro"
-    just skips the shootout that would otherwise follow an undecided OT), so standings math
-    handles it correctly via ``rule["tie"]`` with no massaging needed here.
-    (2026-07-01 note: an earlier revision of this function forced ``went_ot=False`` here to work
-    around a since-fixed bug in ``league.py``'s ``is_tie`` -- see that file's docstring. No longer
-    needed.)
-  - ``"standard"`` / ``"three_two_one_zero"`` (``has_shootout=True``) AND the engine returned an
-    unresolved tie (``result.winner is None``): a decisive winner is manufactured via a clearly
-    provisional placeholder tiebreak -- **NOT real shootout simulation** (that's Step 2.6). The
-    approach chosen: a light skill-based coin flip, weighted by each team's average roster
-    ``overall`` (a team with a stronger roster is proportionally more likely to win the "shootout"
-    placeholder, rather than a flat 50/50, which would ignore team strength entirely for a
-    decision that in real hockey does correlate somewhat with shooter/goalie talent). The recorded
-    score is then bumped by exactly 1 goal for the placeholder-selected winner (e.g. a 3-3 tie
-    becomes a 4-3 win) -- this keeps ``Game.winner``/``Game.loser`` derivable the normal way
-    (``home_score > away_score``) without needing a separate "decisive winner" side-channel field
-    on ``Game``, and reads naturally as a shootout-decided final score. ``went_ot`` is preserved as
-    returned by the engine (True, since regulation + the OT placeholder period were both played);
-    ``went_so`` is deliberately set True here (unlike the raw engine result, which always reports
-    ``went_so=False`` since it has no real shootout) -- this module is the place a decisive
-    "extra" goal beyond regulation+OT was manufactured, so it is exactly analogous to a real
-    shootout-winning goal for standings/box-score purposes, and ``went_so=True`` is what
-    ``points_for_game()`` needs to select the ``so_win``/``so_loss`` column correctly. Every player
-    stat line is accumulated from the engine's actual box score (unmodified) -- the placeholder
-    only adjusts the final recorded score/outcome flags, never invents a phantom goal-scorer stat
-    line.
+Defensive fallback, not a second competing mechanism (read this before assuming a gap): it is
+*theoretically* possible for ``_apply_result()`` to be called directly (as several tests in
+``tests/test_season.py`` do, by hand-constructing a ``GameResult`` with ``winner=None``) or for a
+future bug to somehow produce an unresolved tie under a ``has_shootout=True`` rule despite the
+engine's own invariant. Rather than silently mis-record such a game (which would corrupt
+``points_for_game()``'s assumptions and crash standings()), ``_apply_result()`` still raises a
+loud ``AssertionError`` if it ever sees ``result.winner is None`` under a ``has_shootout=True``
+rule -- a defensive integrity check, not a resurrected tiebreak mechanism (it manufactures
+nothing; it just refuses to silently record an illegal game state). Under normal operation
+(any game that actually went through ``sim/engine.py``'s real OT/shootout resolution) this
+assertion can never fire.
 
 Invariant this guarantees: every played ``Game`` under a ``has_shootout=True`` rule always has a
-decisive ``winner`` by the time ``points_for_game()``/``standings()`` are called on it, so a full
-82-game/32-team season never raises mid-run regardless of the active standings rule.
+decisive ``winner`` by the time ``points_for_game()``/``standings()`` are called on it (now
+guaranteed by the ENGINE, not by this module), so a full 82-game/32-team season never raises
+mid-run regardless of the active standings rule.
+
+Playoff games (DEVPLAN.md Step 2.6): ``_apply_result()`` takes an ``is_playoff`` flag (default
+``False``, a strict additive extension for every existing regular-season call site). A playoff
+game's stat lines accumulate into ``Player.playoffs`` instead of ``Player.season`` (mirrors
+HoopR's own season-vs-playoffs stat-line split) and never touches ``Team``'s regular-season
+win/loss/ot_loss counters or standings-relevant bookkeeping -- series win/loss is tracked
+separately by ``sim/playoffs.py``'s bracket state, not ``Team.record_result()``.
 """
 from __future__ import annotations
 
@@ -106,7 +106,6 @@ from pucksim import config
 from pucksim.models.league import Game, Phase
 from pucksim.models.player import Injury
 from pucksim.models.stats import GoalieStatLine, SkaterStatLine
-from pucksim.models.team import Team
 from pucksim.models.world import World
 from pucksim.sim.boxscore import GameResult
 from pucksim.sim.engine import simulate_game
@@ -233,80 +232,59 @@ def generate_schedule(world: World, rng=None, target_games: int = config.SEASON_
 
 
 # ---------------------------------------------------------------------------
-# Result application -- includes the tie-reconciliation described in the
-# module docstring above.
+# Result application (DEVPLAN.md Step 2.6 removed the MVP-era placeholder tiebreak that used to
+# live here -- see module docstring's "Tie-reconciliation" section for the full history/why).
 # ---------------------------------------------------------------------------
-def _average_overall(team: Team, world: World) -> float:
-    """Average ``overall`` across a team's roster -- used only by the provisional placeholder
-    tiebreak below. Falls back to a neutral 50.0 if the roster is somehow empty (shouldn't happen
-    post-leaguegen, but this must never crash a season run)."""
-    ratings = [world.player(pid).overall for pid in team.roster if pid in world.players]
-    return sum(ratings) / len(ratings) if ratings else 50.0
-
-
-def _placeholder_tiebreak_winner(world: World, game: Game) -> int:
-    """Provisional MVP-only tiebreak for an unresolved tie under a ``has_shootout=True`` rule.
-
-    NOT real shootout simulation (Step 2.6 owns that). A light skill-based coin flip: each team's
-    win probability is nudged away from 50/50 by the gap between the two teams' average roster
-    ``overall``, using the same small-gap-to-probability-nudge shape the engine itself uses
-    elsewhere (a modest multiplier keeps this from ever becoming near-deterministic purely off
-    overall gap, since a real shootout is still mostly chance). Returns the winning team id.
-    """
-    home_ovr = _average_overall(world.team(game.home), world)
-    away_ovr = _average_overall(world.team(game.away), world)
-    gap = home_ovr - away_ovr
-    home_win_p = max(0.30, min(0.70, 0.5 + gap * 0.01))
-    return game.home if world.rng.chance(home_win_p) else game.away
-
-
-def _apply_result(world: World, game: Game, result: GameResult) -> None:
+def _apply_result(world: World, game: Game, result: GameResult, *, is_playoff: bool = False) -> None:
     """Apply a played game's ``GameResult`` to ``game``, both teams' records, and every involved
-    player's season stat line. Performs the has_shootout tie-reconciliation described in this
-    module's docstring before recording anything, so the recorded ``Game`` always satisfies
-    ``points_for_game()``'s requirements for the active ``world.standings_rule``.
+    player's stat line. Records exactly what the engine decided (score, ``went_ot``, ``went_so``)
+    -- Step 2.6 made the engine itself always resolve a ``has_shootout=True`` game decisively
+    (real 3-on-3 OT -> real shootout simulation, see ``sim/engine.py``), so there is no longer
+    anything for this function to manufacture; see the module docstring's "defensive fallback"
+    paragraph for why an ``AssertionError`` guard remains here instead of silent trust.
+
+    ``is_playoff`` (DEVPLAN.md Step 2.6, default ``False`` -- additive for every existing
+    regular-season call site): routes player stat-line accumulation into ``Player.playoffs``
+    instead of ``Player.season``, and skips ``Team.record_result()`` entirely (playoff series
+    win/loss is tracked by ``sim/playoffs.py``'s bracket state, not the regular-season
+    win/loss/ot_loss counters -- crediting a playoff result into those would corrupt regular-
+    season standings/record-reconciliation invariants elsewhere in this codebase).
     """
     rule_table = config.STANDINGS_RULES[world.standings_rule]
     unresolved_tie = result.winner is None
 
-    home_score = result.home_score
-    away_score = result.away_score
-    went_ot = result.went_ot
-    went_so = result.went_so   # always False coming out of the MVP engine
-
     if unresolved_tie and rule_table["has_shootout"]:
-        # This rule set cannot legally represent a tie -- manufacture a decisive winner via the
-        # provisional placeholder tiebreak (see module docstring). Bump the recorded score by
-        # exactly one goal for the selected winner so Game.winner/loser derive normally from
-        # home_score/away_score, and flag went_so=True since this is standing in for a real
-        # shootout-winning goal.
-        winner_tid = _placeholder_tiebreak_winner(world, game)
-        if winner_tid == game.home:
-            home_score += 1
-        else:
-            away_score += 1
-        went_so = True
-    # elif unresolved_tie (a legitimate "retro" tie): went_ot is preserved exactly as the engine
-    # returned it (True -- the OT placeholder period was played and didn't produce a goal).
-    # Corrected 2026-07-01: an earlier revision of this function forced went_ot=False here to
-    # work around what turned out to be a bug in league.py's `Game.is_tie` (which incorrectly
-    # required `not went_ot`); that property has since been fixed at the source -- see
-    # league.py's docstring -- so no override is needed here. DESIGN.md point 8 confirms regular-
-    # season OT is played regardless of standings rule; "retro" just skips the shootout that
-    # would otherwise follow an undecided OT, so went_ot=True is the factually correct record
-    # for a drawn retro game, not a wrinkle to paper over.
-    # else: already a decisive result -- nothing to reconcile.
+        # See module docstring's "defensive fallback, not a second competing mechanism"
+        # paragraph -- this should be unreachable for any game that actually went through
+        # sim/engine.py's real OT/shootout resolution. Raising loudly here (rather than silently
+        # manufacturing a winner, which is exactly the now-removed placeholder's job) surfaces a
+        # real bug immediately instead of letting a malformed Game reach points_for_game(), which
+        # would raise its own less-informative ValueError deeper in standings math.
+        raise AssertionError(
+            f"_apply_result got an unresolved tie (gid={game.gid}) under a has_shootout=True "
+            f"rule ({world.standings_rule!r}) -- sim/engine.py's real OT/shootout resolution "
+            "should never produce this; this is a defensive integrity check, not a resurrected "
+            "tiebreak mechanism (see season.py's module docstring)."
+        )
+    # else: either a decisive result, or a legitimate "retro" tie (went_ot preserved exactly as
+    # the engine returned it -- see league.py's Game.is_tie docstring for why went_ot=True is the
+    # factually correct record for a drawn retro game, not a wrinkle to paper over).
 
-    game.home_score = home_score
-    game.away_score = away_score
+    game.home_score = result.home_score
+    game.away_score = result.away_score
     game.played = True
-    game.went_ot = went_ot
-    game.went_so = went_so
+    game.is_playoff = is_playoff
+    game.went_ot = result.went_ot
+    game.went_so = result.went_so
 
     home_team = world.team(game.home)
     away_team = world.team(game.away)
 
-    if game.is_tie:
+    if is_playoff:
+        # Playoff series win/loss bookkeeping belongs to sim/playoffs.py's bracket state, not
+        # Team's regular-season record counters -- see this function's docstring.
+        pass
+    elif game.is_tie:
         # NOTE: a legitimate retro tie is neither a win, loss, nor OT-loss under Team's simplified
         # 3-bucket record model (see team.py -- there is no "tie" bucket). Rather than misrecord a
         # tie as a loss for both teams (which would corrupt win/loss reconciliation tests), skip
@@ -317,22 +295,33 @@ def _apply_result(world: World, game: Game, result: GameResult) -> None:
         pass
     else:
         home_won = game.home_score > game.away_score
+        went_ot, went_so = result.went_ot, result.went_so
         if home_won:
-            home_team.record_result("win", home_score, away_score)
-            away_team.record_result("ot_loss" if went_ot or went_so else "loss", away_score, home_score)
+            home_team.record_result("win", game.home_score, game.away_score)
+            away_team.record_result("ot_loss" if went_ot or went_so else "loss",
+                                    game.away_score, game.home_score)
         else:
-            away_team.record_result("win", away_score, home_score)
-            home_team.record_result("ot_loss" if went_ot or went_so else "loss", home_score, away_score)
+            away_team.record_result("win", game.away_score, game.home_score)
+            home_team.record_result("ot_loss" if went_ot or went_so else "loss",
+                                    game.home_score, game.away_score)
 
-    # Accumulate every player's game stat line into their season-long StatLine.
+    # Accumulate every player's game stat line into their season-long or playoffs StatLine
+    # (DEVPLAN.md Step 2.6: is_playoff routes into Player.playoffs instead of Player.season,
+    # mirroring HoopR's own season-vs-playoffs stat-line split).
     for pid, line in result.skater_box.items():
         player = world.players.get(pid)
-        if player is not None and isinstance(player.season, SkaterStatLine):
-            player.season.add(line)
+        if player is None:
+            continue
+        target = player.playoffs if is_playoff else player.season
+        if isinstance(target, SkaterStatLine):
+            target.add(line)
     for pid, line in result.goalie_box.items():
         player = world.players.get(pid)
-        if player is not None and isinstance(player.season, GoalieStatLine):
-            player.season.add(line)
+        if player is None:
+            continue
+        target = player.playoffs if is_playoff else player.season
+        if isinstance(target, GoalieStatLine):
+            target.add(line)
 
     # Apply in-game injuries (DEVPLAN.md Step 2.3) -- only UPGRADE an existing injury, never
     # shorten one, mirroring HoopR's own "games > player.injury.games_remaining" comparison: a
@@ -363,7 +352,7 @@ def _choose_and_record_starter(world: World, tid: int, rest_state: GoalieRestSta
     return starter_pid
 
 
-def sim_one(world: World, game: Game) -> GameResult:
+def sim_one(world: World, game: Game, *, is_playoff: bool = False) -> GameResult:
     """Simulate and apply a single scheduled game.
 
     Consumes ``sim/goalies.py``'s rest-based rotation (DEVPLAN.md Step 2.2): before
@@ -372,14 +361,21 @@ def sim_one(world: World, game: Game) -> GameResult:
     process-local ``GoalieRestState`` tracker (see ``_rest_state_for``), and passes that choice
     into ``simulate_game`` as an explicit override rather than letting ``GameSim`` silently fall
     back to ``Team.goalie_starter`` every time.
+
+    ``is_playoff`` (DEVPLAN.md Step 2.6, default ``False``): passes through to ``simulate_game``
+    (real 5-on-5 sudden-death OT + the playoff officiating/discipline mode's penalty multiplier)
+    and ``_apply_result`` (playoff stat-line/record routing -- see that function's docstring).
+    ``sim/playoffs.py`` is the caller that passes ``is_playoff=True``; every regular-season call
+    site (``advance_one_day`` below) is unaffected by this addition.
     """
     rest_state = _rest_state_for(world)
     home_goalie_id = _choose_and_record_starter(world, game.home, rest_state, game.day)
     away_goalie_id = _choose_and_record_starter(world, game.away, rest_state, game.day)
 
     result = simulate_game(world, game.home, game.away,
-                           home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id)
-    _apply_result(world, game, result)
+                           home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id,
+                           is_playoff=is_playoff)
+    _apply_result(world, game, result, is_playoff=is_playoff)
     return result
 
 

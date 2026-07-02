@@ -58,6 +58,38 @@ OT_MINUTES_PLAYOFFS = PERIOD_MINUTES
 OT_SECONDS_PLAYOFFS = OT_MINUTES_PLAYOFFS * 60
 OT_STRENGTH_PLAYOFFS = "5v5"
 
+# A sane cap on how many extra playoff sudden-death periods a single game can play before this
+# codebase gives up and forces a decision -- real NHL playoff games have gone to a 5th+ OT before
+# (the 2020 Stars/Blue Jackets 5-OT game), so this is generous, not a realistic ceiling; it exists
+# purely as a defensive guard against a pathological RNG stream producing an effectively-infinite
+# game in a headless sim loop (a real broadcast just keeps playing; a script needs a stop
+# condition). PROVISIONAL -- picked to comfortably exceed any realistic simulated outcome.
+MAX_PLAYOFF_OT_PERIODS = 12
+
+# ---------------------------------------------------------------------------
+# Shootout resolution (DEVPLAN.md Step 2.6). A SEPARATE skills-competition resolution model
+# (DESIGN.md point 8), not a continuation of normal shift/event simulation -- see
+# sim/engine.py's ``_resolve_shootout``. Only reachable for "standard"/"three_two_one_zero"
+# regular-season games still level after 3-on-3 OT; playoffs never shoot out (sudden-death 5v5
+# continues instead -- see OT_STRENGTH_PLAYOFFS above).
+# ---------------------------------------------------------------------------
+SHOOTOUT_ROUNDS = 3          # each team gets 3 attempts in the standard round unless already
+                              # mathematically decided, then sudden-death alternating attempts.
+SHOOTOUT_MAX_SUDDEN_DEATH_ROUNDS = 20   # defensive cap on alternating sudden-death rounds (real
+                                        # NHL shootouts have gone 20+ rounds; this is a stop
+                                        # condition for a headless sim loop, not a realistic
+                                        # ceiling -- see MAX_PLAYOFF_OT_PERIODS's identical framing)
+
+# Baseline probability an average (rating-70) shooter beats an average (rating-70) goalie on a
+# single shootout attempt, before any rating-gap adjustment. PROVISIONAL/TUNABLE -- real NHL
+# shootout conversion rates run in the low-to-mid 30% range league-wide; this is a plausible
+# starting anchor, not fit to real data (none is being fit anywhere else in this codebase either).
+SHOOTOUT_BASE_SCORE_PROB = 0.33
+# How much a shooter-vs-goalie rating gap moves the score probability away from the baseline,
+# per rating point of gap. Small and symmetric (same shape as every other rating-gap-to-
+# probability slope in this codebase, e.g. special_teams.py's discipline slope).
+SHOOTOUT_RATING_GAP_SLOPE = 0.004
+
 # Target average shift length for line-change pacing; fatigue/recovery modeling
 # is built around this, not clock minutes like a basketball rotation.
 SHIFT_SECONDS_TARGET = 45
@@ -195,6 +227,34 @@ PENALTY_TYPE_WEIGHTS = {
 PP_UNIT_SIZE = 5
 PK_UNIT_SIZE = 4
 PK_UNIT_SIZE_5V3 = 3
+
+# ---------------------------------------------------------------------------
+# Playoff officiating/discipline mode (DEVPLAN.md Step 2.6 design note, 2026-07-02)
+# ---------------------------------------------------------------------------
+# A genuine user-selectable per-save option (mirrors World.standings_rule's own pattern), NOT a
+# hardcoded behavior change -- see World.playoff_discipline_mode. Real NHL playoff hockey is
+# genuinely officiated/played differently than the regular season (refs "let them play," far
+# fewer penalties called); this codebase has no fighting mechanic to suppress (DESIGN.md's
+# explicit scope exclusion -- see attributes.py's "Enforcer-Physical" archetype comment), so the
+# ONLY mechanical effect of this mode is a multiplicative scaling factor on the existing penalty-
+# probability chain (special_teams.penalty_probability_for_shift's new playoff_multiplier param).
+#
+#   "realistic"      -- (recommended default) playoff games draw meaningfully fewer penalties
+#                        than an equivalent regular-season game.
+#   "regular_season"  -- playoff games use identical penalty rates to the regular season --
+#                        explicitly an equally-legitimate "less realistic but fun" choice, not a
+#                        deprecated/lesser option (per the design note).
+PLAYOFF_DISCIPLINE_MODE_CHOICES = ("realistic", "regular_season")
+DEFAULT_PLAYOFF_DISCIPLINE_MODE = "realistic"
+
+# How much "realistic" mode scales the base per-shift penalty probability during a playoff game
+# (a straight multiplier on top of the existing discipline/risk-tolerance/forecheck chain --
+# see special_teams.penalty_probability_for_shift). PROVISIONAL/TUNABLE magnitude: no real-NHL
+# playoff-vs-regular-season penalty-rate data is being fit here, just a plausible "refs call it
+# tighter" effect size, same framing as every other first-pass constant in this codebase. 0.65
+# means playoff games draw roughly 2/3 as many penalties as an identical regular-season shift
+# under "realistic" mode; "regular_season" mode always passes 1.0 (a no-op) instead.
+PLAYOFF_REALISTIC_PENALTY_MULTIPLIER = 0.65
 
 # ---------------------------------------------------------------------------
 # Ratings

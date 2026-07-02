@@ -1,13 +1,18 @@
-"""Tests for pucksim.sim.season -- Step 1.13 done-criteria.
+"""Tests for pucksim.sim.season -- Step 1.13 done-criteria (tie-reconciliation section rewritten
+by DEVPLAN.md Step 2.6 -- see season.py's module docstring for the full history).
 
 Uses ``pucksim.gen.leaguegen.build_world(seed=...)`` for realistic populated Worlds (same pattern
 as test_engine.py), then drives ``start_season()``/``advance_one_day()`` to simulate full or
 partial seasons, checking schedule balance, win-total reconciliation, standings-math correctness
-across all 3 rules, and -- the key regression test for this step -- that the tie-reconciliation
-logic in ``_apply_result()`` produces a legal ``Game`` under every standings rule even when the
-engine returns an unresolved tie.
+across all 3 rules, and -- the key regression coverage for this step, now reflecting Step 2.6's
+real OT/shootout resolution -- that every game under a has_shootout=True rule comes back decisive
+straight from ``sim/engine.py`` (no season-level placeholder involved, since Step 2.6 removed
+it), "retro" can still legitimately end level, and ``_apply_result()`` defensively raises rather
+than silently mis-recording if it's ever handed an unresolved tie under a has_shootout=True rule.
 """
 from __future__ import annotations
+
+import itertools
 
 import pytest
 
@@ -201,8 +206,10 @@ def _make_tied_result(world) -> tuple:
     return home_tid, away_tid, result
 
 
-@pytest.mark.parametrize("rule", ALL_RULES)
-def test_tie_reconciliation_produces_legal_game_for_every_rule(rule):
+@pytest.mark.parametrize("rule", ["retro"])
+def test_tie_reconciliation_produces_legal_game_for_retro(rule):
+    """DEVPLAN.md Step 2.6: only "retro" can legally represent an unresolved-tie GameResult
+    anymore -- see the AssertionError-guard test just below for the has_shootout=True case."""
     from pucksim.models.league import Game
 
     world = build_world(seed=20)
@@ -213,84 +220,88 @@ def test_tie_reconciliation_produces_legal_game_for_every_rule(rule):
     _apply_result(world, game, result)
 
     assert game.played is True
+    assert game.is_tie is True
+    assert game.winner is None
 
-    if rule == "retro":
-        assert game.is_tie is True
-        assert game.winner is None
-    else:
-        assert config.STANDINGS_RULES[rule]["has_shootout"] is True
-        assert game.is_tie is False
-        assert game.winner is not None
-        assert game.went_so is True
-
-    # standings() must not raise regardless of rule.
+    # standings() must not raise.
     ordered = standings(list(world.teams.values()), [game], rule)
     assert len(ordered) == len(world.teams)
 
 
 @pytest.mark.parametrize("rule", ["standard", "three_two_one_zero"])
-def test_tie_reconciliation_via_sim_one_finds_a_real_unresolved_tie(rule):
-    """Search across seeds for a game that the real engine resolves as an unresolved tie (per
-    DEVPLAN.md: "engineer or find (via enough seeds) at least one game that comes back from the
-    engine as an unresolved tie"), then run it through sim_one() and assert a decisive winner
-    comes out under a has_shootout=True rule."""
+def test_apply_result_raises_on_unresolved_tie_under_has_shootout_rule(rule):
+    """DEVPLAN.md Step 2.6 removed the MVP-era placeholder tiebreak that used to manufacture a
+    decisive winner here (season.py's module docstring: "Tie-reconciliation" section) -- the real
+    engine now always resolves a has_shootout=True game decisively on its own (3-on-3 OT -> real
+    shootout simulation), so _apply_result() no longer has anything to reconcile on this path.
+    What remains is a defensive integrity check: an unresolved tie handed to _apply_result()
+    under a has_shootout=True rule (which should never happen via the real engine -- only
+    reachable here via a hand-constructed GameResult, exactly as this test does) must raise
+    loudly rather than silently mis-recording an illegal Game."""
     from pucksim.models.league import Game
-    from pucksim.sim.engine import simulate_game
 
-    found = False
-    for seed in range(1, 60):
-        world = build_world(seed=seed)
-        world.standings_rule = rule
-        tids = sorted(world.teams.keys())
-        home_tid, away_tid = tids[0], tids[1]
+    world = build_world(seed=20)
+    world.standings_rule = rule
+    home_tid, away_tid, result = _make_tied_result(world)
+    game = Game(gid=world.new_gid(), day=0, home=home_tid, away=away_tid)
 
-        # Peek at a raw engine result first without mutating any Game bookkeeping.
-        probe_world = build_world(seed=seed)
-        probe_result = simulate_game(probe_world, home_tid, away_tid)
-        if probe_result.winner is not None:
-            continue
+    with pytest.raises(AssertionError):
+        _apply_result(world, game, result)
 
-        # Found an unresolved tie for this seed/matchup -- replay identically via sim_one() so the
-        # tie-reconciliation path in _apply_result() actually runs against a real engine result.
+
+@pytest.mark.parametrize("rule", ["standard", "three_two_one_zero"])
+def test_sim_one_never_produces_an_unresolved_tie_under_has_shootout_rule(rule):
+    """DEVPLAN.md Step 2.6's core invariant, exercised end-to-end via sim_one(): the real engine's
+    3-on-3-OT -> shootout resolution means every played game under a has_shootout=True rule comes
+    back decisive, straight from the engine, with no season-level placeholder involved. Swept
+    across enough seeds/matchups that this would fail loudly (via the AssertionError guard in
+    _apply_result, see the test above) if the engine ever regressed to producing an unresolved
+    tie under this rule."""
+    from pucksim.models.league import Game
+
+    world = build_world(seed=1)
+    world.standings_rule = rule
+    tids = sorted(world.teams.keys())
+
+    checked = 0
+    for home_tid, away_tid in itertools.islice(itertools.combinations(tids, 2), 12):
         game = Game(gid=world.new_gid(), day=0, home=home_tid, away=away_tid)
-        sim_one(world, game)
+        sim_one(world, game)   # would raise AssertionError if this ever came back undecided
         assert game.played is True
         assert game.is_tie is False
         assert game.winner is not None
-        assert game.went_so is True
         standings(list(world.teams.values()), [game], rule)
-        found = True
-        break
+        checked += 1
 
-    assert found, "expected at least one unresolved tie across 60 seeds"
+    assert checked == 12
 
 
-def test_tie_reconciliation_via_sim_one_retro_keeps_legitimate_tie():
+def test_sim_one_retro_can_still_produce_a_legitimate_tie():
+    """Under "retro" (no shootout), a game can still legitimately end level after 3-on-3 OT --
+    search across seeds/matchups for at least one (real 3-on-3 OT converts at a meaningfully
+    higher rate than the old MVP placeholder period did, so this needs a somewhat wider seed
+    sweep than the pre-Step-2.6 version of this test used to reliably find one)."""
     from pucksim.models.league import Game
-    from pucksim.sim.engine import simulate_game
 
     found = False
-    for seed in range(1, 60):
+    for seed in range(1, 120):
         world = build_world(seed=seed)
         world.standings_rule = "retro"
         tids = sorted(world.teams.keys())
         home_tid, away_tid = tids[0], tids[1]
 
-        probe_world = build_world(seed=seed)
-        probe_result = simulate_game(probe_world, home_tid, away_tid)
-        if probe_result.winner is not None:
-            continue
-
         game = Game(gid=world.new_gid(), day=0, home=home_tid, away=away_tid)
         sim_one(world, game)
+        if not game.is_tie:
+            continue
+
         assert game.played is True
-        assert game.is_tie is True
         assert game.winner is None
         standings(list(world.teams.values()), [game], "retro")
         found = True
         break
 
-    assert found, "expected at least one unresolved tie across 60 seeds"
+    assert found, "expected at least one legitimate retro tie across 120 seeds"
 
 
 # ---------------------------------------------------------------------------

@@ -245,6 +245,17 @@ def _weighted_index(rng, weights: List[float]) -> int:
     return rng.choices(range(len(weights)), weights=weights, k=1)[0]
 
 
+def _shootout_shooter_score(player: Player) -> float:
+    """Shooter-selection composite for shootout ordering (DEVPLAN.md Step 2.6): favors
+    shot_accuracy/puck_handling/offensive_awareness, the same blend ``_resolve_shot_attempt``'s
+    ``shot_skill`` uses for a normal shot attempt (kept identical so shootout shooter ranking is
+    consistent with who's actually good at scoring in this engine's own model, not a bespoke
+    separate "shootout skill" this codebase doesn't otherwise track)."""
+    r = player.ratings
+    return (0.5 * r.get("shot_accuracy", 25) + 0.3 * r.get("puck_handling", 25)
+            + 0.2 * r.get("offensive_awareness", 25))
+
+
 def _winger_iq_score(player: Player) -> float:
     """Winger secondary-faceoff-tiebreak composite (DEVPLAN.md Step 2.3's design note): puck
     handling + an offensive/defensive-awareness blend, this codebase's closest existing proxy
@@ -519,15 +530,26 @@ class GameSim:
     ``choose_starting_goalie``) that the BACKUP should start this particular game passes that
     pid here instead. Defaults to ``None`` (falls back to ``team.goalie_starter``, i.e. identical
     behavior to before this step for any caller that doesn't opt in).
+
+    ``is_playoff`` (DEVPLAN.md Step 2.6): selects real OT shape -- regular season plays 3-on-3
+    sudden death then (under a ``has_shootout=True`` standings rule) a separate shootout
+    resolution model; playoffs play full 5-on-5 sudden-death periods, repeated until someone
+    scores, and never shoot out (DESIGN.md point 8's explicit "different OT shape" for
+    playoffs). Also gates the "Playoff officiating/discipline mode" design note's
+    ``playoff_multiplier`` on the penalty-probability chain -- see ``_check_for_penalties``.
+    Defaults to ``False`` (identical behavior to a regular-season game for any existing caller
+    that doesn't opt in).
     """
 
     def __init__(self, world: World, home_tid: int, away_tid: int, *,
                  collect_pbp: bool = False,
                  home_goalie_id: Optional[int] = None,
-                 away_goalie_id: Optional[int] = None) -> None:
+                 away_goalie_id: Optional[int] = None,
+                 is_playoff: bool = False) -> None:
         self.world = world
         self.rng = world.rng
         self.collect_pbp = collect_pbp
+        self.is_playoff = is_playoff
         self.home = _TeamState(world, world.team(home_tid), is_home=True,
                                starter_override=home_goalie_id)
         self.away = _TeamState(world, world.team(away_tid), is_home=False,
@@ -541,6 +563,16 @@ class GameSim:
         # both teams are always in the same state, just from opposite perspectives (see
         # special_teams.StrengthStateMachine's docstring).
         self.strength = ST.StrengthStateMachine(home_tid=home_tid, away_tid=away_tid)
+
+        # Playoff officiating/discipline mode (DEVPLAN.md Step 2.6 design note): resolved ONCE at
+        # game construction (not re-checked every shift -- the rule doesn't change mid-game) into
+        # a single ready-to-use multiplier passed straight to
+        # special_teams.penalty_probability_for_shift on every _check_for_penalties call. Always
+        # 1.0 (a no-op) for a non-playoff game or under "regular_season" mode -- see
+        # config.PLAYOFF_REALISTIC_PENALTY_MULTIPLIER / World.playoff_discipline_mode.
+        self.playoff_penalty_multiplier: float = 1.0
+        if is_playoff and world.playoff_discipline_mode == "realistic":
+            self.playoff_penalty_multiplier = config.PLAYOFF_REALISTIC_PENALTY_MULTIPLIER
 
         # Faceoff-gated possession (DEVPLAN.md Step 2.3): the ``_TeamState`` that won the most
         # recently resolved faceoff, consumed by the next ``_play_shift`` call to set that
@@ -578,22 +610,223 @@ class GameSim:
             self.period = p
             yield from self._play_period(config.PERIOD_SECONDS, is_regulation=True)
 
-        # -- provisional OT placeholder -----------------------------------
-        # DEVPLAN.md: MVP needs "a clearly-commented provisional tie-break or simple sudden-death
-        # placeholder" since real OT (3-on-3) / shootout resolution is v1 scope (Step 2.6). This
-        # runs ONE extra simplified period using the same 5v5 shift logic (not 3-on-3 -- that
-        # strength state doesn't exist until Step 2.1) until either team scores or the period time
-        # runs out, in which case the game is left as an unresolved tie with went_ot=True and
-        # went_so always False (shootouts don't exist yet). Real NHL OT/SO resolution replaces this
-        # whole block in Step 2.6. is_regulation=False here: pull-the-goalie (Step 2.2) is an
+        # -- real OT/shootout resolution (DEVPLAN.md Step 2.6) -----------------
+        # Replaces the MVP engine's provisional placeholder (one extra simplified 5v5 sudden-
+        # death period, unresolved ties left as-is). DESIGN.md point 8's two explicit
+        # requirements this implements:
+        #   1. Regular season: 3-on-3 sudden death -> if still level, a SEPARATE shootout
+        #      resolution model (not a continuation of normal shift/event simulation) under a
+        #      has_shootout=True standings rule; "retro" skips the shootout and lets an
+        #      undecided 3-on-3 period stand as a legitimate tie.
+        #   2. Playoffs: full 5-on-5 sudden-death periods instead of 3-on-3, repeated until
+        #      someone scores (capped at config.MAX_PLAYOFF_OT_PERIODS as a defensive stop
+        #      condition for a headless sim loop -- see that constant's own comment), never a
+        #      shootout, ever.
+        # is_regulation=False for every OT period below: pull-the-goalie (Step 2.2) is an
         # explicit regulation-only, score-driven mechanic -- it never triggers (or stays active)
-        # once the game reaches this placeholder period.
+        # once the game reaches OT, matching the placeholder's original behavior.
         if self.result.home_score == self.result.away_score:
             self._is_ot = True
             self.result.went_ot = True
-            self.period += 1
-            yield from self._play_period(config.OT_SECONDS_REGULAR_SEASON, sudden_death=True,
-                                          is_regulation=False)
+
+            if self.is_playoff:
+                self.strength.base_state = config.STRENGTH_5V5
+                ot_periods = 0
+                while (self.result.home_score == self.result.away_score
+                       and ot_periods < config.MAX_PLAYOFF_OT_PERIODS):
+                    self.period += 1
+                    ot_periods += 1
+                    yield from self._play_period(config.OT_SECONDS_PLAYOFFS, sudden_death=True,
+                                                  is_regulation=False)
+                # A playoff game MUST have a winner (a series can't advance on a tie) -- the
+                # ot_periods cap above is a defensive-only stop condition against a pathological
+                # RNG stream, not a real NHL possibility (playoff OT genuinely has no shootout,
+                # ever). If the cap is somehow hit with the score still level (astronomically
+                # unlikely -- see MAX_PLAYOFF_OT_PERIODS's own comment), force a decision via the
+                # same shootout resolution model rather than returning an illegal unresolved
+                # playoff tie; this is the ONE case a playoff game can reach a shootout-shaped
+                # resolution, and it is purely a defensive fallback, not real NHL playoff OT
+                # rules (which have no shootout under any circumstance).
+                if self.result.home_score == self.result.away_score:
+                    self._resolve_shootout()
+            else:
+                self.strength.base_state = config.STRENGTH_3V3
+                self.period += 1
+                yield from self._play_period(config.OT_SECONDS_REGULAR_SEASON, sudden_death=True,
+                                              is_regulation=False)
+
+                if self.result.home_score == self.result.away_score:
+                    rule_table = config.STANDINGS_RULES[self.world.standings_rule]
+                    if rule_table["has_shootout"]:
+                        self._resolve_shootout()
+                    # else ("retro"): an undecided 3-on-3 OT stands as a legitimate tie -- do
+                    # NOT invoke the shootout. league.py's Game.is_tie/went_ot handling already
+                    # treats this correctly (went_ot=True, went_so=False, level score); see that
+                    # module's docstring (fixed during Step 1.13's review) -- nothing here should
+                    # regress it.
+
+    # -- shootout resolution (DEVPLAN.md Step 2.6) -----------------------------
+    def _resolve_shootout(self) -> None:
+        """Resolve a still-level game via a shootout: a SEPARATE skills-competition resolution
+        model (DESIGN.md point 8 -- explicitly "not a continuation of normal shift/event
+        simulation"), not another sudden-death period run through the normal shot-attempt loop.
+
+        Shape: alternating home/away one-on-one shooter-vs-goalie attempts. Each team gets
+        ``config.SHOOTOUT_ROUNDS`` (3) attempts in the "standard round" unless the outcome is
+        already mathematically decided before both teams have shot (e.g. up 2-0 after 2 rounds
+        with the other team only shooting once left -- real NHL shootout rule: no point
+        continuing a decided round). If still level after the standard round, alternating
+        sudden-death rounds continue (one attempt each) until someone leads after a full
+        exchange, capped at ``config.SHOOTOUT_MAX_SUDDEN_DEATH_ROUNDS`` as a defensive stop
+        condition (see that constant's own comment) -- if the cap is somehow hit still level, the
+        team with more career-average shootout aptitude... no such stat exists, so this falls
+        back to the higher offensive-awareness/shot_accuracy composite shooter available, then a
+        coin flip as an absolute last resort (never leaves the game unresolved -- a real NHL
+        shootout by definition always ends decisively).
+
+        A shootout goal is recorded directly onto ``self.result.home_score``/``away_score`` (the
+        standard "the shootout-winning goal is the deciding goal of the game" convention --
+        mirrors how season.py's now-removed MVP placeholder bumped the score by exactly one goal
+        for the same reason: Game.winner/loser derive normally from home_score/away_score with no
+        separate "decisive winner" side-channel field needed). Individual shootout attempts are
+        NOT added to a shooter's regular skater box score (a real NHL shootout goal does not
+        count as a regular-season goal in a player's stat line either -- it's tracked as its own
+        separate shootout-attempts stat in real scorekeeping, which this codebase does not model
+        as a tracked category; out of scope for this step, same "don't invent an untracked stat
+        category" restraint DESIGN.md applies elsewhere) -- this function only ever touches the
+        final score and ``went_so``.
+        """
+        self.result.went_so = True
+        home_shooters = self._shootout_shooter_order(self.home)
+        away_shooters = self._shootout_shooter_order(self.away)
+        home_goalie = self.home.goalie()
+        away_goalie = self.away.goalie()
+
+        home_goals = 0
+        away_goals = 0
+        home_idx = 0
+        away_idx = 0
+
+        # -- standard round: up to SHOOTOUT_ROUNDS attempts each, alternating home/away,
+        # stopping early once the outcome is mathematically decided (real NHL shootout rule).
+        for rnd in range(config.SHOOTOUT_ROUNDS):
+            if self._shootout_decided(home_goals, away_goals,
+                                      config.SHOOTOUT_ROUNDS - rnd, config.SHOOTOUT_ROUNDS - rnd):
+                break
+            if self._shootout_attempt(home_shooters, home_idx, away_goalie):
+                home_goals += 1
+            home_idx += 1
+            # Mid-round: home has already taken this round's attempt (its remaining count is
+            # future rounds only, SHOOTOUT_ROUNDS - rnd - 1), but away has NOT yet taken its
+            # attempt this round (its remaining count still includes this round's pending shot,
+            # SHOOTOUT_ROUNDS - rnd). Passing (0, SHOOTOUT_ROUNDS - rnd - 1) here was a bug: it
+            # underestimated BOTH sides' remaining attempts, which could declare the shootout
+            # "decided" and skip away's still-legitimate pending attempt in this round (and any
+            # future rounds home was still entitled to) -- confirmed via a scripted-attempt
+            # reproduction (home 0-for-2, away 1-for-0-pending after round 1's home miss:
+            # wrongly ended the shootout before away ever took its round-1 shot).
+            if self._shootout_decided(home_goals, away_goals,
+                                      config.SHOOTOUT_ROUNDS - rnd - 1, config.SHOOTOUT_ROUNDS - rnd):
+                break
+            if self._shootout_attempt(away_shooters, away_idx, home_goalie):
+                away_goals += 1
+            away_idx += 1
+
+        # -- sudden death: one attempt each, repeated until decided.
+        sd_rounds = 0
+        while home_goals == away_goals and sd_rounds < config.SHOOTOUT_MAX_SUDDEN_DEATH_ROUNDS:
+            sd_rounds += 1
+            if self._shootout_attempt(home_shooters, home_idx, away_goalie):
+                home_goals += 1
+            home_idx += 1
+            if self._shootout_attempt(away_shooters, away_idx, home_goalie):
+                away_goals += 1
+            away_idx += 1
+
+        if home_goals == away_goals:
+            # Defensive last resort (see docstring) -- should be vanishingly rare given the
+            # sudden-death cap is 20 rounds. Break the tie with a neutral coin flip rather than
+            # ever returning an unresolved shootout, which would violate the "a shootout always
+            # ends decisively" invariant points_for_game()/Game.is_tie depend on.
+            if self.rng.chance(0.5):
+                home_goals += 1
+            else:
+                away_goals += 1
+
+        if home_goals > away_goals:
+            self.result.home_score += 1
+        else:
+            self.result.away_score += 1
+
+        self._log(EVENT_GAME_END, "Shootout decides it")
+
+    @staticmethod
+    def _shootout_decided(home_goals: int, away_goals: int,
+                          home_remaining: int, away_remaining: int) -> bool:
+        """True if the outcome is already mathematically locked in given each side's remaining
+        standard-round attempts (real NHL shootout early-stop rule) -- e.g. home leads by more
+        goals than away could possibly still score."""
+        if home_goals > away_goals + away_remaining:
+            return True
+        if away_goals > home_goals + home_remaining:
+            return True
+        return False
+
+    def _shootout_shooter_order(self, state: _TeamState) -> List[Player]:
+        """The shooting order for one team's shootout attempts: every eligible (healthy, non-
+        goalie) rostered skater, best shot_accuracy/offensive_awareness composite first (a real
+        NHL coach sends his best shootout options first) -- DEVPLAN.md doesn't specify a shooter-
+        selection model, so this is a reasonable, clearly-provisional default rather than a
+        random pick, matching this codebase's "reasonable simple model, not over-engineered"
+        framing elsewhere. Falls back to cycling back through the same order if the sudden-death
+        phase outlasts the roster (real NHL rule: once every eligible skater has shot once, a
+        team may re-use shooters in the same order -- approximated here as "wrap around" rather
+        than literally re-implementing the exact re-use-order NHL rule, since the distinction
+        has no mechanical consequence for this resolution model)."""
+        candidates = [state.players[pid] for pid in state.team.roster
+                      if pid in state.players and pid not in state.unavailable
+                      and state.players[pid].position != "G"]
+        if not candidates:
+            return []
+        candidates.sort(key=_shootout_shooter_score, reverse=True)
+        return candidates
+
+    def _shootout_attempt(self, shooters: List[Player], idx: int,
+                          goalie: Optional[Player]) -> bool:
+        """Resolve one shootout attempt (a single shooter-vs-goalie skills-competition roll --
+        NOT a continuation of the normal shift/shot-attempt loop, per this function's caller's
+        docstring). Returns True if the attempt scores.
+
+        Shape mirrors the engine's other realization-scaled gap-to-probability rolls (this
+        codebase's "no upweighting" principle -- see ratings.py's hot_hand_boost() docstring and
+        this session's own reaffirmed constraint): ``config.SHOOTOUT_BASE_SCORE_PROB`` is the
+        neutral (rating-70-vs-rating-70) anchor, nudged by the shooter/goalie rating gap
+        (``config.SHOOTOUT_RATING_GAP_SLOPE``) and scaled by the shooter's own morale realization
+        (``ratings.morale_realization`` -- the same multiplicative, ceiling-capped-at-1.0 factor
+        used everywhere else in this engine; it can only pull the gap back toward neutral, never
+        push a shooter's effective conversion rate above what his rating gap alone would produce).
+        An empty net (``goalie is None`` -- shouldn't happen in practice, a shootout never occurs
+        with a pulled goalie since pulls are regulation-only, but defensive rather than crashing)
+        resolves at a fixed high-but-not-certain rate, same shape as ``_resolve_empty_net_shot``.
+        """
+        if not shooters:
+            return False
+        shooter = shooters[idx % len(shooters)]
+        r = shooter.ratings
+        shot_skill = (0.5 * r.get("shot_accuracy", 25) + 0.3 * r.get("puck_handling", 25)
+                      + 0.2 * r.get("offensive_awareness", 25))
+
+        if goalie is None:
+            return self.rng.chance(EMPTY_NET_GOAL_BASE_P)
+
+        gr = goalie.ratings
+        goalie_skill = 0.55 * gr.get("reflexes", 25) + 0.45 * gr.get("positioning", 25)
+
+        gap = (shot_skill - goalie_skill) * config.SHOOTOUT_RATING_GAP_SLOPE
+        shooter_real = R.morale_realization(shooter.morale)
+        score_p = config.SHOOTOUT_BASE_SCORE_PROB + gap * shooter_real
+        score_p = max(0.05, min(0.85, score_p))
+        return self.rng.chance(score_p)
 
     # -- period / shift loop ---------------------------------------------------
     def _play_period(self, length_secs: float, sudden_death: bool = False, is_regulation: bool = True):
@@ -831,10 +1064,17 @@ class GameSim:
         """Roll both teams' current on-ice group for a drawn penalty at the start of a shift
         (special_teams.roll_for_penalty, scaled by discipline + coach aggression). At most one
         penalty per team per shift is checked here -- a simple, clearly-provisional cadence
-        (DEVPLAN.md flags exact tuning as an open item), not a per-attempt penalty check."""
+        (DEVPLAN.md flags exact tuning as an open item), not a per-attempt penalty check.
+
+        ``self.playoff_penalty_multiplier`` (DEVPLAN.md Step 2.6's "Playoff officiating/
+        discipline mode" design note) is threaded straight through to
+        ``roll_for_penalty``/``penalty_probability_for_shift`` -- a strict 1.0 no-op for every
+        non-playoff game, only < 1.0 for a playoff game under "realistic" mode (see
+        ``GameSim.__init__``)."""
         for state in (self.home, self.away):
             on_ice_players = [state.players[pid] for pid in state.on_ice if pid in state.players]
-            if ST.roll_for_penalty(self.rng, on_ice_players, state.coach_profile):
+            if ST.roll_for_penalty(self.rng, on_ice_players, state.coach_profile,
+                                   playoff_multiplier=self.playoff_penalty_multiplier):
                 self._draw_penalty(state, on_ice_players)
 
     def _draw_penalty(self, offending: _TeamState, on_ice_players: List[Player]) -> None:
@@ -1477,13 +1717,20 @@ class GameSim:
 def simulate_game(world: World, home_tid: int, away_tid: int, *,
                    collect_pbp: bool = False,
                    home_goalie_id: Optional[int] = None,
-                   away_goalie_id: Optional[int] = None) -> GameResult:
+                   away_goalie_id: Optional[int] = None,
+                   is_playoff: bool = False) -> GameResult:
     """Convenience wrapper: simulate one game and return its result.
 
     ``home_goalie_id``/``away_goalie_id`` (DEVPLAN.md Step 2.2) pass through to
     ``GameSim``'s same-named constructor overrides -- see that class's docstring. Defaults to
     ``None`` (falls back to each team's ``Team.goalie_starter``), so this is a strict additive
     extension for any existing caller.
+
+    ``is_playoff`` (DEVPLAN.md Step 2.6) pass through to ``GameSim``'s same-named constructor
+    override -- selects real 5-on-5 sudden-death playoff OT (vs. regular-season 3-on-3 -> maybe
+    shootout) and the playoff officiating/discipline mode's penalty multiplier. Defaults to
+    ``False`` (identical behavior to before this step for any existing caller).
     """
     return GameSim(world, home_tid, away_tid, collect_pbp=collect_pbp,
-                   home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id).play()
+                   home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id,
+                   is_playoff=is_playoff).play()

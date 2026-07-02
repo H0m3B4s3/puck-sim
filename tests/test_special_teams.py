@@ -210,9 +210,11 @@ def test_engine_shorthanded_goal_ends_penalty_early_and_logs_correct_strength_st
 
     fired = {"count": 0}
 
-    def _fire_once_for_home(rng, on_ice_players, coach_profile):
+    def _fire_once_for_home(rng, on_ice_players, coach_profile, **kwargs):
         # engine.py calls this once per team per shift; fire true exactly once, for whichever
-        # team is checked first that still has zero fires recorded.
+        # team is checked first that still has zero fires recorded. **kwargs absorbs the
+        # DEVPLAN.md Step 2.6 playoff_multiplier keyword engine.py now always passes -- this
+        # stub only cares about the call count, not that new argument.
         if fired["count"] == 0:
             fired["count"] += 1
             return True
