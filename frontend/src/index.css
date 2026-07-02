@@ -1,0 +1,502 @@
+/* PuckSim frontend styles (Step 2.10a) */
+
+/* ============================================================================
+   Typography: font families and base sizing
+   ============================================================================ */
+
+/* Fonts are loaded via <link> in index.html from Google Fonts:
+   - Oswald: bold condensed display (headers, scores, team abbreviations)
+   - Public Sans: clean humanist body (dense table text)
+   - IBM Plex Mono: monospace with tabular figures (stat columns)
+*/
+
+:root {
+  /* Font families */
+  --font-display: "Oswald", sans-serif;
+  --font-body: "Public Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  /* Base font sizing */
+  --font-size-base: 16px;
+  --font-size-sm: 14px;
+  --font-size-lg: 18px;
+  --font-size-xl: 24px;
+  --font-size-2xl: 32px;
+  --font-size-3xl: 40px;
+
+  /* Line heights */
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* Spacing scale */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+
+  /* Rink signature: corner radius for panels */
+  --radius-rink: 24px;
+  --radius-sm: 4px;
+
+  /* Center-ice hairline thickness */
+  --hairline: 2px;
+}
+
+/* ============================================================================
+   Color Tokens (Light — "Ice" theme)
+   ============================================================================ */
+[data-theme="light"] {
+  --color-surface: #f7f9fa;
+  --color-surface-card: #ffffff;
+  --color-text: #12181f;
+  --color-muted: #6b7684;
+  --color-accent-red: #c8102e;
+  --color-accent-blue: #003da5;
+  --color-accent-gold: #ffc72c;
+  --color-border: #e5e7eb;
+}
+
+/* Color Tokens (Dark — "Arena" theme) */
+[data-theme="dark"] {
+  --color-surface: #10141a;
+  --color-surface-card: #1a202c;
+  --color-text: #f2f4f6;
+  --color-muted: #8b93a1;
+  --color-accent-red: #e8384f;
+  --color-accent-blue: #4c8dff;
+  --color-accent-gold: #ffc72c;
+  --color-border: #2d3748;
+}
+
+/* ============================================================================
+   Base Resets
+   ============================================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-body);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* ============================================================================
+   Typography Utilities
+   ============================================================================ */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+  margin: 0;
+}
+
+.text-display {
+  font-family: var(--font-display);
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  line-height: var(--line-height-tight);
+}
+
+.text-body {
+  font-family: var(--font-body);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+
+.text-muted {
+  color: var(--color-muted);
+  font-size: var(--font-size-sm);
+}
+
+.text-mono {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  font-feature-settings: "tnum"; /* Tabular figures for stat columns */
+}
+
+/* ============================================================================
+   Buttons
+   ============================================================================ */
+
+button {
+  font-family: var(--font-body);
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  transition: background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn {
+  font-weight: 600;
+  padding: var(--space-sm) var(--space-lg);
+  border-radius: var(--radius-sm);
+}
+
+.btn-primary {
+  background-color: var(--color-accent-red);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btn-secondary {
+  background-color: transparent;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--color-border);
+}
+
+/* ============================================================================
+   Panel: The Rink-Cornered Card
+   ============================================================================ */
+
+.panel {
+  background-color: var(--color-surface-card);
+  border-radius: var(--radius-rink);
+  padding: var(--space-xl);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.2s ease;
+}
+
+[data-theme="dark"] .panel {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.panel:hover {
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* ============================================================================
+   ScoreboardBar: Top Persistent Bar
+   ============================================================================ */
+
+.scoreboard-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--color-surface-card);
+  padding: var(--space-md) var(--space-xl);
+  border-bottom: var(--hairline) solid var(--color-accent-red);
+  gap: var(--space-md);
+  flex-shrink: 0;
+}
+
+.scoreboard-bar__left {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.scoreboard-bar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.scoreboard-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.scoreboard-season {
+  font-size: var(--font-size-lg);
+  color: var(--color-accent-blue);
+}
+
+.scoreboard-phase {
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.scoreboard-day {
+  font-size: var(--font-size-base);
+  color: var(--color-muted);
+}
+
+/* ============================================================================
+   NavRail: Left Navigation Sidebar
+   ============================================================================ */
+
+.nav-rail {
+  flex-shrink: 0;
+  width: 200px;
+  background-color: var(--color-text);
+  color: var(--color-surface);
+  padding: var(--space-xl) 0;
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  position: fixed;
+  left: 0;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.nav-rail__header {
+  padding: 0 var(--space-md);
+}
+
+.nav-rail__title {
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--color-surface);
+  margin: 0;
+}
+
+.nav-rail__items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.nav-rail__item {
+  font-family: var(--font-body);
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  background: transparent;
+  color: var(--color-surface);
+  text-align: left;
+  padding: var(--space-md) var(--space-md);
+  margin: 0;
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  transition: background-color 0.2s ease, border-left-color 0.2s ease;
+  cursor: pointer;
+}
+
+.nav-rail__item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.nav-rail__item.active {
+  background-color: rgba(255, 255, 255, 0.15);
+  border-left-color: var(--color-accent-gold);
+  font-weight: 600;
+}
+
+/* ============================================================================
+   App Layout
+   ============================================================================ */
+
+.app-container {
+  display: flex;
+  width: 100%;
+  min-height: 100vh;
+  background-color: var(--color-surface);
+}
+
+.app-main-wrapper {
+  flex: 1;
+  margin-left: 200px;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main {
+  flex: 1;
+  padding: var(--space-xl);
+  overflow-y: auto;
+}
+
+/* ============================================================================
+   Screen Placeholder
+   ============================================================================ */
+
+.screen {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.screen-placeholder {
+  text-align: center;
+  padding: var(--space-2xl);
+}
+
+.screen-home {
+  max-width: 800px;
+}
+
+/* ============================================================================
+   No Career State
+   ============================================================================ */
+
+.no-career-state {
+  text-align: center;
+  padding: var(--space-2xl);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+/* ============================================================================
+   Faceoff Dot Spinner
+   ============================================================================ */
+
+.faceoff-dot-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-lg);
+  padding: var(--space-2xl);
+}
+
+.faceoff-dot {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background-color: var(--color-accent-blue);
+  opacity: 0.8;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* ============================================================================
+   Team Tag: Jersey-Stripe Motif
+   ============================================================================ */
+
+.teamTag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--font-size-base);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface-card);
+}
+
+.teamTag.big {
+  font-size: var(--font-size-lg);
+  padding: var(--space-md) var(--space-lg);
+}
+
+.teamTag__bar {
+  display: block;
+  width: 4px;
+  height: 100%;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.teamTag__abbr {
+  font-weight: 700;
+  font-family: var(--font-display);
+}
+
+.teamTag__name {
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  margin-left: var(--space-sm);
+}
+
+/* ============================================================================
+   Responsive
+   ============================================================================ */
+
+@media (max-width: 768px) {
+  .nav-rail {
+    width: 100%;
+    height: auto;
+    position: static;
+    flex-direction: row;
+    padding: var(--space-md);
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .nav-rail__header {
+    padding: 0;
+  }
+
+  .nav-rail__items {
+    flex-direction: row;
+    gap: 0;
+    flex: none;
+  }
+
+  .nav-rail__item {
+    padding: var(--space-sm) var(--space-md);
+    border-left: none;
+    border-bottom: 3px solid transparent;
+  }
+
+  .nav-rail__item.active {
+    border-left-color: transparent;
+    border-bottom-color: var(--color-accent-gold);
+  }
+
+  .app-container {
+    flex-direction: column;
+  }
+
+  .app-main-wrapper {
+    margin-left: 0;
+  }
+
+  .app-main {
+    padding: var(--space-md);
+  }
+}
