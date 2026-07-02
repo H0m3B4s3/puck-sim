@@ -233,3 +233,128 @@ def test_generate_skater_end_to_end_respects_the_gate():
     ]
     assert len(below_players) == 500
     assert all(config.RATING_MIN <= p.overall <= config.RATING_MAX for p in below_players)
+
+
+# ---------------------------------------------------------------------------
+# gk_consistency generation-time rarity gate (DEVPLAN.md Step 2.7, "Generation-time rarity
+# correlation") -- companion mechanism to the rare-archetype gate above, on a DIFFERENT axis
+# (a single rating's resample band, not archetype choice). See
+# playergen._apply_gk_consistency_rarity_gate / _GK_HIGH_SKILL_THRESHOLD /
+# _GK_RELIABILITY_ROLL_CHANCE for the full mechanism and documented derivation.
+# ---------------------------------------------------------------------------
+def _high_skill_high_consistency(p) -> bool:
+    return (p.overall >= playergen._GK_HIGH_SKILL_THRESHOLD
+            and p.ratings["gk_consistency"] >= playergen._GK_CONSISTENCY_ELITE_MIN)
+
+
+def _high_skill(p) -> bool:
+    return p.overall >= playergen._GK_HIGH_SKILL_THRESHOLD
+
+
+def _high_consistency(p) -> bool:
+    return p.ratings["gk_consistency"] >= playergen._GK_CONSISTENCY_ELITE_MIN
+
+
+def test_gk_consistency_below_high_skill_threshold_is_never_gated():
+    """Below the high-skill threshold, gk_consistency must be sampled normally/independently --
+    it should be reachable ANYWHERE across the legal rating range, not confined to the gate's
+    'common' band, since no gating applies down there."""
+    rng = Rng(seed=200)
+    below_target = playergen._GK_HIGH_SKILL_THRESHOLD - 20   # comfortably below the gate
+    values = []
+    for i in range(300):
+        g = playergen.generate_goalie(i, rng, age=27, target_overall=below_target)
+        if g.overall < playergen._GK_HIGH_SKILL_THRESHOLD:   # post-calibration overall can drift
+            values.append(g.ratings["gk_consistency"])
+    assert values   # sanity: the below-threshold branch was actually exercised
+    # Should see values ABOVE the gate's "common" band ceiling somewhere in an ungated sample --
+    # proving gk_consistency isn't being silently capped even when the gate shouldn't apply.
+    assert any(v > playergen._GK_CONSISTENCY_COMMON_MAX for v in values)
+
+
+def test_gk_consistency_at_high_skill_defaults_to_the_common_band_without_the_reliability_roll():
+    """At/above the high-skill threshold, gk_consistency should land in the elite band ONLY on
+    a successful reliability roll -- the overwhelming majority of high-skill goalies should be
+    capped at/under _GK_CONSISTENCY_COMMON_MAX (the common 'talented but streaky' case)."""
+    rng = Rng(seed=201)
+    elite_target = 95   # comfortably clears the high-skill threshold even after calibration drift
+    goalies = [playergen.generate_goalie(i, rng, age=27, target_overall=elite_target)
+               for i in range(2000)]
+    high_skill_goalies = [g for g in goalies if _high_skill(g)]
+    assert len(high_skill_goalies) > 1000   # confirms the target actually clears the gate broadly
+
+    in_elite_band = sum(1 for g in high_skill_goalies if _high_consistency(g))
+    frac_elite = in_elite_band / len(high_skill_goalies)
+    # Should land close to the documented _GK_RELIABILITY_ROLL_CHANCE (0.08), not near 0 (gate
+    # never grants it) or near 1 (gate doesn't actually gate anything).
+    assert abs(frac_elite - playergen._GK_RELIABILITY_ROLL_CHANCE) < 0.03
+
+
+def test_high_skill_and_high_consistency_together_is_genuinely_rare():
+    """THE core DEVPLAN.md done-criterion for this mechanism: across a large generated goalie
+    pool, the fraction landing in BOTH the high-skill AND high-gk_consistency bands must be
+    MEASURABLY SMALL relative to high-skill-alone or high-consistency-alone -- confirming the
+    rarity gate actually creates scarcity rather than the two axes falling out independently.
+
+    Measured against the GATE'S OWN INPUT (the calibrated overall BEFORE the gk_consistency
+    resample runs), not the player's final post-gate overall -- winning the reliability roll
+    pushes gk_consistency (a real, if small, 0.10-weighted GOALIE_WEIGHTS component) up, which
+    can itself nudge the FINAL overall() up by a point or two. Filtering on final overall would
+    introduce a subtle selection bias (a goalie who won the roll is slightly more likely to
+    cross a threshold measured post-hoc), inflating the apparent joint rate -- confirmed
+    directly during this test's development (post-gate filtering measured ~16.7% conditional
+    elite-band odds among "high skill" goalies vs. the documented 8% reliability-roll rate when
+    measured correctly against the pre-gate overall the gate itself actually conditions on).
+    """
+    rng = Rng(seed=202)
+    from pucksim.models.attributes import (
+        ALL_GOALIE_RATINGS,
+        GOALIE_ARCHETYPES_BY_POSITION,
+        RARE_GOALIE_ARCHETYPES_BY_POSITION,
+    )
+    from pucksim.models.attributes import overall as _overall_fn
+
+    n = 6000
+    # A realistic mixed pool spanning the full skill spectrum (mirrors leaguegen.py's own
+    # Gaussian(66, 10) goalie target-overall distribution) so both rare and common cases occur.
+    targets = [max(30, min(95, round(rng.gauss(66.0, 10.0)))) for _ in range(n)]
+
+    n_high_skill = 0
+    n_high_consistency = 0
+    n_both = 0
+    for t in targets:
+        archetype = playergen._choose_archetype(
+            rng, "G", t, GOALIE_ARCHETYPES_BY_POSITION, RARE_GOALIE_ARCHETYPES_BY_POSITION)
+        ratings = playergen._build_calibrated_ratings(rng, "G", t, ALL_GOALIE_RATINGS, archetype)
+        pre_gate_overall = _overall_fn("G", ratings)
+        is_high_skill = pre_gate_overall >= playergen._GK_HIGH_SKILL_THRESHOLD
+        playergen._apply_gk_consistency_rarity_gate(rng, ratings, pre_gate_overall)
+        is_high_consistency = ratings["gk_consistency"] >= playergen._GK_CONSISTENCY_ELITE_MIN
+
+        n_high_skill += is_high_skill
+        n_high_consistency += is_high_consistency
+        n_both += is_high_skill and is_high_consistency
+
+    assert n_high_skill > 0 and n_high_consistency > 0   # sanity: both individually occur
+    frac_both = n_both / n
+    frac_high_skill = n_high_skill / n
+    frac_high_consistency = n_high_consistency / n
+
+    # The joint fraction must be measurably smaller than EITHER marginal fraction alone --
+    # i.e. being high-skill-and-high-consistency is much rarer than being either alone.
+    assert frac_both < frac_high_skill * 0.5
+    assert frac_both < frac_high_consistency * 0.5
+
+    # And, more specifically, close to (not wildly exceeding) what the documented reliability-
+    # roll chance alone would predict conditional on already being high-skill -- proving the
+    # gate is the actual scarcity mechanism, not an accident of the two axes' marginals.
+    conditional_prediction = frac_high_skill * playergen._GK_RELIABILITY_ROLL_CHANCE
+    assert frac_both < conditional_prediction * 1.5
+
+
+def test_gk_consistency_gate_does_not_affect_skaters():
+    """Sanity: this gate is goalie-only -- generate_skater's rating vocabulary has no
+    gk_consistency key at all, so there's nothing for the gate to touch."""
+    rng = Rng(seed=203)
+    p = playergen.generate_skater(1, rng, age=25, target_overall=90, position="C")
+    assert "gk_consistency" not in p.ratings

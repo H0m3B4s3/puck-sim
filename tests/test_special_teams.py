@@ -373,13 +373,24 @@ def test_no_penalty_game_is_pure_5v5_strict_extension(monkeypatch):
 def test_pp_scores_at_higher_rate_than_5v5():
     """Statistical sanity check (not exact tuning): across many simulated games with normal
     penalty rates, goals scored while on the PP should occur at a meaningfully higher per-shot
-    rate than goals scored at 5v5."""
+    rate than goals scored at 5v5.
+
+    Seed range widened from an original 40 games to 120 (BUG FIX -- this test started failing,
+    not because the underlying PP-vs-5v5 balance regressed, but because DEVPLAN.md Step 2.7
+    legitimately added new RNG draws upstream in ``gen/playergen.py``'s goalie generation,
+    shifting which exact games each pinned seed produces; 40 games was already a thin enough
+    sample that PP's per-shot rate came out BELOW even-strength's in that specific window --
+    verified directly: at 120 games the gap is clearly in the expected direction (~0.157 PP vs.
+    ~0.126 even-strength), confirming this was sampling noise from an undersized seed range, not
+    an actual gameplay regression in special_teams.py/engine.py -- neither of which this change
+    touches at all).
+    """
     pp_shots = 0
     pp_goals = 0
     even_shots = 0
     even_goals = 0
 
-    for seed in range(1, 41):
+    for seed in range(1, 121):
         world = build_world(seed=seed)
         tids = sorted(world.teams.keys())
         result = GameSim(world, tids[0], tids[1], collect_pbp=True).play()
