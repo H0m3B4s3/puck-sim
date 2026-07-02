@@ -25,6 +25,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 from pucksim.models.league import points_for_game, standings
+from pucksim.models.player import Player
 from pucksim.models.team import Team
 from pucksim.models.world import World
 
@@ -147,6 +148,198 @@ def standings_response(world: World) -> List[StandingsEntryDTO]:
             )
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Player summary (for roster views)
+# ---------------------------------------------------------------------------
+class ContractSummaryDTO(BaseModel):
+    """Lightweight contract summary for a roster entry."""
+    current_salary: int
+    years_remaining: int
+
+
+class PlayerSummaryDTO(BaseModel):
+    """A player entry for roster lists -- id, name, position, ratings, and contract."""
+    pid: int
+    name: str
+    position: str
+    age: int
+    overall: int
+    shoots: str
+    secondary_position: Optional[str] = None
+    injury_status: Optional[str] = None
+    contract: ContractSummaryDTO
+
+
+class RosterDTO(BaseModel):
+    """Full roster for a team with player summaries."""
+    players: List[PlayerSummaryDTO]
+
+
+def player_summary(player: Player) -> PlayerSummaryDTO:
+    """Build a :class:`PlayerSummaryDTO` for ``player``. Used by roster endpoints."""
+    injury_status = None
+    if player.is_injured:
+        injury_status = f"{player.injury.description} ({player.injury.games_remaining} games)"
+
+    return PlayerSummaryDTO(
+        pid=player.pid,
+        name=player.name,
+        position=player.position,
+        age=player.age,
+        overall=player.overall,
+        shoots=player.shoots,
+        secondary_position=player.secondary_position,
+        injury_status=injury_status,
+        contract=ContractSummaryDTO(
+            current_salary=player.contract.current_salary,
+            years_remaining=player.contract.years_remaining,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lines and pairs with player summaries
+# ---------------------------------------------------------------------------
+class LineWithPlayersDTO(BaseModel):
+    """A forward line with player summaries resolved."""
+    players: List[PlayerSummaryDTO]
+
+
+class PairWithPlayersDTO(BaseModel):
+    """A D pair with player summaries resolved."""
+    players: List[PlayerSummaryDTO]
+
+
+class GoalieSlotDTO(BaseModel):
+    """A goalie slot (starter or backup) with optional player summary."""
+    player: Optional[PlayerSummaryDTO] = None
+
+
+class SpecialTeamsUnitDTO(BaseModel):
+    """A special teams unit (PP/PK) with player summaries resolved."""
+    players: List[PlayerSummaryDTO]
+
+
+class RosterLinesDTO(BaseModel):
+    """Forward lines, D pairs, and goalies resolved to player summaries."""
+    lines: List[LineWithPlayersDTO]
+    pairs: List[PairWithPlayersDTO]
+    goalie_starter: GoalieSlotDTO
+    goalie_backup: GoalieSlotDTO
+    pp_unit_1: SpecialTeamsUnitDTO
+    pk_unit_1: SpecialTeamsUnitDTO
+
+
+def roster_lines_response(team: Team, world: World) -> RosterLinesDTO:
+    """Build a :class:`RosterLinesDTO` for ``team``, resolving all ids to player summaries."""
+    players_dict = world.players
+
+    # Forward lines
+    lines = [
+        LineWithPlayersDTO(
+            players=[player_summary(players_dict[pid]) for pid in line if pid in players_dict]
+        )
+        for line in team.lines
+    ]
+
+    # D pairs
+    pairs = [
+        PairWithPlayersDTO(
+            players=[player_summary(players_dict[pid]) for pid in pair if pid in players_dict]
+        )
+        for pair in team.pairs
+    ]
+
+    # Goalies
+    goalie_starter = GoalieSlotDTO(
+        player=player_summary(players_dict[team.goalie_starter])
+        if team.goalie_starter is not None and team.goalie_starter in players_dict
+        else None
+    )
+    goalie_backup = GoalieSlotDTO(
+        player=player_summary(players_dict[team.goalie_backup])
+        if team.goalie_backup is not None and team.goalie_backup in players_dict
+        else None
+    )
+
+    # Special teams units
+    pp_unit_1 = SpecialTeamsUnitDTO(
+        players=[player_summary(players_dict[pid]) for pid in team.pp_unit_1 if pid in players_dict]
+    )
+    pk_unit_1 = SpecialTeamsUnitDTO(
+        players=[player_summary(players_dict[pid]) for pid in team.pk_unit_1 if pid in players_dict]
+    )
+
+    return RosterLinesDTO(
+        lines=lines,
+        pairs=pairs,
+        goalie_starter=goalie_starter,
+        goalie_backup=goalie_backup,
+        pp_unit_1=pp_unit_1,
+        pk_unit_1=pk_unit_1,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tactics with coach summary
+# ---------------------------------------------------------------------------
+class TacticsDTO(BaseModel):
+    """The team's current tactics settings."""
+    forecheck_style: str
+    pp_style: str
+    pk_aggression: str
+
+
+class CoachSummaryDTO(BaseModel):
+    """Lightweight coach summary for a tactics view."""
+    archetype: str
+    line_juggling_patience: float
+    pp_forwards: int
+    shot_volume: float
+    shot_quality_bias: float
+    defensive_risk_tolerance: float
+    goalie_pull_max_deficit: int
+    goalie_pull_time_threshold_secs: float
+
+
+class RosterTacticsDTO(BaseModel):
+    """Team tactics and coach profile summary."""
+    tactics: TacticsDTO
+    coach: CoachSummaryDTO
+
+
+def roster_tactics_response(team: Team) -> RosterTacticsDTO:
+    """Build a :class:`RosterTacticsDTO` for ``team``, including tactics and coach summary."""
+    from pucksim.models.coach import profile_for
+
+    # Build tactics DTO, using defaults if None
+    tactics_data = team.tactics.to_dict() if team.tactics is not None else {}
+    tactics_dto = TacticsDTO(
+        forecheck_style=tactics_data.get("forecheck_style", "balanced"),
+        pp_style=tactics_data.get("pp_style", "overload"),
+        pk_aggression=tactics_data.get("pk_aggression", "balanced"),
+    )
+
+    # Build coach DTO from the stored coach dict
+    archetype_name = "Balanced"
+    if team.coach and isinstance(team.coach, dict):
+        archetype_name = team.coach.get("archetype", "Balanced")
+
+    profile = profile_for(archetype_name)
+    coach_dto = CoachSummaryDTO(
+        archetype=profile.name,
+        line_juggling_patience=profile.line_juggling_patience,
+        pp_forwards=profile.pp_forwards,
+        shot_volume=profile.shot_volume,
+        shot_quality_bias=profile.shot_quality_bias,
+        defensive_risk_tolerance=profile.defensive_risk_tolerance,
+        goalie_pull_max_deficit=profile.goalie_pull_max_deficit,
+        goalie_pull_time_threshold_secs=profile.goalie_pull_time_threshold_secs,
+    )
+
+    return RosterTacticsDTO(tactics=tactics_dto, coach=coach_dto)
 
 
 # ---------------------------------------------------------------------------

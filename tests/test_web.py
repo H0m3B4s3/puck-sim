@@ -266,6 +266,380 @@ def test_team_colors_present_and_valid_hex_in_standings(client):
 
 
 # ---------------------------------------------------------------------------
+# GET /roster -- full roster
+# ---------------------------------------------------------------------------
+def test_get_roster_requires_session(client):
+    """GET /roster without an active session is a 404."""
+    resp = client.get("/roster")
+    assert resp.status_code == 404
+
+
+def test_get_roster_returns_player_summaries(client):
+    """GET /roster returns the user's team's full roster with player summaries."""
+    client.post("/career/new", json={"seed": 20})
+    resp = client.get("/roster")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "players" in body
+    players = body["players"]
+    assert len(players) > 0  # Should have at least some roster
+
+    # Check player summary shape
+    for player in players:
+        assert "pid" in player
+        assert "name" in player
+        assert "position" in player
+        assert "age" in player
+        assert "overall" in player
+        assert "shoots" in player
+        assert "contract" in player
+        contract = player["contract"]
+        assert "current_salary" in contract
+        assert "years_remaining" in contract
+
+
+def test_roster_includes_injured_status(client):
+    """Players with injuries should show injury_status."""
+    from pucksim.models.player import Injury
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 21})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    # Find a player and inject an injury
+    roster = world.user_team.roster
+    if roster:
+        pid = roster[0]
+        player = world.players[pid]
+        player.injury = Injury(description="Test injury", games_remaining=5, severity="minor")
+        session_store.save(sid, world)
+
+        resp = client.get("/roster")
+        body = resp.json()
+        players = body["players"]
+        injured = next((p for p in players if p["pid"] == pid), None)
+        assert injured is not None
+        assert injured["injury_status"] is not None
+        assert "Test injury" in injured["injury_status"]
+        assert "5 games" in injured["injury_status"]
+
+
+# ---------------------------------------------------------------------------
+# GET /roster/lines -- lines, pairs, units with player summaries
+# ---------------------------------------------------------------------------
+def test_get_roster_lines_requires_session(client):
+    """GET /roster/lines without an active session is a 404."""
+    resp = client.get("/roster/lines")
+    assert resp.status_code == 404
+
+
+def test_get_roster_lines_returns_expected_shape(client):
+    """GET /roster/lines returns lines, pairs, goalies, and special teams."""
+    client.post("/career/new", json={"seed": 22})
+    resp = client.get("/roster/lines")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "lines" in body
+    assert "pairs" in body
+    assert "goalie_starter" in body
+    assert "goalie_backup" in body
+    assert "pp_unit_1" in body
+    assert "pk_unit_1" in body
+
+    # Each line should have players
+    for line in body["lines"]:
+        assert "players" in line
+        for player in line["players"]:
+            assert "pid" in player
+            assert "name" in player
+            assert "overall" in player
+
+    # Same for pairs
+    for pair in body["pairs"]:
+        assert "players" in pair
+        assert len(pair["players"]) <= 2
+
+    # Goalies can be None or have player
+    if body["goalie_starter"]["player"] is not None:
+        assert "pid" in body["goalie_starter"]["player"]
+
+
+# ---------------------------------------------------------------------------
+# POST /roster/lines/auto -- auto-build lines
+# ---------------------------------------------------------------------------
+def test_auto_build_lines_requires_session(client):
+    """POST /roster/lines/auto without session is a 404."""
+    resp = client.post("/roster/lines/auto", json={"include_special_teams": False})
+    assert resp.status_code == 404
+
+
+def test_auto_build_lines_rebuilds_and_persists(client):
+    """POST /roster/lines/auto rebuilds lines and persists the change."""
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 23})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+
+    # Get initial lines
+    initial = client.get("/roster/lines").json()
+    initial_first_line = initial["lines"][0]["players"] if initial["lines"] else []
+
+    # Manually shuffle the roster on the world to change the optimal line ordering
+    world = session_store.get(sid)
+    team = world.user_team
+    team.lines = [[world.players[pid].pid for pid in team.lines[0][::-1]]]  # Reverse first line
+    session_store.save(sid, world)
+
+    # Now auto-build should restore an optimized order
+    resp = client.post("/roster/lines/auto", json={"include_special_teams": False})
+    assert resp.status_code == 200
+
+    # Verify the change is persisted (fetch again)
+    fetched = client.get("/roster/lines").json()
+    assert len(fetched["lines"]) > 0
+
+
+def test_auto_build_lines_with_special_teams(client):
+    """POST /roster/lines/auto with include_special_teams=true rebuilds PP/PK units."""
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 24})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+
+    # Get initial units
+    initial = client.get("/roster/lines").json()
+    initial_pp = set(p["pid"] for p in initial["pp_unit_1"]["players"])
+
+    # Manually clear the PP unit
+    world = session_store.get(sid)
+    world.user_team.pp_unit_1 = []
+    session_store.save(sid, world)
+
+    # Auto-build with special teams
+    resp = client.post("/roster/lines/auto", json={"include_special_teams": True})
+    assert resp.status_code == 200
+
+    body = resp.json()
+    rebuilt_pp = set(p["pid"] for p in body["pp_unit_1"]["players"])
+    assert len(rebuilt_pp) > 0  # Should have rebuilt a PP unit
+
+
+# ---------------------------------------------------------------------------
+# PUT /roster/lines -- manual line edits
+# ---------------------------------------------------------------------------
+def test_manual_line_edit_requires_session(client):
+    """PUT /roster/lines without session is a 404."""
+    resp = client.put("/roster/lines", json={"lines": []})
+    assert resp.status_code == 404
+
+
+def test_manual_line_edit_valid_swap(client):
+    """PUT /roster/lines with valid player ids updates the lines."""
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 25})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    # Get current first line
+    current_first_line = world.user_team.lines[0] if world.user_team.lines else []
+    if len(current_first_line) >= 3:
+        # Swap first two players
+        new_line = [current_first_line[1], current_first_line[0], current_first_line[2]]
+        resp = client.put("/roster/lines", json={"lines": [new_line]})
+        assert resp.status_code == 200
+
+        body = resp.json()
+        assert body["lines"][0]["players"][0]["pid"] == new_line[0]
+        assert body["lines"][0]["players"][1]["pid"] == new_line[1]
+
+
+def test_manual_line_edit_rejects_invalid_player_id(client):
+    """PUT /roster/lines rejects player ids not on the roster."""
+    client.post("/career/new", json={"seed": 26})
+
+    # Try to edit with a fake player id
+    resp = client.put("/roster/lines", json={"lines": [[99999, 88888, 77777]]})
+    assert resp.status_code == 400
+    assert "not on roster" in resp.json()["detail"]
+
+
+def test_manual_line_edit_rejects_duplicate_players_in_forward_lines(client):
+    """PUT /roster/lines rejects duplicate players across forward lines."""
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 27})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    # Create lines with a duplicate player
+    line1 = world.user_team.lines[0] if world.user_team.lines else [1, 2, 3]
+    line2 = world.user_team.lines[1] if len(world.user_team.lines) > 1 else [4, 5, 6]
+    dup_lines = [line1, [line1[0], 10, 11]]  # Duplicate first player of line1
+
+    resp = client.put("/roster/lines", json={"lines": dup_lines})
+    assert resp.status_code == 400
+    assert "duplicate" in resp.json()["detail"]
+
+
+def test_manual_line_edit_rejects_wrong_line_size(client):
+    """PUT /roster/lines rejects lines that don't have exactly 3 players."""
+    client.post("/career/new", json={"seed": 28})
+
+    # Try to edit with a line of 2 players
+    resp = client.put("/roster/lines", json={"lines": [[1, 2]]})
+    assert resp.status_code == 400
+    assert "expected 3" in resp.json()["detail"]
+
+
+def test_manual_pair_edit_valid_swap(client):
+    """PUT /roster/lines can update just pairs."""
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 29})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    current_pairs = world.user_team.pairs
+    if current_pairs and len(current_pairs) >= 2:
+        # Swap the first two pairs
+        new_pairs = [current_pairs[1], current_pairs[0]]
+        resp = client.put("/roster/lines", json={"pairs": new_pairs})
+        assert resp.status_code == 200
+
+        body = resp.json()
+        # Check that the pairs were updated
+        fetched_pairs = body["pairs"]
+        assert fetched_pairs[0]["players"][0]["pid"] == current_pairs[1][0]
+
+
+def test_manual_goalie_edit(client):
+    """PUT /roster/lines can update goalie assignments."""
+    from pucksim.web.session import session_store
+
+    client.post("/career/new", json={"seed": 30})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+    world = session_store.get(sid)
+
+    # Get available goalies
+    team = world.user_team
+    goalies = [p for p in [world.players[pid] for pid in team.roster if pid in world.players] if p.position == "G"]
+
+    if len(goalies) >= 2:
+        # Swap starter and backup
+        g1, g2 = goalies[0], goalies[1]
+        resp = client.put("/roster/lines", json={
+            "goalie_starter": g2.pid,
+            "goalie_backup": g1.pid,
+        })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["goalie_starter"]["player"]["pid"] == g2.pid
+        assert body["goalie_backup"]["player"]["pid"] == g1.pid
+
+
+# ---------------------------------------------------------------------------
+# GET /roster/tactics -- tactics and coach summary
+# ---------------------------------------------------------------------------
+def test_get_tactics_requires_session(client):
+    """GET /roster/tactics without session is a 404."""
+    resp = client.get("/roster/tactics")
+    assert resp.status_code == 404
+
+
+def test_get_tactics_returns_expected_shape(client):
+    """GET /roster/tactics returns tactics and coach profile."""
+    client.post("/career/new", json={"seed": 31})
+    resp = client.get("/roster/tactics")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "tactics" in body
+    assert "coach" in body
+
+    tactics = body["tactics"]
+    assert "forecheck_style" in tactics
+    assert "pp_style" in tactics
+    assert "pk_aggression" in tactics
+
+    coach = body["coach"]
+    assert "archetype" in coach
+    assert "line_juggling_patience" in coach
+    assert "pp_forwards" in coach
+    assert "shot_volume" in coach
+    assert "shot_quality_bias" in coach
+
+
+def test_get_tactics_shows_valid_values(client):
+    """Tactics should show valid discrete option values."""
+    client.post("/career/new", json={"seed": 32})
+    resp = client.get("/roster/tactics")
+    body = resp.json()
+
+    tactics = body["tactics"]
+    assert tactics["forecheck_style"] in ["passive", "balanced", "aggressive"]
+    assert tactics["pp_style"] in ["umbrella", "overload", "spread"]
+    assert tactics["pk_aggression"] in ["passive", "balanced", "aggressive"]
+
+
+# ---------------------------------------------------------------------------
+# PUT /roster/tactics -- update tactics
+# ---------------------------------------------------------------------------
+def test_put_tactics_requires_session(client):
+    """PUT /roster/tactics without session is a 404."""
+    resp = client.put("/roster/tactics", json={"forecheck_style": "aggressive"})
+    assert resp.status_code == 404
+
+
+def test_put_tactics_partial_update(client):
+    """PUT /roster/tactics updates only supplied fields."""
+    client.post("/career/new", json={"seed": 33})
+
+    # Get initial tactics
+    initial = client.get("/roster/tactics").json()
+    initial_forecheck = initial["tactics"]["forecheck_style"]
+    initial_pp = initial["tactics"]["pp_style"]
+
+    # Update only forecheck
+    new_forecheck = "aggressive" if initial_forecheck != "aggressive" else "passive"
+    resp = client.put("/roster/tactics", json={"forecheck_style": new_forecheck})
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["tactics"]["forecheck_style"] == new_forecheck
+    assert body["tactics"]["pp_style"] == initial_pp  # Unchanged
+
+
+def test_put_tactics_rejects_invalid_value(client):
+    """PUT /roster/tactics rejects invalid option values."""
+    client.post("/career/new", json={"seed": 34})
+
+    resp = client.put("/roster/tactics", json={"forecheck_style": "invalid_style"})
+    assert resp.status_code == 400
+    assert "invalid" in resp.json()["detail"]
+
+
+def test_put_tactics_all_three_fields(client):
+    """PUT /roster/tactics can update all three tactics at once."""
+    client.post("/career/new", json={"seed": 35})
+
+    resp = client.put("/roster/tactics", json={
+        "forecheck_style": "aggressive",
+        "pp_style": "spread",
+        "pk_aggression": "aggressive",
+    })
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert body["tactics"]["forecheck_style"] == "aggressive"
+    assert body["tactics"]["pp_style"] == "spread"
+    assert body["tactics"]["pk_aggression"] == "aggressive"
+
+
+# ---------------------------------------------------------------------------
 # POST /season/start
 # ---------------------------------------------------------------------------
 def test_start_season_generates_schedule_and_advances_phase(client):
