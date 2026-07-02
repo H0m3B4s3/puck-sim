@@ -118,6 +118,14 @@ class World:
     hall_of_fame: List[dict] = field(default_factory=list)     # résumé snapshots of inductees
     retired: List[dict] = field(default_factory=list)          # résumé snapshots of all retirees
 
+    # Per-game box scores (DEVPLAN.md Step 2.9b-ii): a place to store box score data
+    # from simmed games so GET /season/games/{gid}/boxscore can retrieve them later.
+    # Maps gid -> dict with 'home_score', 'away_score', 'went_ot', 'went_so',
+    # 'skater_box' (Dict[pid, stat_dict]), 'goalie_box' (Dict[pid, stat_dict]).
+    # Populated by advance_one_day() and POST /season/games/{gid}/sim. Serialized
+    # as an additive field (defaults to {} on old saves).
+    game_results: Dict[int, dict] = field(default_factory=dict)
+
     # -- dormant multi-league hook fields (DESIGN.md point 11) ------------------
     # NHL-only in v1; these exist now, empty, so Phase 2 (CHL/NCAA, DEVPLAN.md
     # Step 3.2) and Phase 3 (Europe, Step 3.3) can populate them later without a
@@ -244,6 +252,7 @@ class World:
             "playoff_discipline_mode": self.playoff_discipline_mode,
             "bracket": self.bracket,
             "salary_cap": self.salary_cap,
+            "game_results": dict(self.game_results),
             "mode": self.mode,
             "other_teams": {str(t): team.to_dict() for t, team in self.other_teams.items()},
             "recruits": list(self.recruits),
@@ -272,6 +281,21 @@ class World:
         )
         world.bracket = d.get("bracket")
         world.salary_cap = d.get("salary_cap", SALARY_CAP_BASE)
+        # Deserialize game_results, converting nested player-id keys back to integers
+        game_results_raw = d.get("game_results", {})
+        world.game_results = {}
+        for gid_str, game_data in game_results_raw.items():
+            gid = int(gid_str)
+            game_data_restored = dict(game_data)
+            if 'skater_box' in game_data_restored:
+                game_data_restored['skater_box'] = {
+                    int(pid_str): stats for pid_str, stats in game_data_restored['skater_box'].items()
+                }
+            if 'goalie_box' in game_data_restored:
+                game_data_restored['goalie_box'] = {
+                    int(pid_str): stats for pid_str, stats in game_data_restored['goalie_box'].items()
+                }
+            world.game_results[gid] = game_data_restored
         world.mode = d.get("mode", "nhl")
         world.other_teams = {
             int(t): Team.from_dict(td) for t, td in d.get("other_teams", {}).items()
