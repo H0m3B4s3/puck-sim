@@ -32,6 +32,18 @@ Both ``generate_skater`` and ``generate_goalie`` return a fully-formed
 ``Player`` with ``team_id=None`` -- the caller (``leaguegen.build_world``)
 signs the player onto a team afterward via ``World.sign_player()``, keeping
 roster/team_id bookkeeping in one place (Step 1.9's documented invariant).
+
+``generate_goalie`` additionally runs a 5th step after calibration (DEVPLAN.md Step 2.7,
+"Generation-time rarity correlation"): a gk_consistency rarity gate that resamples
+``gk_consistency`` from a capped low/mid band by default once the goalie's calibrated
+overall clears a high-skill threshold, UNLESS a separate low-probability "reliability
+roll" succeeds (in which case it's resampled from the elite band instead) -- see the
+module-level comment above ``_GK_HIGH_SKILL_THRESHOLD``/``_GK_RELIABILITY_ROLL_CHANCE``
+for the full mechanism and derivation. This is a SEPARATE, ADDITIONAL gate from the
+rare-archetype gate in step 1 above -- not the same mechanism, see that comment block.
+This makes "elite skill AND elite year-to-year consistency" (a true franchise goalie)
+a genuinely rare combination rather than something that falls out for free whenever a
+high-overall goalie happens to also roll a high gk_consistency independently.
 """
 from __future__ import annotations
 
@@ -132,6 +144,89 @@ _SHOOTS_L_WEIGHT = 0.60
 _SHOOTS_R_WEIGHT = 0.40
 
 
+# --- gk_consistency generation-time rarity gate (DEVPLAN.md Step 2.7, "Generation-time
+# rarity correlation") ------------------------------------------------------------------
+# High skill AND high gk_consistency together must be RARE -- a true "franchise goalie"
+# (Vasilevskiy/Shesterkin/Hellebuyck-caliber: reliably good-to-very-good EVERY year, not
+# just talented) is the scarce, special case; a bad-or-average goalie who happens to be
+# consistently bad/average is common and unremarkable. Left alone, _build_calibrated_ratings
+# above would sample gk_consistency exactly like every other rating -- independently, near
+# target_overall -- which would make "elite skill + elite consistency" just as common as
+# "elite skill + anything else," contradicting the whole point of this gate.
+#
+# This is a SEPARATE, ADDITIONAL mechanism from the rare-archetype gate above
+# (_RARE_ARCHETYPE_MIN_OVERALL/_RARE_ARCHETYPE_CHANCE) -- that gate decides which
+# *archetype* (skew template) a player gets; this gate decides which *band* a single
+# rating (gk_consistency) gets resampled from, independent of archetype choice. A
+# "Battler Goalie" archetype (which already skews gk_consistency +12, see attributes.py)
+# and a plain "Reflex Goalie" archetype are both subject to this same post-archetype
+# resample -- the two mechanisms compose rather than overlap.
+#
+# Mechanism (per DEVPLAN.md's concrete spec):
+#   1. Only engages when the goalie's calibrated overall clears _GK_HIGH_SKILL_THRESHOLD
+#      (a high-skill cutoff). Below it, gk_consistency is left exactly as
+#      _build_calibrated_ratings already drew it (normal/independent sampling, no gating --
+#      "a bad goalie being consistently bad is unremarkable").
+#   2. Above that threshold, gk_consistency is by DEFAULT resampled from a capped low/mid
+#      band (_GK_CONSISTENCY_COMMON_MAX) -- representing the much more common "talented but
+#      streaky" case -- UNLESS a separate, low-probability "reliability roll"
+#      (_GK_RELIABILITY_ROLL_CHANCE) succeeds, in which case gk_consistency is instead
+#      resampled from the elite band (_GK_CONSISTENCY_ELITE_MIN and up). Landing in the
+#      elite band therefore requires BOTH an independent high-skill roll (governed by
+#      target_overall's own distribution) AND this low-probability reliability roll --
+#      exactly the "requires winning both rolls" scarcity DEVPLAN.md calls for.
+#
+# Threshold derivation (_GK_HIGH_SKILL_THRESHOLD = 76, "top ~15-20% of goalie talent" per
+# DEVPLAN.md): gen/leaguegen.py generates every goalie (like every skater) from a
+# Gaussian(_OVERALL_MU=66.0, _OVERALL_SIGMA=10.0) target_overall (verified directly against
+# leaguegen.py -- goalies and skaters share the same target-overall distribution, just a
+# separate archetype/rating vocabulary). Under that distribution, P(target_overall >= 76)
+# ~= 15.9% (standard normal tail, (76-66)/10 = 1.0 sigma above the mean) -- squarely inside
+# DEVPLAN's stated "top 15-20%" band, so 76 is used as-is rather than hand-tuned further.
+#
+# Reliability-roll-chance derivation (_GK_RELIABILITY_ROLL_CHANCE = 0.08), shown explicitly
+# per this codebase's established convention for probability tunables (see playergen.py's
+# own _RARE_ARCHETYPE_CHANCE derivation immediately above, and DEVPLAN.md Step 2.7's design
+# note pointing back at exactly that convention):
+#   leaguegen.py generates GOALIES_PER_TEAM=2 goalies/team * NUM_TEAMS=32 = 64 goalies ONE
+#     TIME at league creation; ~15.9% clear the 76 high-skill threshold =>
+#     ~10.15 high-skill-eligible goalies, once.
+#   gen/prospectgen.py generates ~15 goalie prospects/season (PROSPECT_GOALIE_FRACTION=0.10
+#     * PROSPECT_POOL_SIZE=150), drawn from a MUCH lower target_overall distribution
+#     (_PROSPECT_OVERALL_MU=52.0, since a prospect's *current* ability is deliberately
+#     rawer than an established veteran's -- see prospectgen.py's own docstring); only
+#     ~0.38% of THAT distribution clears 76, so high-skill goalie prospects are a rare
+#     event on their own (~0.057/season, ~0.57 over a decade) well before this gate even
+#     engages.
+#   Total high-skill-eligible goalies over a 10-season span: ~10.15 (one-time roster fill,
+#     dominates the total) + ~0.57 (draft classes) =~ 10.7.
+# Target: DEVPLAN.md frames the elite tier as "top 3-5 in the league" (a 32-team league
+# fields 64 starting-caliber goalies at leaguegen) -- i.e. only a handful of truly elite-
+# skill-AND-elite-consistency "franchise goalies" should exist at any one time, not dozens.
+# chance = 0.08 (near the top of DEVPLAN's explicitly suggested 5-10% band, chosen over a
+# lower value in that band because the high-skill-eligible pool itself is already fairly
+# small at ~10.7/decade) gives an expected ~10.15 * 0.08 =~ 0.81 franchise-tier goalies per
+# one-time league generation -- comfortably inside "only a handful league-wide," and
+# consistent with real hockey's Vasilevskiy/Shesterkin/Hellebuyck tier being genuinely
+# scarce (often literally zero-to-a-few such goalies existing at once), not a guarantee
+# every league gets one.
+_GK_HIGH_SKILL_THRESHOLD = 76
+
+# gk_consistency resample bands (25-99 scale, same RATING_MIN/MAX bounds as every other
+# rating). PROVISIONAL/TUNABLE magnitudes -- no real save-percentage-variance data is being
+# fit here (none exists yet to fit against), just plausible band widths: the "common"
+# band's ceiling sits at the scale's rough midpoint (a high-skill-but-streaky goalie is
+# capped at "average consistency," never accidentally elite), while the "elite" band's
+# floor sits well into the upper quartile (a goalie who wins the reliability roll is
+# genuinely, unambiguously more consistent than the pack, not just barely above the cap).
+_GK_CONSISTENCY_COMMON_MIN = 25
+_GK_CONSISTENCY_COMMON_MAX = 65
+_GK_CONSISTENCY_ELITE_MIN = 80
+_GK_CONSISTENCY_ELITE_MAX = 99
+
+_GK_RELIABILITY_ROLL_CHANCE = 0.08
+
+
 def _pick_shoots(rng: Rng) -> str:
     return rng.weighted_one(("L", "R"), (_SHOOTS_L_WEIGHT, _SHOOTS_R_WEIGHT))
 
@@ -186,6 +281,35 @@ def _build_calibrated_ratings(rng: Rng, position: str, target_overall: int,
             ratings[r] = clamp_rating(ratings[r] + gap)
 
     return ratings
+
+
+def _apply_gk_consistency_rarity_gate(rng: Rng, ratings: Dict[str, int], calibrated_overall: int
+                                       ) -> None:
+    """Resample ``ratings["gk_consistency"]`` per the rarity-correlation gate above.
+
+    Mutates ``ratings`` in place. Below ``_GK_HIGH_SKILL_THRESHOLD`` this is a no-op --
+    gk_consistency stays exactly as ``_build_calibrated_ratings`` already drew it (normal,
+    independent sampling). At or above the threshold, gk_consistency is overwritten:
+    the elite band only on a successful (and independent-of-the-skill-roll)
+    ``_GK_RELIABILITY_ROLL_CHANCE`` roll, the capped common band otherwise.
+
+    Deliberately does NOT re-run the overall-calibration loop afterward: gk_consistency is
+    only a GOALIE_WEIGHTS-weighted 0.10 of the goalie overall, so overwriting it can only
+    move the final ``overall()`` a small, bounded amount off ``target_overall`` -- the same
+    kind of small post-hoc drift archetype skews already introduce and that
+    ``_build_calibrated_ratings``'s own 2-iteration calibration is explicitly documented as
+    not fully erasing (see that function's docstring: "not an exact solver"). Re-calibrating
+    here would fight this gate's own resample right back toward the pre-resample value
+    through the *other* ratings, partially undoing the very rarity effect this function
+    exists to create.
+    """
+    if calibrated_overall < _GK_HIGH_SKILL_THRESHOLD:
+        return
+    if rng.chance(_GK_RELIABILITY_ROLL_CHANCE):
+        band = (_GK_CONSISTENCY_ELITE_MIN, _GK_CONSISTENCY_ELITE_MAX)
+    else:
+        band = (_GK_CONSISTENCY_COMMON_MIN, _GK_CONSISTENCY_COMMON_MAX)
+    ratings["gk_consistency"] = clamp_rating(rng.uniform(*band))
 
 
 def _potential(rng: Rng, ovr: int, age: int) -> int:
@@ -266,7 +390,12 @@ def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int) -> Player
     """Generate one goalie Player at a given age/target overall.
 
     Same shape as ``generate_skater`` but over ``ALL_GOALIE_RATINGS`` and the
-    goalie-specific archetype pools (both keyed just to "G").
+    goalie-specific archetype pools (both keyed just to "G"). Also applies the
+    gk_consistency generation-time rarity gate (DEVPLAN.md Step 2.7, see the
+    module-level comment above ``_GK_HIGH_SKILL_THRESHOLD``) AFTER calibration, so
+    the gate sees the player's real, final skill level rather than the pre-skew
+    target -- a genuinely elite-skill goalie (post-archetype-skew) is what should be
+    rare when paired with elite consistency, not merely a high initial target.
     """
     position = "G"
     archetype = _choose_archetype(
@@ -274,6 +403,7 @@ def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int) -> Player
         GOALIE_ARCHETYPES_BY_POSITION, RARE_GOALIE_ARCHETYPES_BY_POSITION
     )
     ratings = _build_calibrated_ratings(rng, position, target_overall, ALL_GOALIE_RATINGS, archetype)
+    _apply_gk_consistency_rarity_gate(rng, ratings, overall(position, ratings))
     final_ovr = overall(position, ratings)
 
     return Player(
