@@ -243,17 +243,35 @@ def get_boxscore(
     if not game.played:
         raise HTTPException(status_code=400, detail=f"game {gid} not yet played")
 
-    # Look up box score from world.game_results
+    # Look up box score from world.game_results. Identity fields (name/position/team_id)
+    # aren't part of the stored stat-line dict (see SkaterBoxScoreDTO's docstring) -- resolved
+    # here from world.players so a frontend can label rows for BOTH teams, not just the
+    # session's own user_team (which /roster already covers with names).
     skater_box: Dict[int, SkaterBoxScoreDTO] = {}
     goalie_box: Dict[int, GoalieBoxScoreDTO] = {}
 
     if gid in world.game_results:
         stored = world.game_results[gid]
-        # Reconstruct DTOs from stored dicts
-        for pid, data in stored.get('skater_box', {}).items():
-            skater_box[int(pid)] = SkaterBoxScoreDTO(**data)
-        for pid, data in stored.get('goalie_box', {}).items():
-            goalie_box[int(pid)] = GoalieBoxScoreDTO(**data)
+        for pid_str, data in stored.get('skater_box', {}).items():
+            pid = int(pid_str)
+            player = world.players.get(pid)
+            skater_box[pid] = SkaterBoxScoreDTO(
+                pid=pid,
+                name=player.name if player is not None else "",
+                position=player.position if player is not None else "",
+                team_id=player.team_id if player is not None else None,
+                **data,
+            )
+        for pid_str, data in stored.get('goalie_box', {}).items():
+            pid = int(pid_str)
+            player = world.players.get(pid)
+            goalie_box[pid] = GoalieBoxScoreDTO(
+                pid=pid,
+                name=player.name if player is not None else "",
+                position=player.position if player is not None else "",
+                team_id=player.team_id if player is not None else None,
+                **data,
+            )
 
     return BoxScoreResponse(
         gid=gid,
