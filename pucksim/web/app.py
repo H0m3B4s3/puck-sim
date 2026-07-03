@@ -20,7 +20,16 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from pucksim.web.routers import career, league, players, playoffs, roster, season, transactions
+from pucksim.web.routers import (
+    career,
+    league,
+    offseason,
+    players,
+    playoffs,
+    roster,
+    season,
+    transactions,
+)
 
 # Any localhost/127.0.0.1 origin, any port -- covers Vite's default dev-server port plus
 # whatever port it picks if that one's already taken, without hardcoding a specific number.
@@ -53,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(season.router)
     app.include_router(transactions.router)
     app.include_router(playoffs.router)
+    app.include_router(offseason.router)
 
     return app
 

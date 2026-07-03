@@ -233,6 +233,8 @@ class TransactionPlayerSummaryDTO(BaseModel):
     age: int
     overall: int
     team_id: Optional[int] = None
+    ask: int = 0  # Market salary (wave-adjusted if in offseason)
+    preferred_years: int = 1  # Preferred contract length
 
 
 # ---------------------------------------------------------------------------

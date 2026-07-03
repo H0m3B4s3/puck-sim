@@ -53,6 +53,13 @@ class TradeOfferRequest(BaseModel):
     user_receives: List[int] = []  # player ids
 
 
+class TradeValidationResponse(BaseModel):
+    legal: bool
+    legal_reason: str
+    accepts: bool
+    ai_reason: str
+
+
 @router.post("/trades/propose", response_model=TradeResponseDTO)
 def propose_trade(
     body: TradeOfferRequest,
@@ -84,14 +91,108 @@ def propose_trade(
 
 
 # ---------------------------------------------------------------------------
+# POST /transactions/trades/validate
+# ---------------------------------------------------------------------------
+@router.post("/trades/validate", response_model=TradeValidationResponse)
+def validate_trade(
+    body: TradeOfferRequest,
+    world=Depends(get_world),
+) -> TradeValidationResponse:
+    """Validate a trade offer without executing it (pure read).
+
+    Checks legality (cap, roster, no-trade clauses) and AI acceptance threshold.
+    Does not save the world.
+    """
+    user_team = world.teams.get(world.user_team_id)
+    if user_team is None:
+        raise HTTPException(status_code=404, detail="No user team set.")
+
+    offer = trades.TradeOffer(
+        a=user_team.tid,
+        b=body.other_team_id,
+        a_sends=body.user_sends,
+        b_sends=body.user_receives,
+    )
+
+    legal, legal_why = trades.validate_trade(world, offer)
+    accepts = False
+    ai_why = "Trade is not legal."
+
+    if legal:
+        accepts, ai_why = trades.ai_evaluates(world, offer, body.other_team_id)
+
+    return TradeValidationResponse(
+        legal=legal,
+        legal_reason=legal_why,
+        accepts=accepts,
+        ai_reason=ai_why,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /transactions/trades/execute
+# ---------------------------------------------------------------------------
+class TradeExecuteResponse(BaseModel):
+    executed: bool
+    reason: str
+
+
+@router.post("/transactions/trades/execute", response_model=TradeExecuteResponse)
+def execute_trade(
+    body: TradeOfferRequest,
+    world=Depends(get_world),
+    sid: str = Depends(get_session_id),
+) -> TradeExecuteResponse:
+    """Validate and execute a trade if both legal and AI-accepted.
+
+    Returns {executed: true/false, reason: explanation}.
+    """
+    user_team = world.teams.get(world.user_team_id)
+    if user_team is None:
+        raise HTTPException(status_code=404, detail="No user team set.")
+
+    offer = trades.TradeOffer(
+        a=user_team.tid,
+        b=body.other_team_id,
+        a_sends=body.user_sends,
+        b_sends=body.user_receives,
+    )
+
+    # Validate legality
+    legal, legal_why = trades.validate_trade(world, offer)
+    if not legal:
+        raise HTTPException(status_code=400, detail=legal_why)
+
+    # Evaluate AI acceptance
+    accepts, ai_why = trades.ai_evaluates(world, offer, body.other_team_id)
+    if not accepts:
+        return TradeExecuteResponse(executed=False, reason=ai_why)
+
+    # Execute the trade
+    trades.execute_trade(world, offer)
+    session_store.save(sid, world)
+
+    return TradeExecuteResponse(executed=True, reason="Trade completed.")
+
+
+# ---------------------------------------------------------------------------
 # GET /transactions/freeagents
 # ---------------------------------------------------------------------------
 @router.get("/freeagents", response_model=List[TransactionPlayerSummaryDTO])
 def get_free_agents(world=Depends(get_world)) -> List[TransactionPlayerSummaryDTO]:
-    """Current free-agent board with lightweight player summaries."""
-    fa_players = world.free_agent_players()
-    # Sort by overall (highest first) to match draft board behavior
-    fa_players = sorted(fa_players, key=lambda p: p.overall, reverse=True)
+    """Current free-agent board with lightweight player summaries.
+
+    Includes wave-adjusted ask (market salary) and preferred contract years when
+    in the offseason FA market (fa_wave is set), otherwise uses full market salary.
+    """
+    # Use wave pool when in offseason, otherwise all FAs
+    if getattr(world, "fa_wave", None) is not None:
+        fa_players = freeagency.fa_wave_pool(world)
+    else:
+        fa_players = world.free_agent_players()
+        # Sort by overall (highest first) to match draft board behavior
+        fa_players = sorted(fa_players, key=lambda p: p.overall, reverse=True)
+
     return [
         TransactionPlayerSummaryDTO(
             pid=p.pid,
@@ -100,6 +201,8 @@ def get_free_agents(world=Depends(get_world)) -> List[TransactionPlayerSummaryDT
             age=p.age,
             overall=p.overall,
             team_id=p.team_id,
+            ask=freeagency.wave_market_salary(world, p),
+            preferred_years=freeagency.contract_years_for(p),
         )
         for p in fa_players
     ]
