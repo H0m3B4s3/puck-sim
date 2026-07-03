@@ -434,6 +434,15 @@ def regular_season_complete(world: World) -> bool:
     return all(g.played for g in world.schedule)
 
 
+def next_game_for_team(world: World, tid: int) -> Optional[Game]:
+    """Return the next unplayed game involving ``tid``, ordered by (day, gid).
+
+    Returns ``None`` if the team has no remaining unplayed games.
+    """
+    candidates = [g for g in world.schedule if not g.played and g.involves(tid)]
+    return min(candidates, key=lambda g: (g.day, g.gid)) if candidates else None
+
+
 def start_season(world: World) -> None:
     """Reset records/stats and build a fresh regular-season schedule."""
     world.schedule = generate_schedule(world)

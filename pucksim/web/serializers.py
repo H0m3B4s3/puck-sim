@@ -103,15 +103,62 @@ class WorldSummaryDTO(BaseModel):
     day: int
     standings_rule: str
     user_team_id: Optional[int] = None
+    regular_season_complete: bool = False
+    offseason_stage: Optional[str] = None
+    trade_deadline_day: Optional[int] = None
+    trade_deadline_passed: bool = False
+
+
+def season_over(world: World) -> bool:
+    """Check if the regular season is complete.
+
+    Computes: world.phase != Phase.PRESEASON and bool(world.schedule) and
+    all(g.played for g in world.schedule if not g.is_playoff).
+
+    This guards against the bare regular_season_complete() function returning True
+    on an empty preseason schedule (all([]) == True). The phase guard means the flag
+    stays true through playoffs/draft/FA until start_season() regenerates the schedule.
+    """
+    from pucksim.models.league import Phase
+
+    if world.phase == Phase.PRESEASON:
+        return False
+    if not world.schedule:
+        return False
+    return all(g.played for g in world.schedule if not g.is_playoff)
+
+
+def _offseason_stage(world: World) -> Optional[str]:
+    """Derive the offseason stage from world state (no new World field needed).
+
+    Returns one of: "pre_draft", "draft", "free_agency", or None.
+    """
+    from pucksim.models.league import Phase
+
+    if world.phase == Phase.DRAFT:
+        if world.draft_class is None:
+            return "pre_draft"
+        if world.draft_class.complete:
+            return "free_agency"
+        return "draft"
+    if world.phase == Phase.FREE_AGENCY:
+        return "free_agency"
+    return None
 
 
 def world_summary(world: World) -> WorldSummaryDTO:
+    from pucksim.systems.trades import trade_deadline_day, trade_deadline_passed
+
     return WorldSummaryDTO(
         season_year=world.season_year,
         phase=world.phase,
         day=world.day,
         standings_rule=world.standings_rule,
         user_team_id=world.user_team_id,
+        regular_season_complete=season_over(world),
+        offseason_stage=_offseason_stage(world),
+        trade_deadline_day=trade_deadline_day(world),
+        trade_deadline_passed=trade_deadline_passed(world),
     )
 
 
