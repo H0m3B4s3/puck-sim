@@ -23,9 +23,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from pucksim.models.league import Phase
-from pucksim.web.serializers import SkaterBoxScoreDTO, GoalieBoxScoreDTO, WorldSummaryDTO, world_summary
+from pucksim.web.serializers import SkaterBoxScoreDTO, GoalieBoxScoreDTO, WorldSummaryDTO, world_summary, season_over
 from pucksim.web.session import get_world, session_store, get_session_id
-from pucksim.sim.season import advance_one_day, sim_one, start_season
+from pucksim.sim.season import advance_one_day, sim_one, start_season, next_game_for_team
 
 router = APIRouter(prefix="/season", tags=["season"])
 
@@ -115,6 +115,7 @@ class AdvanceDayResponse(BaseModel):
     day: int
     phase: str
     games_played: List[GamePlayedDTO]
+    season_complete: bool
 
 
 @router.post("/advance-day", response_model=AdvanceDayResponse)
@@ -125,7 +126,8 @@ def advance_day(
     """Simulate all games scheduled for today, advance the day, and persist the World back to
     the session.
 
-    Returns the new day/phase and a summary of each game played today.
+    Returns the new day/phase, a summary of each game played today, and whether the regular
+    season is now complete.
     """
     games_played = advance_one_day(world)
     session_store.save(sid, world)
@@ -143,6 +145,171 @@ def advance_day(
             )
             for g in games_played
         ],
+        season_complete=season_over(world),
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /season/advance-week
+# ---------------------------------------------------------------------------
+class AdvanceWeekRequest(BaseModel):
+    """Request to advance the season by a number of days."""
+    days: int = 7
+
+
+class AdvanceWeekResponse(BaseModel):
+    """Result of advancing the season by multiple days."""
+    day: int
+    phase: str
+    days_advanced: int
+    games_played: List[GamePlayedDTO]
+    user_games: List[GamePlayedDTO]
+    season_complete: bool
+
+
+@router.post("/advance-week", response_model=AdvanceWeekResponse)
+def advance_week(
+    req: AdvanceWeekRequest,
+    world=Depends(get_world),
+    sid: str = Depends(get_session_id),
+) -> AdvanceWeekResponse:
+    """Advance the season by multiple days (1-14) in one HTTP round-trip.
+
+    Simulates games day-by-day until the requested number of days have been simulated
+    or the season is complete, whichever comes first. Only legal during the regular season.
+
+    Returns: current day/phase, number of days advanced, all games played (including playoffs),
+    games involving the user's team, and whether the season is now complete.
+    """
+    # Clamp days to 1-14
+    days = max(1, min(14, req.days))
+
+    # Only legal during regular season
+    if world.phase != Phase.REGULAR_SEASON:
+        raise HTTPException(
+            status_code=400,
+            detail=f"advance-week only legal during regular season (current phase={world.phase!r})",
+        )
+
+    all_games_played = []
+    days_advanced = 0
+
+    for _ in range(days):
+        if season_over(world):
+            break
+        games_played = advance_one_day(world)
+        all_games_played.extend(games_played)
+        days_advanced += 1
+
+    session_store.save(sid, world)
+
+    # Filter to user team games
+    user_games = [
+        g for g in all_games_played
+        if g.home == world.user_team_id or g.away == world.user_team_id
+    ]
+
+    return AdvanceWeekResponse(
+        day=world.day,
+        phase=world.phase,
+        days_advanced=days_advanced,
+        games_played=[
+            GamePlayedDTO(
+                gid=g.gid,
+                home=g.home,
+                away=g.away,
+                home_score=g.home_score,
+                away_score=g.away_score,
+            )
+            for g in all_games_played
+        ],
+        user_games=[
+            GamePlayedDTO(
+                gid=g.gid,
+                home=g.home,
+                away=g.away,
+                home_score=g.home_score,
+                away_score=g.away_score,
+            )
+            for g in user_games
+        ],
+        season_complete=season_over(world),
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /season/sim-to-next-game
+# ---------------------------------------------------------------------------
+class SimToNextGameResponse(BaseModel):
+    """Result of simulating to the next unplayed game for the user's team."""
+    played: bool
+    gid: Optional[int] = None
+    day: Optional[int] = None
+    phase: str
+    home: Optional[int] = None
+    away: Optional[int] = None
+    home_score: Optional[int] = None
+    away_score: Optional[int] = None
+    went_ot: Optional[bool] = None
+    went_so: Optional[bool] = None
+    season_complete: bool
+
+
+@router.post("/sim-to-next-game", response_model=SimToNextGameResponse)
+def sim_to_next_game(
+    world=Depends(get_world),
+    sid: str = Depends(get_session_id),
+) -> SimToNextGameResponse:
+    """Simulate day-by-day until the user's team plays their next game.
+
+    Only legal during the regular season. If the user's team has no remaining games,
+    simulates until the season is complete. Returns the next game's details if found
+    (played=True), or played=False if the season ended before the user's team played again.
+    """
+    # Only legal during regular season
+    if world.phase != Phase.REGULAR_SEASON:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sim-to-next-game only legal during regular season (current phase={world.phase!r})",
+        )
+
+    target = next_game_for_team(world, world.user_team_id)
+
+    if target is None:
+        # No more games for this team; sim until season is over
+        max_iterations = len(world.schedule)
+        for _ in range(max_iterations):
+            if season_over(world):
+                break
+            advance_one_day(world)
+        session_store.save(sid, world)
+        return SimToNextGameResponse(
+            played=False,
+            phase=world.phase,
+            season_complete=season_over(world),
+        )
+
+    # Sim until the target game is played
+    max_iterations = target.day - world.day + 2  # Guard against infinite loops
+    for _ in range(max_iterations):
+        if target.played:
+            break
+        advance_one_day(world)
+
+    session_store.save(sid, world)
+
+    return SimToNextGameResponse(
+        played=target.played,
+        gid=target.gid if target.played else None,
+        day=target.day if target.played else None,
+        phase=world.phase,
+        home=target.home if target.played else None,
+        away=target.away if target.played else None,
+        home_score=target.home_score if target.played else None,
+        away_score=target.away_score if target.played else None,
+        went_ot=target.went_ot if target.played else None,
+        went_so=target.went_so if target.played else None,
+        season_complete=season_over(world),
     )
 
 
