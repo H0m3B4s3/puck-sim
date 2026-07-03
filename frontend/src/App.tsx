@@ -15,6 +15,8 @@ import {
   ScreenPlaceholder,
   FaceoffDotSpinner,
 } from "./ui";
+import { BoxScore } from "./screens/BoxScore";
+import { Transactions } from "./screens/Transactions";
 
 function HomeScreen({ world }: { world: WorldSummary }) {
   return (
@@ -104,13 +106,9 @@ export default function App() {
           <ScreenPlaceholder title="Schedule" step="Step 2.10c" />
         );
       case "/box-score":
-        return (
-          <ScreenPlaceholder title="Box Score" step="Step 2.10d" />
-        );
+        return <BoxScore />;
       case "/transactions":
-        return (
-          <ScreenPlaceholder title="Transactions" step="Step 2.10d" />
-        );
+        return <Transactions />;
       default:
         return (
           <ScreenPlaceholder title="Not Found" step="Step 2.10b" />
