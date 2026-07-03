@@ -17,6 +17,8 @@ import {
   FaceoffDotSpinner,
   Panel,
 } from "./ui";
+import { BoxScore } from "./screens/BoxScore";
+import { Transactions } from "./screens/Transactions";
 import { StandingsScreen } from "./screens/Standings";
 import { ScheduleScreen } from "./screens/Schedule";
 import { RosterScreen } from "./screens/Roster";
@@ -206,13 +208,9 @@ export default function App() {
       case "/schedule":
         return <ScheduleScreen world={world} />;
       case "/box-score":
-        return (
-          <ScreenPlaceholder title="Box Score" step="Step 2.10d" />
-        );
+        return <BoxScore />;
       case "/transactions":
-        return (
-          <ScreenPlaceholder title="Transactions" step="Step 2.10d" />
-        );
+        return <Transactions />;
       default:
         return (
           <ScreenPlaceholder title="Not Found" step="Step 2.10b" />

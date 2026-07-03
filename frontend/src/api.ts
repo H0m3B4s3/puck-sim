@@ -193,6 +193,102 @@ export interface AdvanceDayResponse {
   games_played: GamePlayedSummary[];
 }
 
+// --- box score DTOs (mirrors pucksim/web/serializers.py) --------------------
+// pid/name/position/team_id (added post-review, see routers/season.py's
+// get_boxscore()) let a box-score screen label rows for BOTH teams, not just
+// the session's own user_team.
+
+export interface SkaterBoxScoreDTO {
+  pid: number;
+  name: string;
+  position: string;
+  team_id: number | null;
+  gp: number;
+  gs: number;
+  secs: number;
+  g: number;
+  a: number;
+  sog: number;
+  pim: number;
+  hits: number;
+  blocks: number;
+  giveaways: number;
+  takeaways: number;
+  fo_won: number;
+  fo_lost: number;
+  plus_minus: number;
+  corsi_for: number;
+  corsi_against: number;
+  fenwick_for: number;
+  fenwick_against: number;
+}
+
+export interface GoalieBoxScoreDTO {
+  pid: number;
+  name: string;
+  position: string;
+  team_id: number | null;
+  gp: number;
+  gs: number;
+  secs: number;
+  shots_faced: number;
+  saves: number;
+  goals_against: number;
+  wins: number;
+  losses: number;
+  otl: number;
+  shutouts: number;
+}
+
+export interface BoxScoreResponse {
+  gid: number;
+  home_score: number;
+  away_score: number;
+  went_ot: boolean;
+  went_so: boolean;
+  skater_box: Record<number, SkaterBoxScoreDTO>;
+  goalie_box: Record<number, GoalieBoxScoreDTO>;
+}
+
+// --- transactions DTOs (mirrors pucksim/web/serializers.py) -----------------
+
+export interface CapSummaryDTO {
+  payroll: number;
+  cap_space: number;
+  over_cap: boolean;
+  salary_cap: number;
+}
+
+export interface TransactionPlayerSummaryDTO {
+  pid: number;
+  name: string;
+  position: string;
+  age: number;
+  overall: number;
+  team_id: number | null;
+}
+
+export interface TradeResponseDTO {
+  accepted: boolean;
+  reason: string;
+}
+
+export interface DraftBoardEntryDTO {
+  pid: number;
+  name: string;
+  position: string;
+  age: number;
+  overall: number;
+  scouted_potential: number;
+}
+
+export interface DraftBoardDTO {
+  in_draft: boolean;
+  board: DraftBoardEntryDTO[];
+  team_on_clock: number | null;
+  round_number: number | null;
+}
+
 // --- request bodies ----------------------------------------------------------
 
 export interface NewCareerRequest {
@@ -215,6 +311,21 @@ export interface TacticsUpdateRequest {
   forecheck_style?: string;
   pp_style?: string;
   pk_aggression?: string;
+}
+
+export interface TradeOfferRequest {
+  other_team_id: number;
+  user_sends: number[];
+  user_receives: number[];
+}
+
+export interface SignFreeAgentRequest {
+  salary?: number;
+  years?: number;
+}
+
+export interface DraftPickRequest {
+  prospect_id: number;
 }
 
 // --- client --------------------------------------------------------------
@@ -275,6 +386,44 @@ export const api = {
 
   /** GET /season/playoffs/bracket -- playoff bracket (null if not in playoffs yet). */
   getPlayoffBracket: () => get<Record<string, unknown> | null>("/season/playoffs/bracket"),
+
+  /** POST /season/games/{gid}/sim -- simulate a single game on demand. */
+  simGame: (gid: number) =>
+    post<{ gid: number; home_score: number; away_score: number; went_ot: boolean; went_so: boolean }>(
+      `/season/games/${gid}/sim`,
+    ),
+
+  /** GET /season/games/{gid}/boxscore -- retrieve the box score for a played game. */
+  getBoxScore: (gid: number) => get<BoxScoreResponse>(`/season/games/${gid}/boxscore`),
+
+  // --- Transactions endpoints (Step 2.9b-iii) ---
+
+  /** GET /transactions/cap -- cap summary for the user's team. */
+  getCapSummary: () => get<CapSummaryDTO>("/transactions/cap"),
+
+  /** GET /transactions/freeagents -- current free-agent board. */
+  getFreeAgents: () => get<TransactionPlayerSummaryDTO[]>("/transactions/freeagents"),
+
+  /** POST /transactions/freeagents/{pid}/sign -- sign a free agent. */
+  signFreeAgent: (pid: number, body?: SignFreeAgentRequest) =>
+    post<{ success: boolean; message: string }>(`/transactions/freeagents/${pid}/sign`, body || {}),
+
+  /** POST /transactions/trades/propose -- propose a trade. */
+  proposeTrade: (body: TradeOfferRequest) =>
+    post<TradeResponseDTO>("/transactions/trades/propose", body),
+
+  /** GET /transactions/draft/board -- current draft board state. */
+  getDraftBoard: () => get<DraftBoardDTO>("/transactions/draft/board"),
+
+  /** POST /transactions/draft/pick -- make a draft pick for the user's team. */
+  makeDraftPick: (prospectId: number) =>
+    post<{ prospect_id: number; prospect_name: string; signed: boolean; message: string }>(
+      "/transactions/draft/pick",
+      { prospect_id: prospectId },
+    ),
+
+  /** GET /transactions/awards -- end-of-season awards. */
+  getAwards: () => get<{ season_year: number; awards: Record<string, unknown> }>("/transactions/awards"),
 };
 
 export default api;
