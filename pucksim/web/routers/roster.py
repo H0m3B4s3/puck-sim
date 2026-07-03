@@ -297,3 +297,27 @@ def put_roster_tactics(
     session_store.save(sid, world)
 
     return roster_tactics_response(team)
+
+
+# ---------------------------------------------------------------------------
+# GET /roster/{tid} -- any team's roster
+# ---------------------------------------------------------------------------
+@router.get("/{tid}", response_model=RosterDTO)
+def get_team_roster(tid: int, world: World = Depends(get_world)) -> RosterDTO:
+    """Return a team's full roster as player summaries.
+
+    Works for any team in the league (not just the user's team). Includes every player
+    on the roster: starters, bench, scratches, injured. Each player carries id, name,
+    position, age, overall rating, shoots, contract summary.
+
+    Returns 404 if the team does not exist.
+
+    Note: This route is placed AFTER the /lines and /tactics literal routes so those
+    match first and this parameterized route doesn't shadow them.
+    """
+    team = world.teams.get(tid)
+    if team is None:
+        raise HTTPException(status_code=404, detail=f"Team {tid} not found")
+
+    players = [player_summary(world.players[pid]) for pid in team.roster if pid in world.players]
+    return RosterDTO(players=players)
