@@ -5,7 +5,7 @@
 // Manages career state via TanStack Query, wired to api.ts.
 
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api, { WorldSummary } from "./api";
 import { useTheme } from "./theme";
 import {
@@ -15,6 +15,8 @@ import {
   ScreenPlaceholder,
   FaceoffDotSpinner,
 } from "./ui";
+import { StandingsScreen } from "./screens/Standings";
+import { ScheduleScreen } from "./screens/Schedule";
 
 function HomeScreen({ world }: { world: WorldSummary }) {
   return (
@@ -34,12 +36,14 @@ function HomeScreen({ world }: { world: WorldSummary }) {
 export default function App() {
   const { toggle: toggleTheme } = useTheme();
   const [currentPath, setCurrentPath] = useState("/");
+  const queryClient = useQueryClient();
 
   // Fetch current career (will 404 if no session)
   const {
     data: world,
     isLoading: careerLoading,
     error: careerError,
+    refetch: refetchCareer,
   } = useQuery({
     queryKey: ["career"],
     queryFn: () => api.getCareer(),
@@ -55,9 +59,56 @@ export default function App() {
     },
   });
 
-  // Show toast for sim day button
+  // Start season (from preseason)
+  const startSeasonMutation = useMutation({
+    mutationFn: () => api.startSeason(),
+    onSuccess: () => {
+      refetchCareer();
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+    },
+  });
+
+  // Advance day (from regular season/playoffs)
+  const advanceDayMutation = useMutation({
+    mutationFn: () => api.advanceDay(),
+    onSuccess: (data) => {
+      refetchCareer();
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["standings"] });
+      triggerGoalLightFlash();
+      showSimDayResults(data);
+    },
+  });
+
+  // Trigger a visual flash animation (goal light motif)
+  const triggerGoalLightFlash = () => {
+    const scoreboardBar = document.querySelector(".scoreboard-bar");
+    if (scoreboardBar) {
+      scoreboardBar.classList.add("goal-light-flash");
+      setTimeout(() => {
+        scoreboardBar.classList.remove("goal-light-flash");
+      }, 500);
+    }
+  };
+
+  // Show a brief summary of games played (simple toast-style approach)
+  const showSimDayResults = (data: { day: number; games_played: Array<{ gid: number; home: number; away: number; home_score: number; away_score: number }> }) => {
+    if (data.games_played.length === 0) {
+      // Season over or no games scheduled
+      return;
+    }
+    // Simple console log for now; could be enhanced to show a toast
+    console.log(`Simulated ${data.games_played.length} games on day ${data.day}`);
+  };
+
+  // Unified sim day handler
   const handleSimDay = () => {
-    alert("Sim Day endpoint coming soon in Step 2.10c");
+    if (!world) return;
+    if (world.phase === "preseason") {
+      startSeasonMutation.mutate();
+    } else {
+      advanceDayMutation.mutate();
+    }
   };
 
   if (careerLoading) {
@@ -86,6 +137,11 @@ export default function App() {
     );
   }
 
+  // Determine sim day button label based on phase
+  const simDayLabel = world?.phase === "preseason" ? "Start Season" : "Sim Day";
+  const simDayLoading =
+    startSeasonMutation.isPending || advanceDayMutation.isPending;
+
   // Render screen based on current path
   const renderScreen = () => {
     switch (currentPath) {
@@ -96,13 +152,9 @@ export default function App() {
           <ScreenPlaceholder title="Roster" step="Step 2.10b" />
         );
       case "/standings":
-        return (
-          <ScreenPlaceholder title="Standings" step="Step 2.10c" />
-        );
+        return <StandingsScreen world={world} />;
       case "/schedule":
-        return (
-          <ScreenPlaceholder title="Schedule" step="Step 2.10c" />
-        );
+        return <ScheduleScreen world={world} />;
       case "/box-score":
         return (
           <ScreenPlaceholder title="Box Score" step="Step 2.10d" />
@@ -123,11 +175,13 @@ export default function App() {
       <NavRail currentPath={currentPath} onNavigate={setCurrentPath} />
       <div className="app-main-wrapper">
         <ScoreboardBar
-          seasonYear={world.season_year}
-          phase={world.phase}
-          day={world.day}
+          seasonYear={world?.season_year || 0}
+          phase={world?.phase || ""}
+          day={world?.day || 0}
           onSimDay={handleSimDay}
           onThemeToggle={toggleTheme}
+          simDayLabel={simDayLabel}
+          simDayLoading={simDayLoading}
         />
         <main className="app-main">{renderScreen()}</main>
       </div>

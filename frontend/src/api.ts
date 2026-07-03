@@ -94,6 +94,31 @@ export interface StandingsEntry extends TeamSummary {
   ot_losses: number;
 }
 
+export interface ScheduleGame {
+  gid: number;
+  day: number;
+  home: number;
+  away: number;
+  home_score: number;
+  away_score: number;
+  played: boolean;
+  is_playoff: boolean;
+}
+
+export interface GamePlayedSummary {
+  gid: number;
+  home: number;
+  away: number;
+  home_score: number;
+  away_score: number;
+}
+
+export interface AdvanceDayResponse {
+  day: number;
+  phase: string;
+  games_played: GamePlayedSummary[];
+}
+
 // --- request bodies ----------------------------------------------------------
 
 export interface NewCareerRequest {
@@ -122,6 +147,18 @@ export const api = {
 
   /** GET /career/standings -- every team, ordered per the active standings rule. */
   getStandings: () => get<StandingsEntry[]>("/career/standings"),
+
+  /** POST /season/start -- generate the regular-season schedule and move out of preseason. */
+  startSeason: () => post<WorldSummary>("/season/start"),
+
+  /** GET /season/schedule -- all games in the season schedule. */
+  getSchedule: () => get<ScheduleGame[]>("/season/schedule"),
+
+  /** POST /season/advance-day -- simulate all games for the day, advance, return summary. */
+  advanceDay: () => post<AdvanceDayResponse>("/season/advance-day"),
+
+  /** GET /season/playoffs/bracket -- playoff bracket (null if not in playoffs yet). */
+  getPlayoffBracket: () => get<Record<string, unknown> | null>("/season/playoffs/bracket"),
 };
 
 export default api;
