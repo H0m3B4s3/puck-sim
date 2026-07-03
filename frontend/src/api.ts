@@ -51,6 +51,8 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 const get = <T>(path: string) => req<T>(path);
 const post = <T>(path: string, body?: unknown) =>
   req<T>(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined });
+const put = <T>(path: string, body?: unknown) =>
+  req<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined });
 
 // --- response shapes (mirrors pucksim/web/serializers.py) ------------------
 
@@ -164,6 +166,33 @@ export interface RosterTacticsResponse {
   coach: CoachSummary;
 }
 
+// --- season DTOs (mirrors pucksim/web/serializers.py) -----------------------
+
+export interface ScheduleGame {
+  gid: number;
+  day: number;
+  home: number;
+  away: number;
+  home_score: number;
+  away_score: number;
+  played: boolean;
+  is_playoff: boolean;
+}
+
+export interface GamePlayedSummary {
+  gid: number;
+  home: number;
+  away: number;
+  home_score: number;
+  away_score: number;
+}
+
+export interface AdvanceDayResponse {
+  day: number;
+  phase: string;
+  games_played: GamePlayedSummary[];
+}
+
 // --- request bodies ----------------------------------------------------------
 
 export interface NewCareerRequest {
@@ -187,9 +216,6 @@ export interface TacticsUpdateRequest {
   pp_style?: string;
   pk_aggression?: string;
 }
-
-const put = <T>(path: string, body?: unknown) =>
-  req<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined });
 
 // --- client --------------------------------------------------------------
 
@@ -235,6 +261,20 @@ export const api = {
   /** PUT /roster/tactics -- update tactics settings (partial update). */
   updateRosterTactics: (body: TacticsUpdateRequest) =>
     put<RosterTacticsResponse>("/roster/tactics", body),
+
+  // --- Season endpoints (Step 2.9b-ii) ---
+
+  /** POST /season/start -- generate the regular-season schedule and move out of preseason. */
+  startSeason: () => post<WorldSummary>("/season/start"),
+
+  /** GET /season/schedule -- all games in the season schedule. */
+  getSchedule: () => get<ScheduleGame[]>("/season/schedule"),
+
+  /** POST /season/advance-day -- simulate all games for the day, advance, return summary. */
+  advanceDay: () => post<AdvanceDayResponse>("/season/advance-day"),
+
+  /** GET /season/playoffs/bracket -- playoff bracket (null if not in playoffs yet). */
+  getPlayoffBracket: () => get<Record<string, unknown> | null>("/season/playoffs/bracket"),
 };
 
 export default api;

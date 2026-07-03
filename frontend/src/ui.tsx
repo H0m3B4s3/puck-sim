@@ -38,12 +38,16 @@ export function ScoreboardBar({
   day,
   onSimDay,
   onThemeToggle,
+  simDayLabel = "Sim Day",
+  simDayLoading = false,
 }: {
   seasonYear: number;
   phase: string;
   day: number;
   onSimDay: () => void;
   onThemeToggle: () => void;
+  simDayLabel?: string;
+  simDayLoading?: boolean;
 }) {
   const { theme } = useTheme();
   return (
@@ -59,9 +63,10 @@ export function ScoreboardBar({
         <button
           className="btn btn-primary"
           onClick={onSimDay}
-          title="Advance simulation one day (endpoint coming soon)"
+          disabled={simDayLoading}
+          title={`${simDayLabel} - Advance simulation ${phase === "preseason" ? "into regular season" : "one day"}`}
         >
-          Sim Day
+          {simDayLoading ? "Loading…" : simDayLabel}
         </button>
         <button
           className="btn btn-secondary"
