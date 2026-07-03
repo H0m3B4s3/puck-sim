@@ -94,12 +94,102 @@ export interface StandingsEntry extends TeamSummary {
   ot_losses: number;
 }
 
+// --- roster DTOs (mirrors pucksim/web/serializers.py) ----------------------
+
+export interface ContractSummary {
+  current_salary: number;
+  years_remaining: number;
+}
+
+export interface PlayerSummary {
+  pid: number;
+  name: string;
+  position: string;
+  age: number;
+  overall: number;
+  shoots: string;
+  secondary_position: string | null;
+  injury_status: string | null;
+  contract: ContractSummary;
+}
+
+export interface RosterResponse {
+  players: PlayerSummary[];
+}
+
+export interface LineWithPlayers {
+  players: PlayerSummary[];
+}
+
+export interface PairWithPlayers {
+  players: PlayerSummary[];
+}
+
+export interface GoalieSlot {
+  player: PlayerSummary | null;
+}
+
+export interface SpecialTeamsUnit {
+  players: PlayerSummary[];
+}
+
+export interface RosterLinesResponse {
+  lines: LineWithPlayers[];
+  pairs: PairWithPlayers[];
+  goalie_starter: GoalieSlot;
+  goalie_backup: GoalieSlot;
+  pp_unit_1: SpecialTeamsUnit;
+  pk_unit_1: SpecialTeamsUnit;
+}
+
+export interface TacticsData {
+  forecheck_style: string;
+  pp_style: string;
+  pk_aggression: string;
+}
+
+export interface CoachSummary {
+  archetype: string;
+  line_juggling_patience: number;
+  pp_forwards: number;
+  shot_volume: number;
+  shot_quality_bias: number;
+  defensive_risk_tolerance: number;
+  goalie_pull_max_deficit: number;
+  goalie_pull_time_threshold_secs: number;
+}
+
+export interface RosterTacticsResponse {
+  tactics: TacticsData;
+  coach: CoachSummary;
+}
+
 // --- request bodies ----------------------------------------------------------
 
 export interface NewCareerRequest {
   seed?: number;
   user_team_abbrev?: string;
 }
+
+export interface ManualLinesEditRequest {
+  lines?: number[][];
+  pairs?: number[][];
+  goalie_starter?: number | null;
+  goalie_backup?: number | null;
+}
+
+export interface AutoBuildLinesRequest {
+  include_special_teams?: boolean;
+}
+
+export interface TacticsUpdateRequest {
+  forecheck_style?: string;
+  pp_style?: string;
+  pk_aggression?: string;
+}
+
+const put = <T>(path: string, body?: unknown) =>
+  req<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined });
 
 // --- client --------------------------------------------------------------
 
@@ -122,6 +212,29 @@ export const api = {
 
   /** GET /career/standings -- every team, ordered per the active standings rule. */
   getStandings: () => get<StandingsEntry[]>("/career/standings"),
+
+  // --- Roster endpoints (Step 2.9b-i) ---
+
+  /** GET /roster -- full roster with player summaries. */
+  getRoster: () => get<RosterResponse>("/roster"),
+
+  /** GET /roster/lines -- current lines, pairs, and special-teams units. */
+  getRosterLines: () => get<RosterLinesResponse>("/roster/lines"),
+
+  /** POST /roster/lines/auto -- auto-build lines and optional special teams. */
+  autoBuildLines: (body: AutoBuildLinesRequest = {}) =>
+    post<RosterLinesResponse>("/roster/lines/auto", body),
+
+  /** PUT /roster/lines -- manually edit lines and pairs. */
+  updateRosterLines: (body: ManualLinesEditRequest) =>
+    put<RosterLinesResponse>("/roster/lines", body),
+
+  /** GET /roster/tactics -- current tactics and coach summary. */
+  getRosterTactics: () => get<RosterTacticsResponse>("/roster/tactics"),
+
+  /** PUT /roster/tactics -- update tactics settings (partial update). */
+  updateRosterTactics: (body: TacticsUpdateRequest) =>
+    put<RosterTacticsResponse>("/roster/tactics", body),
 };
 
 export default api;
