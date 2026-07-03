@@ -51,6 +51,8 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 const get = <T>(path: string) => req<T>(path);
 const post = <T>(path: string, body?: unknown) =>
   req<T>(path, { method: "POST", body: body !== undefined ? JSON.stringify(body) : undefined });
+const put = <T>(path: string, body?: unknown) =>
+  req<T>(path, { method: "PUT", body: body !== undefined ? JSON.stringify(body) : undefined });
 
 // --- response shapes (mirrors pucksim/web/serializers.py) ------------------
 
@@ -94,9 +96,79 @@ export interface StandingsEntry extends TeamSummary {
   ot_losses: number;
 }
 
-// --- Game/Box Score DTOs (DEVPLAN Step 2.9b-ii) --
+// --- roster DTOs (mirrors pucksim/web/serializers.py) ----------------------
 
-export interface GameDTO {
+export interface ContractSummary {
+  current_salary: number;
+  years_remaining: number;
+}
+
+export interface PlayerSummary {
+  pid: number;
+  name: string;
+  position: string;
+  age: number;
+  overall: number;
+  shoots: string;
+  secondary_position: string | null;
+  injury_status: string | null;
+  contract: ContractSummary;
+}
+
+export interface RosterResponse {
+  players: PlayerSummary[];
+}
+
+export interface LineWithPlayers {
+  players: PlayerSummary[];
+}
+
+export interface PairWithPlayers {
+  players: PlayerSummary[];
+}
+
+export interface GoalieSlot {
+  player: PlayerSummary | null;
+}
+
+export interface SpecialTeamsUnit {
+  players: PlayerSummary[];
+}
+
+export interface RosterLinesResponse {
+  lines: LineWithPlayers[];
+  pairs: PairWithPlayers[];
+  goalie_starter: GoalieSlot;
+  goalie_backup: GoalieSlot;
+  pp_unit_1: SpecialTeamsUnit;
+  pk_unit_1: SpecialTeamsUnit;
+}
+
+export interface TacticsData {
+  forecheck_style: string;
+  pp_style: string;
+  pk_aggression: string;
+}
+
+export interface CoachSummary {
+  archetype: string;
+  line_juggling_patience: number;
+  pp_forwards: number;
+  shot_volume: number;
+  shot_quality_bias: number;
+  defensive_risk_tolerance: number;
+  goalie_pull_max_deficit: number;
+  goalie_pull_time_threshold_secs: number;
+}
+
+export interface RosterTacticsResponse {
+  tactics: TacticsData;
+  coach: CoachSummary;
+}
+
+// --- season DTOs (mirrors pucksim/web/serializers.py) -----------------------
+
+export interface ScheduleGame {
   gid: number;
   day: number;
   home: number;
@@ -106,6 +178,25 @@ export interface GameDTO {
   played: boolean;
   is_playoff: boolean;
 }
+
+export interface GamePlayedSummary {
+  gid: number;
+  home: number;
+  away: number;
+  home_score: number;
+  away_score: number;
+}
+
+export interface AdvanceDayResponse {
+  day: number;
+  phase: string;
+  games_played: GamePlayedSummary[];
+}
+
+// --- box score DTOs (mirrors pucksim/web/serializers.py) --------------------
+// pid/name/position/team_id (added post-review, see routers/season.py's
+// get_boxscore()) let a box-score screen label rows for BOTH teams, not just
+// the session's own user_team.
 
 export interface SkaterBoxScoreDTO {
   pid: number;
@@ -159,7 +250,7 @@ export interface BoxScoreResponse {
   goalie_box: Record<number, GoalieBoxScoreDTO>;
 }
 
-// --- Transactions DTOs (DEVPLAN Step 2.9b-iii) --
+// --- transactions DTOs (mirrors pucksim/web/serializers.py) -----------------
 
 export interface CapSummaryDTO {
   payroll: number;
@@ -205,6 +296,23 @@ export interface NewCareerRequest {
   user_team_abbrev?: string;
 }
 
+export interface ManualLinesEditRequest {
+  lines?: number[][];
+  pairs?: number[][];
+  goalie_starter?: number | null;
+  goalie_backup?: number | null;
+}
+
+export interface AutoBuildLinesRequest {
+  include_special_teams?: boolean;
+}
+
+export interface TacticsUpdateRequest {
+  forecheck_style?: string;
+  pp_style?: string;
+  pk_aggression?: string;
+}
+
 export interface TradeOfferRequest {
   other_team_id: number;
   user_sends: number[];
@@ -242,19 +350,48 @@ export const api = {
   /** GET /career/standings -- every team, ordered per the active standings rule. */
   getStandings: () => get<StandingsEntry[]>("/career/standings"),
 
+  // --- Roster endpoints (Step 2.9b-i) ---
+
+  /** GET /roster -- full roster with player summaries. */
+  getRoster: () => get<RosterResponse>("/roster"),
+
+  /** GET /roster/lines -- current lines, pairs, and special-teams units. */
+  getRosterLines: () => get<RosterLinesResponse>("/roster/lines"),
+
+  /** POST /roster/lines/auto -- auto-build lines and optional special teams. */
+  autoBuildLines: (body: AutoBuildLinesRequest = {}) =>
+    post<RosterLinesResponse>("/roster/lines/auto", body),
+
+  /** PUT /roster/lines -- manually edit lines and pairs. */
+  updateRosterLines: (body: ManualLinesEditRequest) =>
+    put<RosterLinesResponse>("/roster/lines", body),
+
+  /** GET /roster/tactics -- current tactics and coach summary. */
+  getRosterTactics: () => get<RosterTacticsResponse>("/roster/tactics"),
+
+  /** PUT /roster/tactics -- update tactics settings (partial update). */
+  updateRosterTactics: (body: TacticsUpdateRequest) =>
+    put<RosterTacticsResponse>("/roster/tactics", body),
+
   // --- Season endpoints (Step 2.9b-ii) ---
 
-  /** POST /season/start -- move out of preseason and generate the regular-season schedule. */
+  /** POST /season/start -- generate the regular-season schedule and move out of preseason. */
   startSeason: () => post<WorldSummary>("/season/start"),
 
   /** GET /season/schedule -- all games in the season schedule. */
-  getSchedule: () => get<GameDTO[]>("/season/schedule"),
+  getSchedule: () => get<ScheduleGame[]>("/season/schedule"),
 
-  /** POST /season/advance-day -- simulate all games scheduled for today. */
-  advanceDay: () => post<{ day: number; phase: string; games_played: Array<{ gid: number; home: number; away: number; home_score: number; away_score: number }> }>("/season/advance-day"),
+  /** POST /season/advance-day -- simulate all games for the day, advance, return summary. */
+  advanceDay: () => post<AdvanceDayResponse>("/season/advance-day"),
+
+  /** GET /season/playoffs/bracket -- playoff bracket (null if not in playoffs yet). */
+  getPlayoffBracket: () => get<Record<string, unknown> | null>("/season/playoffs/bracket"),
 
   /** POST /season/games/{gid}/sim -- simulate a single game on demand. */
-  simGame: (gid: number) => post<{ gid: number; home_score: number; away_score: number; went_ot: boolean; went_so: boolean }>(`/season/games/${gid}/sim`),
+  simGame: (gid: number) =>
+    post<{ gid: number; home_score: number; away_score: number; went_ot: boolean; went_so: boolean }>(
+      `/season/games/${gid}/sim`,
+    ),
 
   /** GET /season/games/{gid}/boxscore -- retrieve the box score for a played game. */
   getBoxScore: (gid: number) => get<BoxScoreResponse>(`/season/games/${gid}/boxscore`),
@@ -280,7 +417,10 @@ export const api = {
 
   /** POST /transactions/draft/pick -- make a draft pick for the user's team. */
   makeDraftPick: (prospectId: number) =>
-    post<{ prospect_id: number; prospect_name: string; signed: boolean; message: string }>("/transactions/draft/pick", { prospect_id: prospectId }),
+    post<{ prospect_id: number; prospect_name: string; signed: boolean; message: string }>(
+      "/transactions/draft/pick",
+      { prospect_id: prospectId },
+    ),
 
   /** GET /transactions/awards -- end-of-season awards. */
   getAwards: () => get<{ season_year: number; awards: Record<string, unknown> }>("/transactions/awards"),
