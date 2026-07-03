@@ -12,11 +12,13 @@ import { useTheme } from "./theme";
 export function Panel({
   children,
   className,
+  style,
 }: {
   children: ReactNode;
   className?: string;
+  style?: React.CSSProperties;
 }) {
-  return <div className={`panel ${className || ""}`}>{children}</div>;
+  return <div className={`panel ${className || ""}`} style={style}>{children}</div>;
 }
 
 // --- FaceoffDotSpinner: loading state ----------------------------------

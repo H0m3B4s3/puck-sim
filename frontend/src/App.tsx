@@ -8,24 +8,76 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api, { WorldSummary } from "./api";
 import { useTheme } from "./theme";
+import { TeamTag } from "./theme";
 import {
   NavRail,
   ScoreboardBar,
   NoCareerState,
   ScreenPlaceholder,
   FaceoffDotSpinner,
+  Panel,
 } from "./ui";
 import { StandingsScreen } from "./screens/Standings";
 import { ScheduleScreen } from "./screens/Schedule";
+import { RosterScreen } from "./screens/Roster";
 
 function HomeScreen({ world }: { world: WorldSummary }) {
+  const getStandingsQuery = useQuery({
+    queryKey: ["career", "standings"],
+    queryFn: () => api.getStandings(),
+  });
+
+  const userTeamInfo = getStandingsQuery.data?.find(
+    (t) => t.id === world.user_team_id
+  );
+
   return (
     <div className="screen screen-home">
       <h2 className="text-display">Season {world.season_year}</h2>
       <p className="text-muted" style={{ marginTop: "0.5rem" }}>
         Phase: <strong>{world.phase}</strong> | Day {world.day}
       </p>
-      <p style={{ marginTop: "1.5rem", lineHeight: 1.6 }}>
+
+      {userTeamInfo && (
+        <Panel style={{ marginTop: "2rem" }}>
+          <h3 className="text-display" style={{ fontSize: "1.25rem", marginBottom: "1rem" }}>
+            Your Team
+          </h3>
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+            <TeamTag
+              abbrev={userTeamInfo.abbrev}
+              color={userTeamInfo.primary_color}
+              name={userTeamInfo.name}
+              big
+            />
+          </div>
+
+          {userTeamInfo.record ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "1rem", marginTop: "1rem" }}>
+              <div className="stat-box">
+                <div className="stat-label">Wins</div>
+                <div className="stat-value">{userTeamInfo.record.wins}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-label">Losses</div>
+                <div className="stat-value">{userTeamInfo.record.losses}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-label">OT Losses</div>
+                <div className="stat-value">{userTeamInfo.record.ot_losses}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-label">Points</div>
+                <div className="stat-value">{userTeamInfo.record.points}</div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-muted">No games played yet this season.</p>
+          )}
+        </Panel>
+      )}
+
+      <p style={{ marginTop: "2rem", lineHeight: 1.6 }}>
         Welcome to your PuckSim career. Use the navigation on the left to view your
         roster, check the standings, review the schedule, and manage trades and signings.
       </p>
@@ -148,9 +200,7 @@ export default function App() {
       case "/":
         return <HomeScreen world={world} />;
       case "/roster":
-        return (
-          <ScreenPlaceholder title="Roster" step="Step 2.10b" />
-        );
+        return <RosterScreen />;
       case "/standings":
         return <StandingsScreen world={world} />;
       case "/schedule":
