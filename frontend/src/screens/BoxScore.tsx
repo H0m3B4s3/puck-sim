@@ -15,22 +15,26 @@ import { Panel, FaceoffDotSpinner } from "../ui";
 import { TeamTag } from "../theme";
 
 /**
- * BoxScore Screen (Step 2.10d)
+ * BoxScore Screen (Step 2.10d, reworked for scoreboard-style day navigation)
  *
- * Displays the box score for a played game, with separate tables for skaters and goalies.
- * Users can select a game from the schedule and view its detailed box score.
+ * A scoreboard bar for a single day (prev/next day arrows, defaulting to the
+ * most recent day with played games) lists every game scheduled that day;
+ * clicking a played game's card shows its full box score below.
  */
 export function BoxScore({
   initialGid,
+  currentDay,
   onPlayer,
 }: {
   onPlayer?: (pid: number) => void;
   toast?: (msg: string) => void;
   initialGid?: number | null;
+  currentDay?: number;
 } = {}) {
   const [selectedGameId, setSelectedGameId] = useState<number | null>(initialGid || null);
+  const [selectedDay, setSelectedDay] = useState<number | null>(null);
 
-  // Fetch schedule to allow game selection
+  // Fetch schedule to allow game/day navigation
   const {
     data: schedule,
     isLoading: scheduleLoading,
@@ -64,11 +68,53 @@ export function BoxScore({
     return new Map(standings.map((t) => [t.id, t]));
   }, [standings]);
 
-  // Filter to played games only
   const playedGames = useMemo(() => {
     if (!schedule) return [];
     return schedule.filter((g) => g.played);
   }, [schedule]);
+
+  // Last day that actually has a played game -- the sensible "today" default
+  // for a scoreboard, distinct from currentDay (world.day), which can be
+  // ahead of the last simmed game (e.g. right after advancing to a bye day).
+  const lastPlayedDay = useMemo(() => {
+    if (playedGames.length === 0) return null;
+    return Math.max(...playedGames.map((g) => g.day));
+  }, [playedGames]);
+
+  const minDay = useMemo(() => {
+    if (!schedule || schedule.length === 0) return 0;
+    return Math.min(...schedule.map((g) => g.day));
+  }, [schedule]);
+
+  const maxDay = useMemo(() => {
+    if (!schedule || schedule.length === 0) return 0;
+    return Math.max(...schedule.map((g) => g.day));
+  }, [schedule]);
+
+  // Resolve the day to show once the schedule is loaded: an explicit
+  // initialGid's own day wins (deep-link from the Schedule screen), else the
+  // last played day, else world.day, else the first scheduled day.
+  const resolvedDay = useMemo(() => {
+    if (selectedDay !== null) return selectedDay;
+    if (initialGid) {
+      const g = schedule?.find((sg) => sg.gid === initialGid);
+      if (g) return g.day;
+    }
+    if (lastPlayedDay !== null) return lastPlayedDay;
+    if (currentDay !== undefined) return Math.min(Math.max(currentDay, minDay), maxDay);
+    return minDay;
+  }, [selectedDay, initialGid, schedule, lastPlayedDay, currentDay, minDay, maxDay]);
+
+  const gamesForDay = useMemo(() => {
+    if (!schedule) return [];
+    return schedule
+      .filter((g) => g.day === resolvedDay)
+      .sort((a, b) => a.gid - b.gid);
+  }, [schedule, resolvedDay]);
+
+  const goToDay = (day: number) => {
+    setSelectedDay(Math.min(Math.max(day, minDay), maxDay));
+  };
 
   if (scheduleLoading) {
     return (
@@ -86,12 +132,12 @@ export function BoxScore({
     );
   }
 
-  if (!playedGames || playedGames.length === 0) {
+  if (!schedule || schedule.length === 0) {
     return (
       <Panel>
         <h2 className="text-display">Box Score</h2>
         <p className="text-muted" style={{ marginTop: "1rem" }}>
-          No played games yet. Simulate a game first from the Schedule screen.
+          No schedule yet. Start the season first.
         </p>
       </Panel>
     );
@@ -102,42 +148,94 @@ export function BoxScore({
       <Panel>
         <h2 className="text-display">Box Score</h2>
 
-        {/* Game Selector */}
-        <div style={{ marginTop: "1.5rem", marginBottom: "1.5rem" }}>
-          <label
-            htmlFor="game-select"
-            style={{ display: "block", marginBottom: "0.5rem", fontWeight: 500 }}
+        {/* Day navigation */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: "1.5rem",
+            marginTop: "1.5rem",
+            marginBottom: "1.5rem",
+          }}
+        >
+          <button
+            className="btn"
+            onClick={() => goToDay(resolvedDay - 1)}
+            disabled={resolvedDay <= minDay}
+            aria-label="Previous day"
           >
-            Select a game:
-          </label>
-          <select
-            id="game-select"
-            value={selectedGameId ?? ""}
-            onChange={(e) => setSelectedGameId(e.target.value ? parseInt(e.target.value) : null)}
+            ← Prev Day
+          </button>
+          <span style={{ fontSize: "1.1rem", fontWeight: 600, minWidth: "80px", textAlign: "center" }}>
+            Day {resolvedDay}
+          </span>
+          <button
+            className="btn"
+            onClick={() => goToDay(resolvedDay + 1)}
+            disabled={resolvedDay >= maxDay}
+            aria-label="Next day"
+          >
+            Next Day →
+          </button>
+        </div>
+
+        {/* Scoreboard: every game on the selected day */}
+        {gamesForDay.length === 0 ? (
+          <p className="text-muted" style={{ textAlign: "center" }}>
+            No games scheduled this day.
+          </p>
+        ) : (
+          <div
             style={{
-              padding: "0.5rem",
-              fontSize: "1rem",
-              borderRadius: "4px",
-              border: "1px solid var(--color-border)",
-              backgroundColor: "var(--color-surface-card)",
-              color: "var(--color-text)",
-              cursor: "pointer",
-              minWidth: "300px",
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+              gap: "0.75rem",
+              marginBottom: "1.5rem",
             }}
           >
-            <option value="">Choose a game...</option>
-            {playedGames.map((game) => {
+            {gamesForDay.map((game) => {
               const homeTeam = teamMap.get(game.home);
               const awayTeam = teamMap.get(game.away);
+              const isSelected = game.gid === selectedGameId;
               return (
-                <option key={game.gid} value={game.gid}>
-                  {awayTeam?.abbrev || `Team ${game.away}`} @{" "}
-                  {homeTeam?.abbrev || `Team ${game.home}`} (Day {game.day})
-                </option>
+                <button
+                  key={game.gid}
+                  onClick={() => game.played && setSelectedGameId(game.gid)}
+                  disabled={!game.played}
+                  style={{
+                    padding: "0.75rem 1rem",
+                    borderRadius: "8px",
+                    border: `1px solid ${isSelected ? "var(--color-accent-blue)" : "var(--color-border)"}`,
+                    backgroundColor: "var(--color-surface-card)",
+                    cursor: game.played ? "pointer" : "default",
+                    opacity: game.played ? 1 : 0.6,
+                    textAlign: "left",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>{awayTeam?.abbrev || `Team ${game.away}`}</span>
+                    <span className="text-mono">{game.played ? game.away_score : ""}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>{homeTeam?.abbrev || `Team ${game.home}`}</span>
+                    <span className="text-mono">{game.played ? game.home_score : ""}</span>
+                  </div>
+                  {!game.played && (
+                    <div className="text-muted" style={{ fontSize: "0.8rem", marginTop: "0.25rem" }}>
+                      Not yet played
+                    </div>
+                  )}
+                  {game.is_playoff && (
+                    <div className="text-muted" style={{ fontSize: "0.8rem", marginTop: "0.25rem" }}>
+                      Playoffs
+                    </div>
+                  )}
+                </button>
               );
             })}
-          </select>
-        </div>
+          </div>
+        )}
 
         {selectedGameId !== null && (boxScoreLoading || !boxScore) && (
           <FaceoffDotSpinner />
@@ -151,8 +249,8 @@ export function BoxScore({
           <BoxScoreContent
             boxScore={boxScore}
             teamMap={teamMap}
-            homeTeamId={playedGames.find((g) => g.gid === selectedGameId)?.home ?? null}
-            awayTeamId={playedGames.find((g) => g.gid === selectedGameId)?.away ?? null}
+            homeTeamId={schedule.find((g) => g.gid === selectedGameId)?.home ?? null}
+            awayTeamId={schedule.find((g) => g.gid === selectedGameId)?.away ?? null}
             onPlayer={onPlayer}
           />
         )}
