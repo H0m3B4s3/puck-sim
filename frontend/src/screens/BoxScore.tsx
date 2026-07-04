@@ -375,6 +375,46 @@ function SkaterTable({ teamId, skaters, teamMap, onPlayer }: SkaterTableProps) {
       accessorKey: "pim",
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
+    {
+      header: "HIT",
+      accessorKey: "hits",
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "BLK",
+      accessorKey: "blocks",
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "CF",
+      accessorKey: "corsi_for",
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "CA",
+      accessorKey: "corsi_against",
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "CF%",
+      id: "corsi_pct",
+      cell: (info) => {
+        const row = info.row.original;
+        const total = row.corsi_for + row.corsi_against;
+        const pct = total > 0 ? ((row.corsi_for / total) * 100).toFixed(1) : "—";
+        return <span className="text-mono">{pct}</span>;
+      },
+    },
+    {
+      header: "FF",
+      accessorKey: "fenwick_for",
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "FA",
+      accessorKey: "fenwick_against",
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
   ];
 
   const table = useReactTable({
