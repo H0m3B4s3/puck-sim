@@ -1364,3 +1364,42 @@ button:disabled {
 .recentPicks {
   margin-bottom: var(--space-xl);
 }
+
+/* ============================================================================
+   Segmented Control / Toggle (T10, History.tsx)
+   ============================================================================ */
+
+.segrow {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.segrow.tight {
+  gap: 0.25rem;
+}
+
+.seg {
+  flex: 1;
+  min-width: max-content;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font-weight: 500;
+  font-family: var(--font-body);
+  transition: all 0.2s ease;
+}
+
+.seg:hover:not(.on) {
+  background-color: var(--color-border);
+}
+
+.seg.on {
+  background-color: var(--color-accent-blue);
+  color: white;
+  border-color: var(--color-accent-blue);
+  font-weight: 600;
+}
