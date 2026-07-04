@@ -40,6 +40,10 @@ that file for "Known" and "not yet wired").
 Requires the `web` extra (already included if you ran `pip install -e ".[dev,web]"` above) plus
 Node.js/npm for the frontend.
 
+**Quickest path:** `./dev.sh` starts both the backend and frontend together in one terminal
+(auto-activates `.venv` if present, installs frontend deps on first run) — press Ctrl+C to stop
+both. Equivalent to the two-terminal steps below, done for you.
+
 ```bash
 # Terminal 1 — backend (FastAPI, default http://127.0.0.1:8000)
 pucksim-web
