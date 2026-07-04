@@ -17,7 +17,10 @@ import { Panel, FaceoffDotSpinner } from "../ui";
  * Displays cap summary, free agents, trades, draft board, and awards.
  * Uses a tabbed interface to switch between different transaction types.
  */
-export function Transactions() {
+export function Transactions({}: {
+  onPlayer?: (pid: number) => void;
+  toast?: (msg: string) => void;
+} = {}) {
   const [activeTab, setActiveTab] = useState<
     "cap" | "free-agents" | "trades" | "draft" | "awards"
   >("cap");

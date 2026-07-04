@@ -995,3 +995,372 @@ button:disabled {
 .error-banner strong {
   color: var(--color-accent-red);
 }
+
+/* ============================================================================
+   Modal & Toast (T6 — ported from HoopR)
+   ============================================================================ */
+
+.modalBg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background-color: var(--color-surface-card);
+  border-radius: var(--radius-rink);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  max-width: 600px;
+  width: 90%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-lg);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: var(--font-size-lg);
+  flex-shrink: 0;
+}
+
+.modalHead .x {
+  background: none;
+  border: none;
+  font-size: var(--font-size-lg);
+  cursor: pointer;
+  color: var(--color-text);
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modalHead .x:hover {
+  background-color: var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.modalBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-lg);
+}
+
+.toast {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  background-color: var(--color-text);
+  color: var(--color-surface);
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 2000;
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(400px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.pill {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: 999px;
+  background-color: var(--color-border);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+/* ============================================================================
+   Bracket & Series Cards (T8, frozen in T6)
+   ============================================================================ */
+
+.bracketCols {
+  display: flex;
+  gap: var(--space-lg);
+  overflow-x: auto;
+}
+
+.bracketCol {
+  flex: 0 0 250px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.roundName {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin-bottom: var(--space-sm);
+}
+
+.seriesCard {
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-md);
+  background-color: var(--color-surface-card);
+  transition: border-color 0.2s ease;
+}
+
+.seriesCard.active {
+  border-color: var(--color-accent-blue);
+}
+
+.seedRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) 0;
+  font-size: var(--font-size-sm);
+}
+
+.seedRow.win {
+  font-weight: 600;
+}
+
+.seedRow.mine {
+  background-color: rgba(76, 141, 255, 0.1);
+}
+
+.seed {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: var(--color-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.abbr {
+  font-family: var(--font-display);
+  font-weight: 600;
+  min-width: 50px;
+}
+
+.wins {
+  margin-left: auto;
+  font-weight: 600;
+  min-width: 30px;
+  text-align: right;
+}
+
+.champ {
+  padding: var(--space-lg);
+  background-color: var(--color-accent-gold);
+  color: #12181f;
+  text-align: center;
+  border-radius: var(--radius-rink);
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  margin-top: var(--space-lg);
+}
+
+/* ============================================================================
+   Awards & Accolades (T10, frozen in T6)
+   ============================================================================ */
+
+.awardCard {
+  padding: var(--space-lg);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-sm);
+  border-left: 4px solid var(--color-accent-gold);
+  margin-bottom: var(--space-md);
+}
+
+.accoladeChip {
+  display: inline-block;
+  padding: var(--space-xs) var(--space-sm);
+  background-color: var(--color-accent-gold);
+  color: #12181f;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin: var(--space-xs);
+}
+
+.legacyBox {
+  padding: var(--space-lg);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  margin-top: var(--space-lg);
+}
+
+.legacyAccolades {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+/* ============================================================================
+   Rating Groups (T7, frozen in T6)
+   ============================================================================ */
+
+.ratingGroup {
+  margin-bottom: var(--space-lg);
+}
+
+.ratingGroup h4 {
+  font-size: var(--font-size-sm);
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin: 0 0 var(--space-md) 0;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.ratingRow {
+  display: grid;
+  grid-template-columns: 80px 1fr 40px;
+  gap: var(--space-md);
+  align-items: center;
+  margin-bottom: var(--space-sm);
+  font-size: var(--font-size-sm);
+}
+
+.ratingBar {
+  height: 8px;
+  background-color: var(--color-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ratingFill {
+  height: 100%;
+  background-color: var(--color-accent-blue);
+  width: 100%;
+}
+
+/* ============================================================================
+   Stat Rows (generic utility, T7+)
+   ============================================================================ */
+
+.statRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.statRow > div {
+  text-align: center;
+  padding: var(--space-md);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+}
+
+.statRow .label {
+  font-size: var(--font-size-sm);
+  color: var(--color-muted);
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+}
+
+.statRow .value {
+  font-family: var(--font-display);
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+}
+
+/* ============================================================================
+   Trade Grid (T11, frozen in T6)
+   ============================================================================ */
+
+.tradeGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-xl);
+  margin-bottom: var(--space-xl);
+}
+
+.verdict {
+  padding: var(--space-lg);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-sm);
+  border-left: 4px solid var(--color-border);
+  margin: var(--space-lg) 0;
+}
+
+.deadline {
+  padding: var(--space-md);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-lg);
+}
+
+.deadline.soon {
+  background-color: rgba(255, 199, 44, 0.1);
+  border-left: 4px solid var(--color-accent-gold);
+}
+
+.deadline.passed {
+  background-color: rgba(200, 16, 46, 0.1);
+  border-left: 4px solid var(--color-accent-red);
+}
+
+/* ============================================================================
+   Leaders Grid (T10, frozen in T6)
+   ============================================================================ */
+
+.leadersGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: var(--space-xl);
+}
+
+/* ============================================================================
+   Wave Banner (T9, frozen in T6)
+   ============================================================================ */
+
+.waveBanner {
+  padding: var(--space-lg);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-sm);
+  border-left: 4px solid var(--color-accent-blue);
+  margin-bottom: var(--space-xl);
+  text-align: center;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+/* ============================================================================
+   Recent Picks (T9, frozen in T6)
+   ============================================================================ */
+
+.recentPicks {
+  margin-bottom: var(--space-xl);
+}

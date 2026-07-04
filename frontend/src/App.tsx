@@ -1,8 +1,10 @@
-// PuckSim frontend shell (Step 2.10a).
+// PuckSim frontend shell (Step 2.10a + T6).
 //
 // Simple hand-rolled router (no external routing library needed for placeholder screens).
 // Displays NavRail + ScoreboardBar + screen component based on current path.
 // Manages career state via TanStack Query, wired to api.ts.
+// Phase-aware nav (Playoffs/Offseason tabs shown conditionally per D4).
+// Player modal threading per D5.
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -16,14 +18,27 @@ import {
   ScreenPlaceholder,
   FaceoffDotSpinner,
   Panel,
+  useToast,
 } from "./ui";
+import { PlayerModal } from "./PlayerModal";
 import { BoxScore } from "./screens/BoxScore";
 import { Transactions } from "./screens/Transactions";
 import { StandingsScreen } from "./screens/Standings";
 import { ScheduleScreen } from "./screens/Schedule";
 import { RosterScreen } from "./screens/Roster";
+import { PlayoffsScreen } from "./screens/Playoffs";
+import { OffseasonScreen } from "./screens/Offseason";
+import { LeadersScreen } from "./screens/Leaders";
+import { HistoryScreen } from "./screens/History";
+import { TradeScreen } from "./screens/Trade";
 
-function HomeScreen({ world }: { world: WorldSummary }) {
+function HomeScreen({
+  world,
+}: {
+  world: WorldSummary;
+  onPlayer?: (pid: number) => void;
+  toast?: (msg: string) => void;
+}) {
   const getStandingsQuery = useQuery({
     queryKey: ["career", "standings"],
     queryFn: () => api.getStandings(),
@@ -90,7 +105,10 @@ function HomeScreen({ world }: { world: WorldSummary }) {
 export default function App() {
   const { toggle: toggleTheme } = useTheme();
   const [currentPath, setCurrentPath] = useState("/");
+  const [openPid, setOpenPid] = useState<number | null>(null);
+  const [boxScoreGid, setBoxScoreGid] = useState<number | null>(null);
   const queryClient = useQueryClient();
+  const { toast, node: toastNode } = useToast();
 
   // Fetch current career (will 404 if no session)
   const {
@@ -122,7 +140,7 @@ export default function App() {
     },
   });
 
-  // Advance day (from regular season/playoffs)
+  // Advance day (from regular season)
   const advanceDayMutation = useMutation({
     mutationFn: () => api.advanceDay(),
     onSuccess: (data) => {
@@ -130,7 +148,44 @@ export default function App() {
       queryClient.invalidateQueries({ queryKey: ["schedule"] });
       queryClient.invalidateQueries({ queryKey: ["standings"] });
       triggerGoalLightFlash();
-      showSimDayResults(data);
+      toast(`Simulated ${data.games_played.length} games — day ${data.day}`);
+      if (data.season_complete) {
+        toast("Regular season complete — start the playoffs from the Playoffs tab.");
+      }
+    },
+  });
+
+  // Advance week (1-14 days in one request)
+  const advanceWeekMutation = useMutation({
+    mutationFn: () => api.advanceWeek(7),
+    onSuccess: (data) => {
+      refetchCareer();
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["standings"] });
+      triggerGoalLightFlash();
+      toast(`Simulated ${data.games_played.length} games — day ${data.day}`);
+      if (data.season_complete) {
+        toast("Regular season complete — start the playoffs from the Playoffs tab.");
+      }
+    },
+  });
+
+  // Sim to next game
+  const simToNextGameMutation = useMutation({
+    mutationFn: () => api.simToNextGame(),
+    onSuccess: (data) => {
+      refetchCareer();
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["standings"] });
+      triggerGoalLightFlash();
+      if (data.played) {
+        toast(`Next game played on day ${data.day}`);
+      } else {
+        toast("No more games this season.");
+      }
+      if (data.season_complete) {
+        toast("Regular season complete — start the playoffs from the Playoffs tab.");
+      }
     },
   });
 
@@ -145,16 +200,6 @@ export default function App() {
     }
   };
 
-  // Show a brief summary of games played (simple toast-style approach)
-  const showSimDayResults = (data: { day: number; games_played: Array<{ gid: number; home: number; away: number; home_score: number; away_score: number }> }) => {
-    if (data.games_played.length === 0) {
-      // Season over or no games scheduled
-      return;
-    }
-    // Simple console log for now; could be enhanced to show a toast
-    console.log(`Simulated ${data.games_played.length} games on day ${data.day}`);
-  };
-
   // Unified sim day handler
   const handleSimDay = () => {
     if (!world) return;
@@ -165,10 +210,41 @@ export default function App() {
     }
   };
 
+  // Handle viewing a box score
+  const handleViewBoxScore = (gid: number) => {
+    setBoxScoreGid(gid);
+    setCurrentPath("/box-score");
+  };
+
+  // Compute nav items early (before loading check) so it's available for early returns
+  const baseNavItems = [
+    { label: "Home", path: "/" },
+    { label: "Roster", path: "/roster" },
+    { label: "Standings", path: "/standings" },
+    { label: "Schedule", path: "/schedule" },
+    { label: "Box Score", path: "/box-score" },
+    { label: "Leaders", path: "/leaders" },
+    { label: "Trades", path: "/trades" },
+    { label: "Transactions", path: "/transactions" },
+    { label: "History", path: "/history" },
+  ];
+
+  const navItems = world
+    ? [
+        ...baseNavItems,
+        ...(world.phase === "playoffs" || world.regular_season_complete
+          ? [{ label: "Playoffs", path: "/playoffs" }]
+          : []),
+        ...(["draft", "free_agency"].includes(world.phase)
+          ? [{ label: "Offseason", path: "/offseason" }]
+          : []),
+      ]
+    : baseNavItems;
+
   if (careerLoading) {
     return (
       <div className="app-container">
-        <NavRail currentPath={currentPath} onNavigate={setCurrentPath} />
+        <NavRail currentPath={currentPath} onNavigate={setCurrentPath} items={navItems} />
         <main className="app-main">
           <FaceoffDotSpinner />
         </main>
@@ -180,7 +256,7 @@ export default function App() {
   if (careerError || !world) {
     return (
       <div className="app-container">
-        <NavRail currentPath={currentPath} onNavigate={setCurrentPath} />
+        <NavRail currentPath={currentPath} onNavigate={setCurrentPath} items={navItems} />
         <main className="app-main">
           <NoCareerState
             onNewCareer={() => newCareerMutation.mutate()}
@@ -194,23 +270,56 @@ export default function App() {
   // Determine sim day button label based on phase
   const simDayLabel = world?.phase === "preseason" ? "Start Season" : "Sim Day";
   const simDayLoading =
-    startSeasonMutation.isPending || advanceDayMutation.isPending;
+    startSeasonMutation.isPending ||
+    advanceDayMutation.isPending ||
+    advanceWeekMutation.isPending ||
+    simToNextGameMutation.isPending;
+
+  // Compute sim controls state (D4)
+  const simControlsEnabled =
+    world &&
+    ["preseason", "regular_season"].includes(world.phase) &&
+    !world.regular_season_complete;
+
+  // Compute phase hint for when sim controls are disabled
+  let phaseHint = "";
+  if (world) {
+    if (world.phase === "playoffs" || world.regular_season_complete) {
+      if (world.phase !== "regular_season") {
+        phaseHint = `${world.phase} — use the ${world.phase === "playoffs" ? "Playoffs" : "Offseason"} tab`;
+      }
+    } else if (["draft", "free_agency"].includes(world.phase)) {
+      phaseHint = `Offseason — use the Offseason tab`;
+    }
+  }
 
   // Render screen based on current path
   const renderScreen = () => {
+    if (!world) return null;
+
     switch (currentPath) {
       case "/":
-        return <HomeScreen world={world} />;
+        return <HomeScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       case "/roster":
-        return <RosterScreen />;
+        return <RosterScreen onPlayer={setOpenPid} toast={toast} />;
       case "/standings":
-        return <StandingsScreen world={world} />;
+        return <StandingsScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       case "/schedule":
-        return <ScheduleScreen world={world} />;
+        return <ScheduleScreen world={world} onPlayer={setOpenPid} toast={toast} onViewBoxScore={handleViewBoxScore} />;
       case "/box-score":
-        return <BoxScore />;
+        return <BoxScore onPlayer={setOpenPid} toast={toast} initialGid={boxScoreGid} />;
+      case "/leaders":
+        return <LeadersScreen world={world} onPlayer={setOpenPid} toast={toast} />;
+      case "/trades":
+        return <TradeScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       case "/transactions":
-        return <Transactions />;
+        return <Transactions onPlayer={setOpenPid} toast={toast} />;
+      case "/history":
+        return <HistoryScreen world={world} onPlayer={setOpenPid} toast={toast} />;
+      case "/playoffs":
+        return <PlayoffsScreen world={world} onPlayer={setOpenPid} toast={toast} />;
+      case "/offseason":
+        return <OffseasonScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       default:
         return (
           <ScreenPlaceholder title="Not Found" step="Step 2.10b" />
@@ -220,19 +329,27 @@ export default function App() {
 
   return (
     <div className="app-container">
-      <NavRail currentPath={currentPath} onNavigate={setCurrentPath} />
+      <NavRail currentPath={currentPath} onNavigate={setCurrentPath} items={navItems} />
       <div className="app-main-wrapper">
         <ScoreboardBar
-          seasonYear={world?.season_year || 0}
-          phase={world?.phase || ""}
-          day={world?.day || 0}
+          seasonYear={world.season_year}
+          phase={world.phase}
+          day={world.day}
           onSimDay={handleSimDay}
           onThemeToggle={toggleTheme}
           simDayLabel={simDayLabel}
           simDayLoading={simDayLoading}
+          onSimWeek={() => advanceWeekMutation.mutate()}
+          onSimToNextGame={() => simToNextGameMutation.mutate()}
+          simControlsEnabled={simControlsEnabled}
+          phaseHint={phaseHint}
         />
         <main className="app-main">{renderScreen()}</main>
       </div>
+      {openPid != null && (
+        <PlayerModal pid={openPid} onClose={() => setOpenPid(null)} />
+      )}
+      {toastNode}
     </div>
   );
 }

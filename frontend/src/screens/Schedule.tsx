@@ -14,6 +14,9 @@ export function ScheduleScreen({
   world,
 }: {
   world: WorldSummary;
+  onPlayer?: (pid: number) => void;
+  toast?: (msg: string) => void;
+  onViewBoxScore?: (gid: number) => void;
 }) {
   const { data: scheduleGames, isLoading: scheduleLoading } = useQuery({
     queryKey: ["schedule"],
