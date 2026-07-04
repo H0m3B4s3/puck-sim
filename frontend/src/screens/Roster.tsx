@@ -30,10 +30,28 @@ import { Panel, FaceoffDotSpinner } from "../ui";
 
 const columnHelper = createColumnHelper<PlayerSummary>();
 
-const rosterColumns = [
+const rosterColumns = (onPlayer?: (pid: number) => void) => [
   columnHelper.accessor("name", {
     header: "Name",
     size: 180,
+    cell: (info) => (
+      <button
+        onClick={() => onPlayer?.(info.row.original.pid)}
+        style={{
+          background: "none",
+          border: "none",
+          padding: 0,
+          color: "var(--color-accent-blue)",
+          cursor: "pointer",
+          textDecoration: "underline",
+          fontWeight: 500,
+          font: "inherit",
+        }}
+        title="View player details"
+      >
+        {String(info.getValue())}
+      </button>
+    ),
   }),
   columnHelper.accessor("position", {
     header: "Pos",
@@ -65,12 +83,18 @@ const rosterColumns = [
     header: "Injury Status",
     size: 150,
   }),
-] as any;
+];
 
-function RosterTable({ players, selectedPlayers, onPlayerSelect }: {
+function RosterTable({
+  players,
+  selectedPlayers,
+  onPlayerSelect,
+  onPlayer,
+}: {
   players: PlayerSummary[];
   selectedPlayers: Set<number>;
   onPlayerSelect: (playerId: number) => void;
+  onPlayer?: (pid: number) => void;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "overall", desc: true },
@@ -78,7 +102,7 @@ function RosterTable({ players, selectedPlayers, onPlayerSelect }: {
 
   const table = useReactTable({
     data: players,
-    columns: rosterColumns,
+    columns: rosterColumns(onPlayer),
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
@@ -422,7 +446,9 @@ function TacticsPanel({
 
 // --- Main Roster Screen ---
 
-export function RosterScreen({}: {
+export function RosterScreen({
+  onPlayer,
+}: {
   onPlayer?: (pid: number) => void;
   toast?: (msg: string) => void;
 } = {}) {
@@ -579,6 +605,7 @@ export function RosterScreen({}: {
         players={rosterData.players}
         selectedPlayers={selectedPlayer ? new Set([selectedPlayer]) : new Set()}
         onPlayerSelect={(pid) => setSelectedPlayer((cur) => (cur === pid ? null : pid))}
+        onPlayer={onPlayer}
       />
 
       <div style={{ marginTop: "2rem" }}>
