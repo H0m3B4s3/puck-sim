@@ -22,6 +22,7 @@ import { TeamTag } from "../theme";
  */
 export function BoxScore({
   initialGid,
+  onPlayer,
 }: {
   onPlayer?: (pid: number) => void;
   toast?: (msg: string) => void;
@@ -152,6 +153,7 @@ export function BoxScore({
             teamMap={teamMap}
             homeTeamId={playedGames.find((g) => g.gid === selectedGameId)?.home ?? null}
             awayTeamId={playedGames.find((g) => g.gid === selectedGameId)?.away ?? null}
+            onPlayer={onPlayer}
           />
         )}
       </Panel>
@@ -164,6 +166,7 @@ interface BoxScoreContentProps {
   teamMap: Map<number, any>;
   homeTeamId: number | null;
   awayTeamId: number | null;
+  onPlayer?: (pid: number) => void;
 }
 
 function BoxScoreContent({
@@ -171,6 +174,7 @@ function BoxScoreContent({
   teamMap,
   homeTeamId,
   awayTeamId,
+  onPlayer,
 }: BoxScoreContentProps) {
   // Group skaters by team
   const skatersByTeam = useMemo(() => {
@@ -273,6 +277,7 @@ function BoxScoreContent({
               teamId={parseInt(teamIdStr)}
               skaters={skaters}
               teamMap={teamMap}
+              onPlayer={onPlayer}
             />
           ))}
         </div>
@@ -296,6 +301,7 @@ function BoxScoreContent({
               teamId={parseInt(teamIdStr)}
               goalies={goalies}
               teamMap={teamMap}
+              onPlayer={onPlayer}
             />
           ))}
         </div>
@@ -308,9 +314,10 @@ interface SkaterTableProps {
   teamId: number;
   skaters: SkaterBoxScoreDTO[];
   teamMap: Map<number, any>;
+  onPlayer?: (pid: number) => void;
 }
 
-function SkaterTable({ teamId, skaters, teamMap }: SkaterTableProps) {
+function SkaterTable({ teamId, skaters, teamMap, onPlayer }: SkaterTableProps) {
   const team = teamMap.get(teamId);
   const teamName = team?.abbrev || `Team ${teamId}`;
 
@@ -320,7 +327,23 @@ function SkaterTable({ teamId, skaters, teamMap }: SkaterTableProps) {
       accessorKey: "name",
       cell: (info) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{String(info.getValue())}</div>
+          <button
+            onClick={() => onPlayer?.(info.row.original.pid)}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              color: "var(--color-accent-blue)",
+              cursor: "pointer",
+              textDecoration: "underline",
+              fontWeight: 500,
+              font: "inherit",
+              textAlign: "left",
+            }}
+            title="View player details"
+          >
+            {String(info.getValue())}
+          </button>
           <div style={{ fontSize: "0.875rem", color: "var(--color-muted)" }}>
             {info.row.original.position}
           </div>
@@ -446,9 +469,10 @@ interface GoalieTableProps {
   teamId: number;
   goalies: GoalieBoxScoreDTO[];
   teamMap: Map<number, any>;
+  onPlayer?: (pid: number) => void;
 }
 
-function GoalieTable({ teamId, goalies, teamMap }: GoalieTableProps) {
+function GoalieTable({ teamId, goalies, teamMap, onPlayer }: GoalieTableProps) {
   const team = teamMap.get(teamId);
   const teamName = team?.abbrev || `Team ${teamId}`;
 
@@ -456,7 +480,24 @@ function GoalieTable({ teamId, goalies, teamMap }: GoalieTableProps) {
     {
       header: "Goalie",
       accessorKey: "name",
-      cell: (info) => <div style={{ fontWeight: 500 }}>{String(info.getValue())}</div>,
+      cell: (info) => (
+        <button
+          onClick={() => onPlayer?.(info.row.original.pid)}
+          style={{
+            background: "none",
+            border: "none",
+            padding: 0,
+            color: "var(--color-accent-blue)",
+            cursor: "pointer",
+            textDecoration: "underline",
+            fontWeight: 500,
+            font: "inherit",
+          }}
+          title="View player details"
+        >
+          {String(info.getValue())}
+        </button>
+      ),
     },
     {
       header: "Shots",

@@ -6,9 +6,7 @@ import {
   useReactTable,
   ColumnDef,
 } from "@tanstack/react-table";
-import api, {
-  TransactionPlayerSummaryDTO,
-} from "../api";
+import api, { FreeAgentRow } from "../api";
 import { Panel, FaceoffDotSpinner } from "../ui";
 
 /**
@@ -17,7 +15,9 @@ import { Panel, FaceoffDotSpinner } from "../ui";
  * Displays cap summary, free agents, trades, draft board, and awards.
  * Uses a tabbed interface to switch between different transaction types.
  */
-export function Transactions({}: {
+export function Transactions({
+  onPlayer,
+}: {
   onPlayer?: (pid: number) => void;
   toast?: (msg: string) => void;
 } = {}) {
@@ -72,7 +72,7 @@ export function Transactions({}: {
         {/* Tab Content */}
         <div style={{ marginTop: "2rem" }}>
           {activeTab === "cap" && <CapPanel />}
-          {activeTab === "free-agents" && <FreeAgentsPanel />}
+          {activeTab === "free-agents" && <FreeAgentsPanel onPlayer={onPlayer} />}
           {activeTab === "trades" && <TradesPanel />}
           {activeTab === "draft" && <DraftPanel />}
           {activeTab === "awards" && <AwardsPanel />}
@@ -173,11 +173,11 @@ function CapPanel() {
 // ============================================================================
 // Free Agents Panel
 // ============================================================================
-function FreeAgentsPanel() {
+function FreeAgentsPanel({ onPlayer }: { onPlayer?: (pid: number) => void }) {
   const queryClient = useQueryClient();
   const { data: freeAgents, isLoading, error } = useQuery({
     queryKey: ["freeAgents"],
-    queryFn: () => api.getFreeAgents(),
+    queryFn: () => api.getFreeAgents() as Promise<FreeAgentRow[]>,
   });
 
   const signMutation = useMutation({
@@ -194,13 +194,29 @@ function FreeAgentsPanel() {
     return <p className="text-muted">No free agents available</p>;
   }
 
-  const columns: ColumnDef<TransactionPlayerSummaryDTO>[] = [
+  const columns: ColumnDef<FreeAgentRow>[] = [
     {
       header: "Player",
       accessorKey: "name",
       cell: (info) => (
         <div>
-          <div style={{ fontWeight: 500 }}>{String(info.getValue())}</div>
+          <button
+            onClick={() => onPlayer?.(info.row.original.pid)}
+            style={{
+              background: "none",
+              border: "none",
+              padding: 0,
+              color: "var(--color-accent-blue)",
+              cursor: "pointer",
+              textDecoration: "underline",
+              fontWeight: 500,
+              font: "inherit",
+              textAlign: "left",
+            }}
+            title="View player details"
+          >
+            {String(info.getValue())}
+          </button>
           <div style={{ fontSize: "0.875rem", color: "var(--color-muted)" }}>
             {info.row.original.position}
           </div>
@@ -216,6 +232,20 @@ function FreeAgentsPanel() {
       header: "Overall",
       accessorKey: "overall",
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "Ask",
+      accessorKey: "ask",
+      cell: (info) => (
+        <span className="text-mono">
+          ${((info.getValue() as number) / 1_000_000).toFixed(1)}M
+        </span>
+      ),
+    },
+    {
+      header: "Years",
+      accessorKey: "preferred_years",
+      cell: (info) => <span className="text-mono">{String(info.getValue())}yr</span>,
     },
     {
       header: "Action",
