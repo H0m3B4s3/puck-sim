@@ -187,7 +187,7 @@ def standings_response(world: World) -> List[StandingsEntryDTO]:
         base = team_summary(team, world)
         out.append(
             StandingsEntryDTO(
-                **base.model_dump(exclude={"record"}),
+                **base.model_dump(),
                 points=_team_points(world, team),
                 wins=team.wins,
                 losses=team.losses,
