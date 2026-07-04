@@ -122,9 +122,16 @@ export default function App() {
     retry: false, // Don't retry on 404
   });
 
-  // Create a new career
+  // Preview a generated league (team names/abbrevs/colors) before committing to it, so the
+  // user can pick their team -- see NoCareerState in ui.tsx.
+  const previewLeagueMutation = useMutation({
+    mutationFn: () => api.previewLeague(),
+  });
+
+  // Create a new career from the previewed league's seed + the user's chosen team.
   const newCareerMutation = useMutation({
-    mutationFn: () => api.newCareer({ seed: undefined }),
+    mutationFn: (userTeamAbbrev: string) =>
+      api.newCareer({ seed: previewLeagueMutation.data?.seed, user_team_abbrev: userTeamAbbrev }),
     onSuccess: () => {
       // Refetch career data after creating a new one
       window.location.reload(); // Simple approach: reload the page
@@ -259,8 +266,11 @@ export default function App() {
         <NavRail currentPath={currentPath} onNavigate={setCurrentPath} items={navItems} />
         <main className="app-main">
           <NoCareerState
-            onNewCareer={() => newCareerMutation.mutate()}
-            isLoading={newCareerMutation.isPending}
+            previewTeams={previewLeagueMutation.data?.teams}
+            previewLoading={previewLeagueMutation.isPending}
+            creatingCareer={newCareerMutation.isPending}
+            onPreview={() => previewLeagueMutation.mutate()}
+            onPickTeam={(abbrev) => newCareerMutation.mutate(abbrev)}
           />
         </main>
       </div>

@@ -540,6 +540,15 @@ export interface NewCareerRequest {
   user_team_abbrev?: string;
 }
 
+export interface LeaguePreviewRequest {
+  seed?: number;
+}
+
+export interface LeaguePreview {
+  seed: number;
+  teams: TeamSummary[];
+}
+
 export interface ManualLinesEditRequest {
   lines?: number[][];
   pairs?: number[][];
@@ -575,6 +584,11 @@ export interface DraftPickRequest {
 // --- client --------------------------------------------------------------
 
 export const api = {
+  /** POST /career/preview -- generate a league for a given (or freshly drawn) seed and return
+   * its teams, without creating a session. Lets the user pick a team before committing. */
+  previewLeague: (body: LeaguePreviewRequest = {}) =>
+    post<LeaguePreview>("/career/preview", body),
+
   /** POST /career/new -- generate a fresh league, start a session, set the session cookie. */
   newCareer: (body: NewCareerRequest = {}) =>
     post<WorldSummary>("/career/new", body),
