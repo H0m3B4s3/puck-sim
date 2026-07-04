@@ -13,6 +13,7 @@ it, mirroring HoopR's own "each route calls the same engine functions the CLI do
 """
 from __future__ import annotations
 
+import secrets
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -21,7 +22,14 @@ from pydantic import BaseModel
 from pucksim.config import AUTOSAVE_SLOT
 from pucksim.gen.leaguegen import build_world
 from pucksim.save import store
-from pucksim.web.serializers import StandingsEntryDTO, WorldSummaryDTO, standings_response, world_summary
+from pucksim.web.serializers import (
+    StandingsEntryDTO,
+    TeamSummaryDTO,
+    WorldSummaryDTO,
+    standings_response,
+    team_summary,
+    world_summary,
+)
 from pucksim.web.session import (
     get_session_id_optional,
     get_world,
@@ -30,6 +38,35 @@ from pucksim.web.session import (
 )
 
 router = APIRouter(prefix="/career", tags=["career"])
+
+
+# ---------------------------------------------------------------------------
+# POST /career/preview
+# ---------------------------------------------------------------------------
+class LeaguePreviewRequest(BaseModel):
+    seed: Optional[int] = None
+
+
+class LeaguePreviewDTO(BaseModel):
+    seed: int
+    teams: List[TeamSummaryDTO]
+
+
+@router.post("/preview", response_model=LeaguePreviewDTO)
+def preview_league(body: LeaguePreviewRequest) -> LeaguePreviewDTO:
+    """Generate a league (``gen.leaguegen.build_world``) and return its 32 teams for a
+    "pick your team" step, without creating a session -- lets the frontend show the user
+    real generated team names/abbrevs/colors before committing to ``POST /career/new``.
+
+    ``seed`` is always echoed back explicit (never ``None``): if the caller omits it, one is
+    drawn here via ``secrets`` (not the bare ``random`` module used internally by a seedless
+    ``Rng`` -- that path never surfaces the actual seed it used, so there'd be nothing to hand
+    back to ``/career/new`` for reproducing the exact same league the user just previewed).
+    """
+    seed = body.seed if body.seed is not None else secrets.randbits(31)
+    world = build_world(seed=seed)
+    teams = [team_summary(t, world) for t in world.team_list()]
+    return LeaguePreviewDTO(seed=seed, teams=teams)
 
 
 # ---------------------------------------------------------------------------

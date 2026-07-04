@@ -9,7 +9,8 @@
 // Pill: small badge/label component.
 
 import { ReactNode, useState } from "react";
-import { useTheme } from "./theme";
+import { useTheme, TeamTag } from "./theme";
+import { TeamSummary } from "./api";
 
 // --- Panel: the signature rink-cornered card ----------------------------------
 export function Panel({
@@ -226,26 +227,88 @@ export function ScreenPlaceholder({ title, step }: { title: string; step: string
 
 // --- Career loader / new-career flow ----------------------------------
 export function NoCareerState({
-  onNewCareer,
-  isLoading,
+  previewTeams,
+  previewLoading,
+  creatingCareer,
+  onPreview,
+  onPickTeam,
 }: {
-  onNewCareer: () => void;
-  isLoading: boolean;
+  /** Teams from the current league preview, or undefined before one's been requested. */
+  previewTeams?: TeamSummary[];
+  previewLoading: boolean;
+  creatingCareer: boolean;
+  /** Generate (or re-roll) a league preview. */
+  onPreview: () => void;
+  /** Commit to the previewed league with this team as the user's team. */
+  onPickTeam: (abbrev: string) => void;
 }) {
+  if (!previewTeams) {
+    return (
+      <Panel className="no-career-state">
+        <h2 className="text-display">Welcome to PuckSim</h2>
+        <p style={{ marginTop: "1rem", lineHeight: 1.6 }}>
+          No active career found. Start a new one to begin managing your team through a full NHL season.
+        </p>
+        <button
+          className="btn btn-primary"
+          onClick={onPreview}
+          disabled={previewLoading}
+          style={{ marginTop: "2rem" }}
+        >
+          {previewLoading ? "Generating league…" : "Start New Career"}
+        </button>
+      </Panel>
+    );
+  }
+
   return (
     <Panel className="no-career-state">
-      <h2 className="text-display">Welcome to PuckSim</h2>
+      <h2 className="text-display">Choose Your Team</h2>
       <p style={{ marginTop: "1rem", lineHeight: 1.6 }}>
-        No active career found. Start a new one to begin managing your team through a full NHL season.
+        Pick the team you'll manage this league. Don't like these 32? Reroll for a fresh set.
       </p>
       <button
-        className="btn btn-primary"
-        onClick={onNewCareer}
-        disabled={isLoading}
-        style={{ marginTop: "2rem" }}
+        className="btn"
+        onClick={onPreview}
+        disabled={previewLoading || creatingCareer}
+        style={{ marginTop: "1rem" }}
       >
-        {isLoading ? "Loading…" : "Start New Career"}
+        {previewLoading ? "Rerolling…" : "Reroll League"}
       </button>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+          gap: "0.75rem",
+          marginTop: "1.5rem",
+        }}
+      >
+        {previewTeams.map((team) => (
+          <button
+            key={team.abbrev}
+            onClick={() => onPickTeam(team.abbrev)}
+            disabled={creatingCareer || previewLoading}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.75rem",
+              padding: "0.75rem 1rem",
+              borderRadius: "8px",
+              border: "1px solid var(--color-border)",
+              backgroundColor: "var(--color-surface-card)",
+              cursor: creatingCareer || previewLoading ? "default" : "pointer",
+              textAlign: "left",
+            }}
+          >
+            <TeamTag abbrev={team.abbrev} color={team.primary_color} name={team.name} />
+          </button>
+        ))}
+      </div>
+      {creatingCareer && (
+        <p className="text-muted" style={{ marginTop: "1rem" }}>
+          Starting your career…
+        </p>
+      )}
     </Panel>
   );
 }
