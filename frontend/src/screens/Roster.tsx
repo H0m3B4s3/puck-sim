@@ -422,7 +422,10 @@ function TacticsPanel({
 
 // --- Main Roster Screen ---
 
-export function RosterScreen() {
+export function RosterScreen({}: {
+  onPlayer?: (pid: number) => void;
+  toast?: (msg: string) => void;
+} = {}) {
   const queryClient = useQueryClient();
 
   const [selectedPlayer, setSelectedPlayer] = useState<number | null>(null);

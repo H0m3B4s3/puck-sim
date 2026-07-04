@@ -20,8 +20,14 @@ import { TeamTag } from "../theme";
  * Displays the box score for a played game, with separate tables for skaters and goalies.
  * Users can select a game from the schedule and view its detailed box score.
  */
-export function BoxScore() {
-  const [selectedGameId, setSelectedGameId] = useState<number | null>(null);
+export function BoxScore({
+  initialGid,
+}: {
+  onPlayer?: (pid: number) => void;
+  toast?: (msg: string) => void;
+  initialGid?: number | null;
+} = {}) {
+  const [selectedGameId, setSelectedGameId] = useState<number | null>(initialGid || null);
 
   // Fetch schedule to allow game selection
   const {

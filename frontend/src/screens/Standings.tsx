@@ -24,6 +24,8 @@ export function StandingsScreen({
   world,
 }: {
   world: WorldSummary;
+  onPlayer?: (pid: number) => void;
+  toast?: (msg: string) => void;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "points", desc: true },

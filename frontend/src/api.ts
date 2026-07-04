@@ -82,6 +82,10 @@ export interface WorldSummary {
   day: number;
   standings_rule: string;
   user_team_id: number | null;
+  regular_season_complete: boolean;
+  offseason_stage: string | null;
+  trade_deadline_day: number | null;
+  trade_deadline_passed: boolean;
 }
 
 export interface SaveResult {
@@ -191,6 +195,30 @@ export interface AdvanceDayResponse {
   day: number;
   phase: string;
   games_played: GamePlayedSummary[];
+  season_complete: boolean;
+}
+
+export interface AdvanceWeekResponse {
+  day: number;
+  phase: string;
+  days_advanced: number;
+  games_played: GamePlayedSummary[];
+  user_games: GamePlayedSummary[];
+  season_complete: boolean;
+}
+
+export interface SimToNextGameResponse {
+  played: boolean;
+  gid?: number;
+  day?: number;
+  phase: string;
+  home?: number;
+  away?: number;
+  home_score?: number;
+  away_score?: number;
+  went_ot?: boolean;
+  went_so?: boolean;
+  season_complete: boolean;
 }
 
 // --- box score DTOs (mirrors pucksim/web/serializers.py) --------------------
@@ -250,6 +278,35 @@ export interface BoxScoreResponse {
   goalie_box: Record<number, GoalieBoxScoreDTO>;
 }
 
+// --- Player detail DTOs (mirrors pucksim/web/routers/players.py) ---------
+
+export interface PlayerDetailDTO {
+  pid: number;
+  name: string;
+  age: number;
+  position: string;
+  secondary_position: string | null;
+  shoots: string;
+  is_goalie: boolean;
+  overall: number;
+  potential: number;
+  team_id: number | null;
+  team_abbrev: string;
+  team_name: string;
+  team_color: string;
+  salary: number;
+  years_remaining: number;
+  morale: number;
+  injury: string | null;
+  injury_games: number;
+  draft: Record<string, unknown> | null;
+  season_stats: Record<string, unknown>;
+  playoff_stats: Record<string, unknown> | null;
+  rating_groups: Record<string, Array<{ key: string; label: string; value: number }>>;
+  career: Array<Record<string, unknown>>;
+  legacy: Record<string, unknown> | null;
+}
+
 // --- transactions DTOs (mirrors pucksim/web/serializers.py) -----------------
 
 export interface CapSummaryDTO {
@@ -266,6 +323,11 @@ export interface TransactionPlayerSummaryDTO {
   age: number;
   overall: number;
   team_id: number | null;
+}
+
+export interface FreeAgentRow extends TransactionPlayerSummaryDTO {
+  ask: number;
+  preferred_years: number;
 }
 
 export interface TradeResponseDTO {
@@ -287,6 +349,188 @@ export interface DraftBoardDTO {
   board: DraftBoardEntryDTO[];
   team_on_clock: number | null;
   round_number: number | null;
+}
+
+// --- League endpoints DTOs -----------------------------------------------
+
+export interface LeaderEntry {
+  pid: number;
+  name: string;
+  position: string;
+  team_id: number | null;
+  team_abbrev: string;
+  team_color: string;
+  value: number | string;
+}
+
+export interface LeaderCategory {
+  stat: string;
+  label: string;
+  leaders: LeaderEntry[];
+}
+
+export interface LeadersResponse {
+  categories: LeaderCategory[];
+}
+
+export interface AwardEntry {
+  pid: number;
+  name: string;
+  position: string;
+  team_id: number | null;
+  team_abbrev: string;
+  tid: number | null;
+  gp: number;
+  stats: Record<string, unknown>;
+}
+
+export interface SeasonHistory {
+  year: number;
+  champion_tid: number | null;
+  champion_name: string;
+  champion_abbrev: string;
+  champion_color: string;
+  awards: Record<string, AwardEntry>;
+}
+
+export interface HistoryResponse {
+  seasons: SeasonHistory[];
+}
+
+export interface HallOfFameEntry {
+  pid: number;
+  name: string;
+  position: string;
+  seasons: number;
+  peak_ovr: number;
+  last_team: string;
+  first_year: number;
+  last_year: number;
+  draft: Record<string, unknown> | null;
+  active: boolean;
+  totals: Record<string, unknown>;
+  accolades: Array<{ key: string; label: string; count: number }>;
+  hof_score: number;
+  hof: boolean;
+  induction_year: number;
+}
+
+export interface HallOfFameResponse {
+  members: HallOfFameEntry[];
+}
+
+export interface LeaderboardRow {
+  pid: number;
+  name: string;
+  position: string;
+  active: boolean;
+  value: number;
+}
+
+export interface LeaderboardResponse {
+  category: string;
+  categories: string[];
+  rows: LeaderboardRow[];
+}
+
+// --- Playoffs endpoints DTOs -------------------------------------------------
+
+export interface PlayoffsStateDTO {
+  in_playoffs: boolean;
+  can_start: boolean;
+  bracket: Record<string, unknown> | null;
+  complete: boolean;
+  champion_tid: number | null;
+  champion_name: string | null;
+  champion_abbrev: string | null;
+  champion_color: string | null;
+  round: string | null;
+  round_label: string | null;
+}
+
+export interface SlateSeries {
+  sid: number;
+  round: number;
+  status: string;
+  home_tid: number;
+  away_tid: number;
+  home_abbrev: string;
+  away_abbrev: string;
+  home_score: number;
+  away_score: number;
+  went_ot: boolean;
+  went_so: boolean;
+}
+
+export interface AdvancePlayoffsResponse extends PlayoffsStateDTO {
+  slate: SlateSeries[];
+}
+
+// --- Offseason endpoints DTOs ------------------------------------------------
+
+export interface PreDraftResponse {
+  resumed: boolean;
+  retired: number;
+  new_fas: number;
+  inducted: Array<Record<string, unknown>>;
+  milestones: Array<Record<string, unknown>>;
+  champion_tid: number | null;
+  champion_name: string;
+  awards: Record<string, unknown> | null;
+}
+
+export interface OffseasonDraftBoardEntry {
+  pid: number;
+  name: string;
+  position: string;
+  age: number;
+  overall: number;
+  potential: number;
+}
+
+export interface OffseasonDraftBoardResponse {
+  complete: boolean;
+  pick: number | null;
+  round: number | null;
+  recent: Array<Record<string, unknown>>;
+  board: OffseasonDraftBoardEntry[];
+}
+
+export interface OffseasonDraftPickResponse {
+  pick: number;
+  pid: number;
+  name: string;
+  position: string;
+  overall: number;
+  potential: number;
+  signed: boolean;
+}
+
+export interface FAWaveDTO {
+  active: boolean;
+  wave: number;
+  total: number;
+  name: string;
+}
+
+export interface FAAdvanceResponse {
+  signings: number;
+  done: boolean;
+  next: FAWaveDTO;
+}
+
+// --- Trade endpoints DTOs ------------------------------------------------
+
+export interface TradeValidateResponse {
+  legal: boolean;
+  legal_reason: string;
+  accepts: boolean;
+  ai_reason: string;
+}
+
+export interface TradeExecuteResponse {
+  executed: boolean;
+  reason: string;
 }
 
 // --- request bodies ----------------------------------------------------------
@@ -384,6 +628,13 @@ export const api = {
   /** POST /season/advance-day -- simulate all games for the day, advance, return summary. */
   advanceDay: () => post<AdvanceDayResponse>("/season/advance-day"),
 
+  /** POST /season/advance-week -- simulate multiple days (1-14) in one request. */
+  advanceWeek: (days: number = 7) =>
+    post<AdvanceWeekResponse>("/season/advance-week", { days }),
+
+  /** POST /season/sim-to-next-game -- simulate until user's team plays their next game. */
+  simToNextGame: () => post<SimToNextGameResponse>("/season/sim-to-next-game"),
+
   /** GET /season/playoffs/bracket -- playoff bracket (null if not in playoffs yet). */
   getPlayoffBracket: () => get<Record<string, unknown> | null>("/season/playoffs/bracket"),
 
@@ -424,6 +675,72 @@ export const api = {
 
   /** GET /transactions/awards -- end-of-season awards. */
   getAwards: () => get<{ season_year: number; awards: Record<string, unknown> }>("/transactions/awards"),
+
+  // --- Player detail (T6) ---
+
+  /** GET /players/{pid} -- detailed player card with stats, ratings, legacy. */
+  getPlayer: (pid: number) => get<PlayerDetailDTO>(`/players/${pid}`),
+
+  // --- Roster detail (T6) ---
+
+  /** GET /roster/{tid} -- roster for any team (not just user's team). */
+  getTeamRoster: (tid: number) => get<RosterResponse>(`/roster/${tid}`),
+
+  // --- League endpoints (T6) ---
+
+  /** GET /league/leaders -- current season leaders by category. */
+  getLeaders: () => get<LeadersResponse>("/league/leaders"),
+
+  /** GET /league/history -- archived seasons with awards. */
+  getHistory: () => get<HistoryResponse>("/league/history"),
+
+  /** GET /league/hall-of-fame -- Hall of Fame members. */
+  getHallOfFame: () => get<HallOfFameResponse>("/league/hall-of-fame"),
+
+  /** GET /league/leaderboards?category=pts -- all-time leaderboard for a category. */
+  getLeaderboards: (category: string) => get<LeaderboardResponse>(`/league/leaderboards?category=${category}`),
+
+  // --- Playoffs endpoints (T6) ---
+
+  /** GET /playoffs -- current playoff bracket state. */
+  getPlayoffs: () => get<PlayoffsStateDTO>("/playoffs"),
+
+  /** POST /playoffs/start -- start the playoffs (move from regular season to playoffs). */
+  startPlayoffs: () => post<PlayoffsStateDTO>("/playoffs/start"),
+
+  /** POST /playoffs/advance -- simulate the next playoff slate. */
+  advancePlayoffs: () => post<AdvancePlayoffsResponse>("/playoffs/advance"),
+
+  // --- Offseason endpoints (T6) ---
+
+  /** POST /offseason/pre-draft -- begin offseason (retire, archive season, setup draft). */
+  preDraft: () => post<PreDraftResponse>("/offseason/pre-draft"),
+
+  /** GET /offseason/draft/board -- current draft board state. */
+  offseasonDraftBoard: () => get<OffseasonDraftBoardResponse>("/offseason/draft/board"),
+
+  /** POST /offseason/draft/pick -- make a draft pick (prospect_id optional for auto-best). */
+  offseasonDraftPick: (prospectId: number | null) =>
+    post<OffseasonDraftPickResponse>("/offseason/draft/pick", { prospect_id: prospectId }),
+
+  /** POST /offseason/fa/start -- start free agency (enter wave 1). */
+  faStart: () => post<FAWaveDTO>("/offseason/fa/start"),
+
+  /** POST /offseason/fa/advance -- advance to next FA wave (rival GMs sign players). */
+  faAdvance: () => post<FAAdvanceResponse>("/offseason/fa/advance"),
+
+  /** POST /offseason/finish -- complete offseason and start next season. */
+  finishOffseason: () => post<WorldSummary>("/offseason/finish"),
+
+  // --- Trade endpoints (T6) ---
+
+  /** POST /transactions/trades/validate -- check if a trade is legal and if AI accepts. */
+  validateTrade: (body: TradeOfferRequest) =>
+    post<TradeValidateResponse>("/transactions/trades/validate", body),
+
+  /** POST /transactions/trades/execute -- execute a validated trade. */
+  executeTrade: (body: TradeOfferRequest) =>
+    post<TradeExecuteResponse>("/transactions/trades/execute", body),
 };
 
 export default api;

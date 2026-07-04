@@ -1,11 +1,14 @@
-// Shared UI primitives for PuckSim (Step 2.10a).
+// Shared UI primitives for PuckSim (Step 2.10a + T6).
 //
 // Panel: rink-cornered card (~24px radius), signature element.
 // ScoreboardBar: top persistent bar with season info and controls.
 // FaceoffDotSpinner: loading indicator (faceoff dot motif).
 // NavRail: left navigation sidebar.
+// Modal: centered modal overlay with close button.
+// useToast: toast notification system.
+// Pill: small badge/label component.
 
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import { useTheme } from "./theme";
 
 // --- Panel: the signature rink-cornered card ----------------------------------
@@ -40,6 +43,10 @@ export function ScoreboardBar({
   onThemeToggle,
   simDayLabel = "Sim Day",
   simDayLoading = false,
+  onSimWeek,
+  onSimToNextGame,
+  simControlsEnabled,
+  phaseHint,
 }: {
   seasonYear: number;
   phase: string;
@@ -48,6 +55,10 @@ export function ScoreboardBar({
   onThemeToggle: () => void;
   simDayLabel?: string;
   simDayLoading?: boolean;
+  onSimWeek?: () => void;
+  onSimToNextGame?: () => void;
+  simControlsEnabled?: boolean;
+  phaseHint?: string;
 }) {
   const { theme } = useTheme();
   return (
@@ -60,14 +71,40 @@ export function ScoreboardBar({
         </div>
       </div>
       <div className="scoreboard-bar__right">
-        <button
-          className="btn btn-primary"
-          onClick={onSimDay}
-          disabled={simDayLoading}
-          title={`${simDayLabel} - Advance simulation ${phase === "preseason" ? "into regular season" : "one day"}`}
-        >
-          {simDayLoading ? "Loading…" : simDayLabel}
-        </button>
+        {simControlsEnabled ? (
+          <>
+            <button
+              className="btn btn-primary"
+              onClick={onSimDay}
+              disabled={simDayLoading}
+              title={`${simDayLabel} - Advance simulation ${phase === "preseason" ? "into regular season" : "one day"}`}
+            >
+              {simDayLoading ? "Loading…" : simDayLabel}
+            </button>
+            {onSimWeek && (
+              <button
+                className="btn btn-secondary"
+                onClick={onSimWeek}
+                disabled={simDayLoading}
+                title="Simulate a week (7 days)"
+              >
+                Sim Week
+              </button>
+            )}
+            {onSimToNextGame && (
+              <button
+                className="btn btn-secondary"
+                onClick={onSimToNextGame}
+                disabled={simDayLoading}
+                title="Simulate to your team's next game"
+              >
+                Next Game
+              </button>
+            )}
+          </>
+        ) : phaseHint ? (
+          <Pill>{phaseHint}</Pill>
+        ) : null}
         <button
           className="btn btn-secondary"
           onClick={onThemeToggle}
@@ -84,18 +121,25 @@ export function ScoreboardBar({
 export function NavRail({
   currentPath,
   onNavigate,
+  items,
 }: {
   currentPath: string;
   onNavigate: (path: string) => void;
+  items?: { label: string; path: string }[];
 }) {
-  const navItems = [
+  const defaultItems = [
     { label: "Home", path: "/" },
     { label: "Roster", path: "/roster" },
     { label: "Standings", path: "/standings" },
     { label: "Schedule", path: "/schedule" },
     { label: "Box Score", path: "/box-score" },
+    { label: "Leaders", path: "/leaders" },
+    { label: "Trades", path: "/trades" },
     { label: "Transactions", path: "/transactions" },
+    { label: "History", path: "/history" },
   ];
+
+  const navItems = items || defaultItems;
 
   return (
     <nav className="nav-rail">
@@ -118,6 +162,54 @@ export function NavRail({
       </ul>
     </nav>
   );
+}
+
+// --- Modal: centered overlay with close button (ported from HoopR) --
+
+export function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="modalBg" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modalHead">
+          <div>{title}</div>
+          <button className="x" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modalBody">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// --- Pill: small badge/label (ported from HoopR) --
+
+export function Pill({ children, color }: { children: ReactNode; color?: string }) {
+  return (
+    <span className="pill" style={color ? { background: color, color: "#0b0f14" } : undefined}>
+      {children}
+    </span>
+  );
+}
+
+// --- useToast: toast notification system (ported from HoopR) --
+
+export function useToast() {
+  const [msg, setMsg] = useState<string | null>(null);
+  const toast = (m: string) => {
+    setMsg(m);
+    window.setTimeout(() => setMsg(null), 3200);
+  };
+  const node = msg ? <div className="toast">{msg}</div> : null;
+  return { toast, node };
 }
 
 // --- Placeholder screen components ----------------------------------
