@@ -1403,3 +1403,165 @@ button:disabled {
   border-color: var(--color-accent-blue);
   font-weight: 600;
 }
+
+/* ============================================================================
+   Schedule Tab Toggle & Day Picker (T12)
+   ============================================================================ */
+
+.schedule-tab-toggle {
+  display: flex;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xl);
+  border-bottom: 2px solid var(--color-border);
+  padding-bottom: var(--space-md);
+}
+
+.schedule-tab-toggle .tab-btn {
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -10px;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.schedule-tab-toggle .tab-btn:hover {
+  color: var(--color-text);
+}
+
+.schedule-tab-toggle .tab-btn.active {
+  color: var(--color-accent-red);
+  border-bottom-color: var(--color-accent-red);
+}
+
+.schedule-day-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md);
+  background-color: var(--color-surface);
+  border-radius: var(--radius-sm);
+}
+
+.schedule-day-picker label {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.schedule-day-picker input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--color-border);
+  border-radius: 5px;
+  outline: none;
+}
+
+.schedule-day-picker input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent-blue);
+  cursor: pointer;
+}
+
+.schedule-day-picker input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-accent-blue);
+  cursor: pointer;
+  border: none;
+}
+
+.schedule-game__tag {
+  display: inline-block;
+  background-color: var(--color-accent-gold);
+  color: #12181f;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: 3px;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  margin-left: var(--space-sm);
+}
+
+.schedule-game__actions {
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+   Standings Conference Groups (T12)
+   ============================================================================ */
+
+.standings-conferences {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-xl);
+}
+
+.standings-conference {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.standings-conference h3 {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  margin: 0;
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.standings-division {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.standings-division-header {
+  padding: var(--space-md) 0;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: var(--font-size-sm);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.standings-playoff-cutline {
+  background-color: transparent !important;
+  padding: 0 !important;
+  height: 1px !important;
+}
+
+.standings-playoff-cutline td {
+  padding: 0 !important;
+  border: none !important;
+}
+
+.cutline-visual {
+  height: 2px;
+  background-color: var(--color-accent-gold);
+  margin: var(--space-md) 0;
+}
+
+.standings-playoff-note {
+  text-align: center;
+  font-size: var(--font-size-base);
+}
+
+.standings-playoff-note a {
+  color: var(--color-accent-blue);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.standings-playoff-note a:hover {
+  text-decoration: underline;
+}

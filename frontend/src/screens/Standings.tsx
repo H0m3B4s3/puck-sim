@@ -1,24 +1,16 @@
-// Standings screen (Step 2.10c).
+// Standings screen (Step 2.11 / T12).
 //
-// Displays all 32 teams in the league, sorted by points (default).
-// Sortable by points, wins, losses. Highlights the user's own team row.
-// Shows the active standings rule in the title.
-// Also displays playoff bracket status when in playoffs phase.
+// Displays all 32 teams in the league, grouped by conference and division.
+// Shows playoff seeds (1-8) per conference with a visual cutline under seed 8.
+// Highlights the user's own team row.
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  SortingState,
-  useReactTable,
-} from "@tanstack/react-table";
-import api, { StandingsEntry } from "../api";
-import { WorldSummary } from "../api";
+import api, { StandingsEntry, WorldSummary } from "../api";
 import { Panel, FaceoffDotSpinner } from "../ui";
 import { TeamTag } from "../theme";
+
+const PLAYOFF_TEAMS_PER_CONF = 8;
 
 export function StandingsScreen({
   world,
@@ -27,78 +19,69 @@ export function StandingsScreen({
   onPlayer?: (pid: number) => void;
   toast?: (msg: string) => void;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "points", desc: true },
-  ]);
-
   const { data: standings, isLoading, error } = useQuery({
     queryKey: ["standings"],
     queryFn: () => api.getStandings(),
   });
 
-  const { data: playoffBracket } = useQuery({
-    queryKey: ["playoff-bracket"],
-    queryFn: () => api.getPlayoffBracket(),
-  });
+  // Group standings by conference
+  const groupedByConference = useMemo(() => {
+    if (!standings) return {};
+    const grouped: Record<string, StandingsEntry[]> = {};
+    standings.forEach((team) => {
+      if (!grouped[team.conference]) {
+        grouped[team.conference] = [];
+      }
+      grouped[team.conference].push(team);
+    });
+    return grouped;
+  }, [standings]);
 
-  const columnHelper = createColumnHelper<StandingsEntry>();
+  // Group by division within each conference (sorted by points)
+  const conferencePanels = useMemo(() => {
+    const panels: Array<{
+      conference: string;
+      divisions: Array<{
+        division: string;
+        teams: Array<StandingsEntry & { seed: number; isPlayoffCutline: boolean }>;
+      }>;
+    }> = [];
 
-  const columns = useMemo(
-    () => [
-      columnHelper.accessor("abbrev", {
-        header: "Team",
-        size: 150,
-        cell: (info) => {
-          const row = info.row.original;
-          return (
-            <TeamTag
-              abbrev={row.abbrev}
-              color={row.primary_color}
-              name={row.name}
-            />
-          );
-        },
-      }),
-      columnHelper.accessor("conference", {
-        header: "Conf",
-        size: 80,
-      }),
-      columnHelper.accessor("division", {
-        header: "Div",
-        size: 100,
-      }),
-      columnHelper.accessor("wins", {
-        header: "W",
-        size: 60,
-        cell: (info) => <span className="text-mono">{info.getValue()}</span>,
-      }),
-      columnHelper.accessor("losses", {
-        header: "L",
-        size: 60,
-        cell: (info) => <span className="text-mono">{info.getValue()}</span>,
-      }),
-      columnHelper.accessor("ot_losses", {
-        header: "OTL",
-        size: 60,
-        cell: (info) => <span className="text-mono">{info.getValue()}</span>,
-      }),
-      columnHelper.accessor("points", {
-        header: "Points",
-        size: 80,
-        cell: (info) => <span className="text-mono">{info.getValue()}</span>,
-      }),
-    ],
-    [columnHelper]
-  );
+    Object.entries(groupedByConference).forEach(([conf, teams]) => {
+      // Sort teams by points within the conference
+      const sortedTeams = [...teams].sort((a, b) => b.points - a.points);
 
-  const table = useReactTable({
-    data: standings || [],
-    columns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-  });
+      // Group by division
+      const divisionMap: Record<
+        string,
+        Array<StandingsEntry & { seed: number; isPlayoffCutline: boolean }>
+      > = {};
+      sortedTeams.forEach((team, index) => {
+        if (!divisionMap[team.division]) {
+          divisionMap[team.division] = [];
+        }
+        const seed = index + 1;
+        const isPlayoffCutline = seed === PLAYOFF_TEAMS_PER_CONF + 1;
+        divisionMap[team.division].push({
+          ...team,
+          seed,
+          isPlayoffCutline,
+        });
+      });
+
+      // Sort divisions by their top team's seed
+      const divisions = Object.entries(divisionMap)
+        .sort((a, b) => a[1][0].seed - b[1][0].seed)
+        .map(([division, teams]) => ({
+          division,
+          teams: teams.sort((a, b) => b.points - a.points),
+        }));
+
+      panels.push({ conference: conf, divisions });
+    });
+
+    return panels;
+  }, [groupedByConference]);
 
   if (isLoading) {
     return (
@@ -131,81 +114,103 @@ export function StandingsScreen({
         <p className="text-muted">Season {world.season_year}</p>
       </div>
 
-      <div className="standings-table-wrapper">
-        <table className="standings-table">
-          <thead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    onClick={header.column.getToggleSortingHandler()}
-                    style={{
-                      width: header.getSize() || "auto",
-                      cursor: header.column.getCanSort()
-                        ? "pointer"
-                        : "default",
-                      textAlign: header.id === "abbrev" ? "left" : "center",
-                    }}
-                  >
-                    <div className="standings-column-header">
-                      {flexRender(
-                        header.column.columnDef.header,
-                        header.getContext()
-                      )}
-                      {header.column.getCanSort() && (
-                        <span className="standings-sort-indicator">
-                          {header.column.getIsSorted() === "desc"
-                            ? " ↓"
-                            : header.column.getIsSorted() === "asc"
-                              ? " ↑"
-                              : ""}
-                        </span>
-                      )}
-                    </div>
-                  </th>
-                ))}
-              </tr>
+      {/* Conference panels */}
+      <div className="standings-conferences">
+        {conferencePanels.map((confPanel) => (
+          <div key={confPanel.conference} className="standings-conference">
+            <h3 className="text-lg" style={{ marginBottom: "1rem" }}>
+              {confPanel.conference}
+            </h3>
+
+            {confPanel.divisions.map((divPanel) => (
+              <div key={divPanel.division} className="standings-division">
+                {/* Division header */}
+                <div className="standings-division-header">
+                  <span className="text-muted">{divPanel.division}</span>
+                </div>
+
+                {/* Division teams table */}
+                <div className="standings-table-wrapper">
+                  <table className="standings-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: "40px", textAlign: "center" }}>Seed</th>
+                        <th style={{ width: "150px", textAlign: "left" }}>Team</th>
+                        <th style={{ width: "60px", textAlign: "center" }}>W</th>
+                        <th style={{ width: "60px", textAlign: "center" }}>L</th>
+                        <th style={{ width: "60px", textAlign: "center" }}>OTL</th>
+                        <th style={{ width: "80px", textAlign: "center" }}>Points</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {divPanel.teams.map((team) => {
+                        const isUserTeam = team.id === world.user_team_id;
+                        return (
+                          <>
+                            <tr
+                              key={team.id}
+                              className={
+                                isUserTeam
+                                  ? "standings-row user-team"
+                                  : "standings-row"
+                              }
+                            >
+                              <td style={{ textAlign: "center" }}>
+                                <span className="text-mono">{team.seed}</span>
+                              </td>
+                              <td>
+                                <TeamTag
+                                  abbrev={team.abbrev}
+                                  color={team.primary_color}
+                                  name={team.name}
+                                />
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <span className="text-mono">{team.wins}</span>
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <span className="text-mono">{team.losses}</span>
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <span className="text-mono">{team.ot_losses}</span>
+                              </td>
+                              <td style={{ textAlign: "center" }}>
+                                <span className="text-mono">{team.points}</span>
+                              </td>
+                            </tr>
+                            {/* Playoff cutline after seed 8 */}
+                            {team.seed === PLAYOFF_TEAMS_PER_CONF && (
+                              <tr className="standings-playoff-cutline">
+                                <td colSpan={6}>
+                                  <div className="cutline-visual" />
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             ))}
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row) => {
-              const isUserTeam = row.original.id === world.user_team_id;
-              return (
-                <tr
-                  key={row.id}
-                  className={isUserTeam ? "standings-row user-team" : "standings-row"}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <td
-                      key={cell.id}
-                      style={{
-                        width: cell.column.getSize() || "auto",
-                        textAlign: cell.column.id === "abbrev" ? "left" : "center",
-                      }}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+          </div>
+        ))}
       </div>
 
+      {/* Link to Playoffs tab when in playoffs */}
       {world.phase === "playoffs" && (
-        <div className="standings-playoff-bracket" style={{ marginTop: "2rem" }}>
-          <h3 className="text-display" style={{ fontSize: "var(--font-size-xl)" }}>
-            Playoff Bracket
-          </h3>
-          {playoffBracket ? (
-            <pre className="playoff-bracket-json">
-              {JSON.stringify(playoffBracket, null, 2)}
-            </pre>
-          ) : (
-            <p className="text-muted">Bracket generating…</p>
-          )}
+        <div
+          className="standings-playoff-note"
+          style={{ marginTop: "2rem", padding: "1rem", textAlign: "center" }}
+        >
+          <p className="text-muted">
+            See the{" "}
+            <a href="#/playoffs" style={{ cursor: "pointer", color: "inherit" }}>
+              <strong>Playoffs</strong>
+            </a>{" "}
+            tab for the current bracket.
+          </p>
         </div>
       )}
     </Panel>
