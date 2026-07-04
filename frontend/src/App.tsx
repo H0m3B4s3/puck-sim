@@ -307,7 +307,7 @@ export default function App() {
       case "/schedule":
         return <ScheduleScreen world={world} onPlayer={setOpenPid} toast={toast} onViewBoxScore={handleViewBoxScore} />;
       case "/box-score":
-        return <BoxScore onPlayer={setOpenPid} toast={toast} initialGid={boxScoreGid} />;
+        return <BoxScore onPlayer={setOpenPid} toast={toast} initialGid={boxScoreGid} currentDay={world.day} />;
       case "/leaders":
         return <LeadersScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       case "/trades":
