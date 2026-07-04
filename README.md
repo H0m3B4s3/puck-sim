@@ -46,16 +46,21 @@ pucksim-web
 # for auto-reload on code changes during development, use uvicorn directly instead:
 # python -m uvicorn pucksim.web.app:app --reload
 
-# Terminal 2 — frontend (Vite dev server, default http://localhost:5173)
+# Terminal 2 — frontend (Vite dev server, default http://127.0.0.1:5173)
 cd frontend
 npm install    # first run only
 npm run dev
 ```
 
-Open the frontend URL printed by Vite (usually `http://localhost:5173`) in a browser. The
+Open the frontend URL printed by Vite (usually `http://127.0.0.1:5173`) in a browser. The
 frontend talks to the backend at `http://127.0.0.1:8000` by default; point it elsewhere by setting
 `VITE_API_BASE_URL` (e.g. `VITE_API_BASE_URL=http://127.0.0.1:9000 npm run dev`) if you're running
 the backend on a different port.
+
+Note: the frontend and backend must be reached via the **same hostname** (both `127.0.0.1` or
+both `localhost`, not one of each) -- the session cookie is `samesite="lax"`, and browsers treat
+`localhost`/`127.0.0.1` as different sites, which silently drops the cookie on cross-site fetches
+and breaks the app after `POST /career/new`.
 
 To build a static production bundle instead of running the dev server: `cd frontend && npm run
 build` (output in `frontend/dist/`, served by any static file server — the FastAPI backend does
