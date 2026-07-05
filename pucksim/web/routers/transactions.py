@@ -137,7 +137,7 @@ class TradeExecuteResponse(BaseModel):
     reason: str
 
 
-@router.post("/transactions/trades/execute", response_model=TradeExecuteResponse)
+@router.post("/trades/execute", response_model=TradeExecuteResponse)
 def execute_trade(
     body: TradeOfferRequest,
     world=Depends(get_world),
