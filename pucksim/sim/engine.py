@@ -1619,7 +1619,22 @@ class GameSim:
         # goal scored on a pulled goalie either (same "special situation, doesn't count" logic
         # as a PP goal) -- also keeps the league-wide net-zero invariant intact for a 6-on-5
         # situation, which (like PP/5v3) has asymmetric on-ice group sizes.
-        if scoring_strength_state not in (config.STRENGTH_PP, config.STRENGTH_5V3) and goalie is not None:
+        #
+        # That ``goalie is None`` check only catches the DEFENDING team's own net being empty
+        # (they pulled their goalie and got scored into their empty net). It missed the mirror
+        # case: the SCORING team itself has pulled ITS OWN goalie to attack with an extra
+        # skater (``offense.goalie_pulled``) while the opponent's goalie is still in net --
+        # offense.on_ice is 6 skaters against defense's 5, the same asymmetric-group-size
+        # situation as a PP/5v3 goal, and crediting it symmetrically breaks the same net-zero
+        # invariant this whole gate exists to protect (confirmed via
+        # test_goal_updates_plus_minus_nets_to_zero_when_every_goal_is_5v5: an unassisted,
+        # trailing-team, late-third-period goal -- the classic extra-attacker script -- summed
+        # to +1 instead of 0 before this fix). Exclude both teams' pulled-goalie state, not just
+        # the defending side's, to close the gap symmetrically.
+        if (scoring_strength_state not in (config.STRENGTH_PP, config.STRENGTH_5V3)
+                and goalie is not None
+                and not offense.goalie_pulled
+                and not defense.goalie_pulled):
             for pid in offense.on_ice:
                 self.result.skater_line(pid).plus_minus += 1
             for pid in defense.on_ice:
