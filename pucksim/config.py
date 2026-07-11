@@ -274,6 +274,23 @@ HIT_SEPARATION_MIN = 0.05
 HIT_SEPARATION_MAX = 0.55
 HIT_TURNOVER_FLIP_P = 0.72
 
+# Skating / agility (DEVPLAN.md Step 2.x "impactful ratings"): these were composite-only and never
+# touched a live outcome. Now a player's speed (0.5*skating + 0.5*agility) drives two things:
+#   1. the rush finishing bonus -- a fast player carrying the puck on the rush is more dangerous,
+#      so the rush's save-suppression scales with the shooter's speed (centered on the ~65 mean so
+#      an average rush is unchanged); and
+#   2. zone entry -- a faster, more agile team is blown offside less often (cleaner entries, more
+#      sustained o-zone time), scaling the per-cycle offside chance by the attacking group's speed.
+# Both centered on the rating mean so a league-average team is unaffected. PROVISIONAL/TUNABLE.
+RUSH_SPEED_PIVOT = 65.0
+RUSH_SPEED_SLOPE = 0.0011
+RUSH_BONUS_BASE = 0.03
+RUSH_BONUS_MIN = 0.0
+RUSH_BONUS_MAX = 0.08
+OFFSIDE_SPEED_SLOPE = 0.008
+OFFSIDE_SPEED_MIN_MULT = 0.45
+OFFSIDE_SPEED_MAX_MULT = 1.6
+
 # Power-play / penalty-kill on-ice group sizes. A PP unit is a full-strength 5 (the shorthanded
 # opponent is down a skater); a PK unit is the shorthanded team's own 4 skaters. 5-on-3 shrinks
 # the box-checking team down to 3 -- see STRENGTH_5V3 handling in special_teams.py.
