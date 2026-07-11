@@ -248,6 +248,32 @@ REBOUND_CONTROL_MIN_MULT = 0.35
 # save odds). PROVISIONAL/TUNABLE magnitude.
 REBOUND_QUALITY_BONUS = 0.32
 
+# Hitting / body checks (DEVPLAN.md Step 2.x "impactful ratings"): the engine had no hit mechanic
+# at all and the SkaterStatLine `hits` field was never incremented. Each shot-attempt cycle, the
+# checking (defending) team may throw a body check on the puck carrier, and the fore-checking
+# (attacking) team may finish a check of its own. Per-cycle probabilities are tuned so a full game
+# nets a realistic ~20-25 hits per team. The hitter is chosen weighted by checking+strength.
+HIT_CHANCE_DEF_PER_CYCLE = 0.72
+HIT_CHANCE_OFF_PER_CYCLE = 0.60
+# A more physical on-ice group throws more hits (real physical teams lead the league in hits), so
+# the per-cycle hit chance scales with the hitting group's average checking/strength, centered on
+# the ~69 rating mean so a league-average team stays at the base rate. Bounded so it stays sane.
+HIT_TEAM_PHYSICALITY_SLOPE = 0.006
+HIT_TEAM_PHYSICALITY_MIN_MULT = 0.55
+HIT_TEAM_PHYSICALITY_MAX_MULT = 1.5
+# A defensive body check may SEPARATE the carrier from the puck (a forced turnover) -- this is how
+# checking/strength earn a gameplay effect, not just a counting stat. Separation odds come from the
+# checker's checking/strength vs the carrier's strength/agility, centered on the ~69 rating mean.
+# Kept modest (possession is conserved league-wide, so this shifts who-shoots-next, not total
+# scoring). HIT_TURNOVER_FLIP_P is the possession-flip chance after a separating hit (vs the 0.50
+# neutral coin flip). PROVISIONAL/TUNABLE.
+HIT_SEPARATION_PIVOT = 69.0
+HIT_SEPARATION_SLOPE = 0.004
+HIT_SEPARATION_BASE = 0.25
+HIT_SEPARATION_MIN = 0.05
+HIT_SEPARATION_MAX = 0.55
+HIT_TURNOVER_FLIP_P = 0.72
+
 # Power-play / penalty-kill on-ice group sizes. A PP unit is a full-strength 5 (the shorthanded
 # opponent is down a skater); a PK unit is the shorthanded team's own 4 skaters. 5-on-3 shrinks
 # the box-checking team down to 3 -- see STRENGTH_5V3 handling in special_teams.py.

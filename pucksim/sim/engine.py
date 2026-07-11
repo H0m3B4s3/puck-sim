@@ -1064,10 +1064,15 @@ class GameSim:
                 break
             # An exhausted rebound chain (still "rebound") means the puck was finally smothered/
             # cleared -- fall through to the normal possession-flip flow.
+            # Body checks for this cycle (DEVPLAN.md Step 2.x): a separating defensive hit tilts the
+            # ensuing possession battle toward the team that threw it (a forced turnover), which is
+            # how checking/strength earn a real gameplay effect rather than being a counting stat.
+            separated = self._resolve_hits(offense, defense)
             # Otherwise possession may flip for the remainder of the shift (a turnover-ish flow
             # abstraction -- MVP doesn't model discrete turnovers/zone-entries as separate events,
             # per this step's scope).
-            if self.rng.chance(0.5):
+            flip_p = config.HIT_TURNOVER_FLIP_P if separated else 0.5
+            if self.rng.chance(flip_p):
                 offense, defense = defense, offense
 
         self._apply_ice_time(shift_secs)
@@ -1477,6 +1482,80 @@ class GameSim:
             return None
         weights = [max(1.0, float(p.ratings.get("shot_blocking", 25))) for p in skaters]
         return skaters[_weighted_index(self.rng, weights)]
+
+    def _on_ice_skaters(self, team: _TeamState) -> List[Player]:
+        return [team.players[pid] for pid in team.on_ice
+                if pid in team.players and pid != team.goalie_id]
+
+    def _pick_hitter(self, team: _TeamState) -> Optional[Player]:
+        """Which on-ice skater throws the body check, weighted by checking+strength (DEVPLAN.md
+        Step 2.x) -- the big, physical, defensively-engaged players do most of the hitting."""
+        skaters = self._on_ice_skaters(team)
+        if not skaters:
+            return None
+        weights = [max(1.0, float(p.ratings.get("checking", 25) + p.ratings.get("strength", 25)))
+                   for p in skaters]
+        return skaters[_weighted_index(self.rng, weights)]
+
+    def _pick_hit_target(self, team: _TeamState) -> Optional[Player]:
+        """Which on-ice skater is carrying the puck and thus getting hit, weighted by
+        puck_handling (the puck-movers see the most pressure)."""
+        skaters = self._on_ice_skaters(team)
+        if not skaters:
+            return None
+        weights = [max(1.0, float(p.ratings.get("puck_handling", 25))) for p in skaters]
+        return skaters[_weighted_index(self.rng, weights)]
+
+    def _hit_separates(self, hitter: Player, target: Player) -> bool:
+        """Does a body check separate the carrier from the puck (a forced turnover)? The checker's
+        checking/strength vs the carrier's strength/agility, centered on the rating mean so an
+        even matchup sits at the base rate. This is the gameplay teeth of checking/strength."""
+        checker = 0.5 * hitter.ratings.get("checking", 25) + 0.5 * hitter.ratings.get("strength", 25)
+        carrier = 0.5 * target.ratings.get("strength", 25) + 0.5 * target.ratings.get("agility", 25)
+        p = config.HIT_SEPARATION_BASE + (checker - carrier) * config.HIT_SEPARATION_SLOPE
+        p = max(config.HIT_SEPARATION_MIN, min(config.HIT_SEPARATION_MAX, p))
+        return self.rng.chance(p)
+
+    def _team_physicality_mult(self, team: _TeamState) -> float:
+        """How much more (or less) than a league-average team this on-ice group hits, from its
+        average checking/strength (DEVPLAN.md Step 2.x). Centered on the rating mean so an average
+        group throws at the base rate; a heavy group throws more, a soft group fewer."""
+        skaters = self._on_ice_skaters(team)
+        if not skaters:
+            return 1.0
+        avg = sum(0.5 * (p.ratings.get("checking", 25) + p.ratings.get("strength", 25))
+                  for p in skaters) / len(skaters)
+        mult = 1.0 + (avg - config.HIT_SEPARATION_PIVOT) * config.HIT_TEAM_PHYSICALITY_SLOPE
+        return max(config.HIT_TEAM_PHYSICALITY_MIN_MULT,
+                   min(config.HIT_TEAM_PHYSICALITY_MAX_MULT, mult))
+
+    def _resolve_hits(self, offense: _TeamState, defense: _TeamState) -> bool:
+        """Throw this cycle's body checks (DEVPLAN.md Step 2.x). The defending team may check the
+        puck carrier (and possibly separate him from the puck -> forced turnover) and the attacking
+        team may finish a fore-check of its own; both credit the hitter's ``hits`` stat, and a more
+        physical group throws more of them. Returns True iff a defensive check separated the
+        carrier, so the caller can bias possession."""
+        separated = False
+        def_chance = config.HIT_CHANCE_DEF_PER_CYCLE * self._team_physicality_mult(defense)
+        if self.rng.chance(def_chance):
+            hitter = self._pick_hitter(defense)
+            target = self._pick_hit_target(offense)
+            if hitter is not None:
+                self.result.skater_line(hitter.pid).hits += 1
+                if target is not None and self._hit_separates(hitter, target):
+                    separated = True
+                    # A separating check IS a forced turnover: a takeaway for the checker, a
+                    # giveaway charged to the dispossessed carrier (both stat fields previously went
+                    # unpopulated). This makes checking/strength's gameplay effect concrete and
+                    # measurable, not just a possession coin-flip nudge.
+                    self.result.skater_line(hitter.pid).takeaways += 1
+                    self.result.skater_line(target.pid).giveaways += 1
+        off_chance = config.HIT_CHANCE_OFF_PER_CYCLE * self._team_physicality_mult(offense)
+        if self.rng.chance(off_chance):
+            hitter = self._pick_hitter(offense)
+            if hitter is not None:
+                self.result.skater_line(hitter.pid).hits += 1
+        return separated
 
     def _resolve_shot_attempt(self, offense: _TeamState, defense: _TeamState, *,
                                rush: bool, rebound: bool) -> str:
