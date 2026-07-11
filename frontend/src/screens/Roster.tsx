@@ -290,6 +290,66 @@ function DefensePair({
   );
 }
 
+// Read-only view of the current top power-play and penalty-kill units. The backend already
+// serves these (and auto-build now fills them), and special teams meaningfully affect the sim, so
+// a manager should at least be able to SEE who is out there on the man-advantage/shorthanded.
+function SpecialTeamsPanel({
+  ppUnit,
+  pkUnit,
+  onPlayer,
+}: {
+  ppUnit: PlayerSummary[];
+  pkUnit: PlayerSummary[];
+  onPlayer?: (pid: number) => void;
+}) {
+  const renderUnit = (title: string, unit: PlayerSummary[]) => (
+    <div style={{ flex: 1, minWidth: "220px" }}>
+      <h4 style={{ marginBottom: "0.5rem" }}>{title}</h4>
+      {unit.length === 0 ? (
+        <p className="text-muted" style={{ fontSize: "0.875rem" }}>
+          No unit set — use “Auto-build Lines &amp; Units”.
+        </p>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {unit.map((p) => (
+            <li key={p.pid} style={{ padding: "0.3rem 0", display: "flex", gap: "0.5rem" }}>
+              <span className="text-mono text-muted" style={{ width: "2.5rem" }}>
+                {p.position}
+              </span>
+              <button
+                onClick={() => onPlayer?.(p.pid)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  color: "var(--color-accent-blue)",
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  font: "inherit",
+                }}
+                title="View player details"
+              >
+                {p.name}
+              </button>
+              <span className="text-mono text-muted">{p.overall}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  return (
+    <div>
+      <h3 style={{ marginBottom: "0.75rem" }}>Special Teams</h3>
+      <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+        {renderUnit("Power Play (PP1)", ppUnit)}
+        {renderUnit("Penalty Kill (PK1)", pkUnit)}
+      </div>
+    </div>
+  );
+}
+
 function LinesEditor({
   lines,
   pairs,
@@ -507,7 +567,7 @@ export function RosterScreen({
 
   // Mutation: auto-build lines
   const autoBuildMutation = useMutation({
-    mutationFn: () => api.autoBuildLines({ include_special_teams: false }),
+    mutationFn: () => api.autoBuildLines({ include_special_teams: true }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["roster", "lines"] });
       setError(null);
@@ -645,9 +705,17 @@ export function RosterScreen({
             onClick={() => autoBuildMutation.mutate()}
             disabled={autoBuildMutation.isPending || updateLinesMutation.isPending}
           >
-            {autoBuildMutation.isPending ? "Auto-building..." : "Auto-build Lines"}
+            {autoBuildMutation.isPending ? "Auto-building..." : "Auto-build Lines & Units"}
           </button>
         </div>
+      </div>
+
+      <div style={{ marginTop: "2rem" }}>
+        <SpecialTeamsPanel
+          ppUnit={linesData.pp_unit_1.players}
+          pkUnit={linesData.pk_unit_1.players}
+          onPlayer={onPlayer}
+        />
       </div>
 
       <div style={{ marginTop: "2rem" }}>
