@@ -186,6 +186,10 @@ round.
   (Phase-2-of-v1) accounting, not a synergy bug; the test is pinned to a clean seed and
   documented. Proper fix: don't credit `sog` for a missed empty-net attempt, and/or tag on-goal
   empty-net attempts distinctly so the reconciliation is unambiguous.
+- **Pulled goalie could be iced as the extra attacker (FIXED this round).** `_with_extra_attacker`
+  excluded only `pid != self.goalie_id`, which is `None` once the goalie is pulled — so the
+  just-pulled goalie was eligible as the 6th "attacker" and accrued skater stats (surfaced by a
+  goalie landing in a web box score's skater rows). Fixed to exclude every goalie by position.
 - **Verification harness footgun (fixed in this round's tests):** `build_world` takes an **int**
   seed; passing an `Rng` object (`build_world(Rng(1))`) reseeds `random.Random` with an
   object hash (id-based) → a different league every call, silently non-deterministic. All Phase

@@ -582,10 +582,17 @@ class _TeamState:
         Step 2.2). Prefers the highest-``overall`` skater on the roster not already in ``group``
         (a coach sends out the best available extra body, not a random one); falls back to
         leaving ``group`` unchanged if literally every rostered skater is already on the ice
-        (an extreme-injury/thin-bench edge case -- never crash, just field 5 instead of 6)."""
+        (an extreme-injury/thin-bench edge case -- never crash, just field 5 instead of 6).
+
+        The extra attacker is always a SKATER: excluding ``pid != self.goalie_id`` alone is a bug
+        once the goalie is pulled (``goalie_id`` is then ``None``, so that clause stops excluding
+        the just-pulled goalie -- the very player the empty net belongs to), which could send the
+        goalie back out as a 6th "attacker" and accrue him skater stats. Filtering on
+        ``position != "G"`` excludes every goalie (pulled starter and backup) unconditionally."""
         on_ice_set = set(group)
         candidates = [pid for pid in self.team.roster
-                      if pid not in on_ice_set and pid != self.goalie_id and pid in self.players
+                      if pid not in on_ice_set and pid in self.players
+                      and self.players[pid].position != "G"
                       and pid not in self.unavailable]
         if not candidates:
             return group
