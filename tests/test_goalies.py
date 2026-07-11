@@ -134,6 +134,24 @@ def test_engine_goalie_hot_hand_streak_builds_on_saves_and_resets_on_goal():
     assert away.goalie_hot_hand == 0.0
 
 
+def test_pulled_goalie_is_never_sent_out_as_the_extra_attacker():
+    """When a goalie is pulled, ``_TeamState.goalie_id`` becomes None -- an earlier
+    ``pid != self.goalie_id`` filter then stopped excluding the just-pulled goalie, who could be
+    sent back out as the 6th "attacker" (and accrue skater stats). The extra attacker must always
+    be a SKATER, whoever is in net or on the bench."""
+    world = build_world(seed=26)
+    tids = sorted(world.teams.keys())
+    sim = GameSim(world, tids[0], tids[1])
+    state = sim.home
+    state.goalie_pulled = True
+    state.goalie_id = None                       # what _maybe_pull_goalie does
+    group = state._with_extra_attacker(list(state.on_ice))
+    for pid in group:
+        assert world.player(pid).position != "G", f"goalie {pid} iced as extra attacker"
+    # And the pulled starter specifically must not be the one added.
+    assert state.starter_goalie_id not in group
+
+
 # ---------------------------------------------------------------------------
 # 2. Starter/backup rest-based rotation
 # ---------------------------------------------------------------------------

@@ -176,6 +176,27 @@ round.
 - Whether `two_way_f`/`generational` act as universal "glue" (mild positive fit with any
   composition) or are strictly neutral.
 
+## Discovered during implementation (pre-existing, flagged for follow-up)
+
+- **Empty-net `sog` over-credit / reconciliation edge.** A missed or blocked shot at a pulled
+  (empty) net is logged with `goalie_id is None`, and an *on-goal* empty-net attempt is credited
+  `sog` even when it then misses — so `tests/test_engine.py::test_sog_reconciles_with_opposing_
+  goalie_shots_faced`'s exact reconciliation breaks in the rare game with a pulled-goalie miss/
+  block (violates on `main` at seeds 5/27, independent of this round). Pre-existing pulled-goalie
+  (Phase-2-of-v1) accounting, not a synergy bug; the test is pinned to a clean seed and
+  documented. Proper fix: don't credit `sog` for a missed empty-net attempt, and/or tag on-goal
+  empty-net attempts distinctly so the reconciliation is unambiguous.
+- **Pulled goalie could be iced as the extra attacker (FIXED this round).** `_with_extra_attacker`
+  excluded only `pid != self.goalie_id`, which is `None` once the goalie is pulled — so the
+  just-pulled goalie was eligible as the 6th "attacker" and accrued skater stats (surfaced by a
+  goalie landing in a web box score's skater rows). Fixed to exclude every goalie by position.
+- **Verification harness footgun (fixed in this round's tests):** `build_world` takes an **int**
+  seed; passing an `Rng` object (`build_world(Rng(1))`) reseeds `random.Random` with an
+  object hash (id-based) → a different league every call, silently non-deterministic. All Phase
+  2/3 tests use int seeds.
+- **Defender-suppression conservation** measures ~−0.8% league goals at 9.6k games/arm (synergy
+  ~−0.1%). Small; a candidate for a minor `DEF_SUPPRESSION_PIVOT` nudge during the Phase-5 sweep.
+
 ## Explicitly out of scope (backlog — see `[[project_feature_backlog]]`)
 
 Farm system, pick-trading, RFA/negotiation, staff, finances, news, directed training, and the

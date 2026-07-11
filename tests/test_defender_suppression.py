@@ -10,7 +10,6 @@ from pucksim import config
 from pucksim.gen.leaguegen import build_world
 from pucksim.models.player import Player
 from pucksim.models.team import auto_build_lines
-from pucksim.rng import Rng
 from pucksim.sim import ratings as R
 from pucksim.sim.engine import GameSim
 
@@ -39,7 +38,9 @@ def test_empty_cache_def_value_is_neutral_pivot():
 
 
 def _away_xg_per_shot(home_da: int, games: int = 40) -> float:
-    w = build_world(Rng(21))
+    # build_world takes an INT seed -- passing an Rng object reseeds random.Random with an
+    # object hash (id-based), producing a different league every call (non-deterministic).
+    w = build_world(21)
     home, away = list(w.teams)[:2]
     for pid in w.teams[home].roster:
         p = w.players[pid]
