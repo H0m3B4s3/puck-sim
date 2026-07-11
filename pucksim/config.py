@@ -267,6 +267,19 @@ DEF_SUPPRESSION_PIVOT = 70.0     # measured shot-weighted mean of the defending 
 DEF_SUPPRESSION_SLOPE = 0.004    # shot-quality points removed per defensive-value point above pivot
 DEF_SUPPRESSION_MAX = 0.12       # symmetric clamp on the total quality delta (either direction)
 
+# Offensive line-role synergy (SIM_SYNERGY_PLAN.md Phase 3). The ATTACKING on-ice group's
+# line-role synergy (ratings.line_synergy_score, 0..1: does it pair a real creator with a real
+# finisher?) raises or lowers the attempt's shot-quality term -- a well-composed line manufactures
+# better looks (the one-timer a playmaker feeds a finisher), a lopsided one settles for worse ones.
+# Same mechanical class as the PP/rush/rebound/defender quality deltas (a CHANCE-quality effect,
+# not a rating-realization multiplier -- no player's rating is ever exceeded, exactly as a power
+# play changes chance quality without upweighting anyone). Centered on SYNERGY_PIVOT_SCORE (the
+# measured shot-weighted mean synergy of real auto-built lines in-sim) so an average line is a
+# no-op and league goals/game is conserved. PROVISIONAL/TUNABLE (verify against the Phase 5 sweep).
+SYNERGY_PIVOT_SCORE = 0.69       # measured shot-weighted mean forward-line synergy in-sim
+SYNERGY_QUALITY_SLOPE = 0.22     # shot-quality points added per synergy-score point above pivot
+SYNERGY_QUALITY_MAX = 0.09       # symmetric clamp on the total quality delta (either direction)
+
 # Hitting / body checks (DEVPLAN.md Step 2.x "impactful ratings"): the engine had no hit mechanic
 # at all and the SkaterStatLine `hits` field was never incremented. Each shot-attempt cycle, the
 # checking (defending) team may throw a body check on the puck carrier, and the fore-checking

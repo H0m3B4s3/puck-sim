@@ -1677,9 +1677,17 @@ class GameSim:
         def_quality_delta = max(-config.DEF_SUPPRESSION_MAX, min(config.DEF_SUPPRESSION_MAX,
                                 (defense.cache.def_value - config.DEF_SUPPRESSION_PIVOT)
                                 * config.DEF_SUPPRESSION_SLOPE))
+        # Offensive line-role synergy (SIM_SYNERGY_PLAN.md Phase 3): the ATTACKING group's role
+        # composition raises (well-composed: a creator feeding a finisher) or lowers (lopsided:
+        # all shooters and no setup man, or a checking line with no offensive engine) the look's
+        # quality -- a chance-quality effect, centered so an average line is a no-op.
+        synergy_quality_delta = max(-config.SYNERGY_QUALITY_MAX, min(config.SYNERGY_QUALITY_MAX,
+                                    (offense.cache.synergy_score - config.SYNERGY_PIVOT_SCORE)
+                                    * config.SYNERGY_QUALITY_SLOPE))
         quality = max(0.05, min(0.98,
                       0.5 * _ZONE_QUALITY[zone] + 0.5 * _SHOT_TYPE_QUALITY[shot_type]
-                      + strength_quality_delta + rebound_quality_delta - def_quality_delta))
+                      + strength_quality_delta + rebound_quality_delta
+                      - def_quality_delta + synergy_quality_delta))
         # On a rush, the shooter's speed (skating/agility) scales how dangerous the look is: a
         # burner flying in off the entry gets a bigger save-suppression than a plodder does
         # (DEVPLAN.md Step 2.x). Centered on the rating mean so an average rush is the old flat 0.03.

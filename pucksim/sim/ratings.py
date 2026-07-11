@@ -281,6 +281,10 @@ class OnIceCache:
     # sits above config.DEF_SUPPRESSION_PIVOT. Defaults to the pivot so an empty/degenerate cache
     # is neutral (no suppression) rather than accidentally strong or weak.
     def_value: float = config.DEF_SUPPRESSION_PIVOT
+    # This group's offensive line-role synergy (SIM_SYNERGY_PLAN.md Phase 3). When this group is
+    # the ATTACKING on-ice unit, the engine raises/lowers the attempt's shot quality by how far
+    # this sits from config.SYNERGY_PIVOT_SCORE. Defaults to the pivot so an empty cache is neutral.
+    synergy_score: float = config.SYNERGY_PIVOT_SCORE
 
 
 def defensive_value(player: Player) -> float:
@@ -290,6 +294,47 @@ def defensive_value(player: Player) -> float:
     engine.py), so folding it in here too would double-count it."""
     r = player.ratings
     return 0.7 * r.get("defensive_awareness", 25) + 0.3 * r.get("checking", 25)
+
+
+# ---------------------------------------------------------------------------
+# Line-role synergy (SIM_SYNERGY_PLAN.md Phase 3) -- a well-composed offensive group manufactures
+# better looks (a playmaker setting up a finisher's one-timer); a lopsided one settles for worse
+# ones. Implemented as a shot-QUALITY effect (the same mechanical class as the PP/rush/rebound/
+# defender quality deltas the engine already applies), NOT a rating-realization multiplier: no
+# player's finishing rating is ever exceeded -- the CHANCE quality changes, exactly as a power play
+# already changes it. Centered on the league-mean composition (see engine's SYNERGY_PIVOT_SCORE)
+# so an average line is a no-op and league goals/game is conserved.
+# ---------------------------------------------------------------------------
+# Per-role (creation, finishing) offensive tendencies in 0..1. Creation = sets up chances
+# (distributes, quarterbacks); finishing = buries them. A line needs BOTH to click.
+_ROLE_CREATE_FINISH = {
+    "finisher": (0.15, 1.00),      # elite trigger, needs feeding
+    "playmaker": (1.00, 0.35),     # elite distributor, modest shot
+    "two_way_f": (0.55, 0.60),     # balanced glue -- complements either half
+    "grinder": (0.25, 0.30),       # neither; offense is not their game
+    "physical": (0.35, 0.55),      # net-front / tips, some finish
+    "offensive_d": (0.85, 0.45),   # creates/quarterbacks from the back end
+    "shutdown_d": (0.20, 0.20),    # defensive specialist
+    "two_way_d": (0.45, 0.40),     # balanced defenseman
+    "generational": (0.95, 0.95),  # does everything -- carries a line on its own
+    "goalie": (0.0, 0.0),          # never in an offensive on-ice group
+}
+_DEFAULT_CREATE_FINISH = (0.40, 0.40)   # unknown/missing role -> neutral-ish
+
+
+def line_synergy_score(roles: List[str]) -> float:
+    """0..1 offensive complementarity of an on-ice group: high only when the group has BOTH a real
+    creator (a playmaker / offensive-D / generational to set up the look) AND a real finisher
+    (someone to bury it). ``sqrt(best_create * best_finish)`` -- one great distributor is enough to
+    feed and one great finisher enough to bury (so we take the best of each, not a sum), but a
+    group missing either half scores low: three finishers with nobody to set them up, or three
+    passers with nobody to shoot. A group with neither (a checking line) scores low too, which is
+    correct -- their low offense is their ratings, not a composition the engine should rescue."""
+    if not roles:
+        return 0.0
+    best_create = max(_ROLE_CREATE_FINISH.get(r, _DEFAULT_CREATE_FINISH)[0] for r in roles)
+    best_finish = max(_ROLE_CREATE_FINISH.get(r, _DEFAULT_CREATE_FINISH)[1] for r in roles)
+    return math.sqrt(best_create * best_finish)
 
 
 def build_on_ice_cache(players: List[Player], chem_real: float = 1.0) -> OnIceCache:
@@ -305,4 +350,13 @@ def build_on_ice_cache(players: List[Player], chem_real: float = 1.0) -> OnIceCa
     if players:
         cache.avg_morale_real = sum(morale_realization(p.morale) for p in players) / len(players)
         cache.def_value = sum(defensive_value(p) for p in players) / len(players)
+        # Line synergy is a FORWARD-line concept -- the creator/finisher chemistry among the three
+        # forwards. Scoping it to forwards (not the two D) keeps the signal sharp: otherwise an
+        # offensive defenseman on the ice every shift would backstop ``best_create`` and quietly
+        # make the forward playmaker redundant, washing the effect out. A group with no forwards
+        # (edge cases only -- never a 5v5 line) keeps the neutral default. Whether the D pair gets
+        # its own synergy term is a flagged Phase-5 open item, not folded in here.
+        fwd_roles = [p.role for p in players if p.position in ("LW", "C", "RW")]
+        if fwd_roles:
+            cache.synergy_score = line_synergy_score(fwd_roles)
     return cache
