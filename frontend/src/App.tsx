@@ -31,6 +31,7 @@ import { OffseasonScreen } from "./screens/Offseason";
 import { LeadersScreen } from "./screens/Leaders";
 import { HistoryScreen } from "./screens/History";
 import { TradeScreen } from "./screens/Trade";
+import { SaveLoadScreen } from "./screens/SaveLoad";
 
 function HomeScreen({
   world,
@@ -234,6 +235,7 @@ export default function App() {
     { label: "Trades", path: "/trades" },
     { label: "Transactions", path: "/transactions" },
     { label: "History", path: "/history" },
+    { label: "Save / Load", path: "/saves" },
   ];
 
   const navItems = world
@@ -326,6 +328,8 @@ export default function App() {
         return <Transactions onPlayer={setOpenPid} toast={toast} />;
       case "/history":
         return <HistoryScreen world={world} onPlayer={setOpenPid} toast={toast} />;
+      case "/saves":
+        return <SaveLoadScreen toast={toast} onNavigate={setCurrentPath} />;
       case "/playoffs":
         return <PlayoffsScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       case "/offseason":
