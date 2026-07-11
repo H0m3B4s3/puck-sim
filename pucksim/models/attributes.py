@@ -222,6 +222,15 @@ ARCHETYPES: List[Archetype] = [
               {"playmaking": 16, "puck_handling": 12, "offensive_awareness": 10,
                "faceoffs": 6, "shot_power": -8, "checking": -8},
               (71, 75)),
+    # Pass-first winger -- the wing-eligible playmaker archetype. Before this, playmaking was a
+    # center-only identity (Playmaking Center), so a scoring line's setup man could only sit at
+    # C; this lets a distributor play the wing too (real NHL: plenty of pass-first wingers), which
+    # the line-synergy system needs so a finisher+playmaker pairing isn't forced onto the same
+    # center slot. Distinct from Sniper (shoots to score) by inverting the shot/pass skew.
+    Archetype("Pass-First Winger", ["LW", "RW"],
+              {"playmaking": 16, "puck_handling": 10, "offensive_awareness": 10,
+               "shot_power": -8, "shot_accuracy": -6, "checking": -6},
+              (70, 74)),
     Archetype("Power Forward", ["LW", "RW"],
               {"strength": 16, "checking": 14, "shot_power": 8, "skating": -8,
                "agility": -10, "playmaking": -6},
@@ -234,10 +243,22 @@ ARCHETYPES: List[Archetype] = [
               {"skating": 18, "agility": 14, "puck_handling": 6, "strength": -12,
                "checking": -10, "shot_power": -6},
               (69, 73)),
+    # Grinder skews tuned (SIM_SYNERGY_PLAN.md Phase 1) so a grinder-heavy line reads as
+    # genuinely defensive/low-offense: deeper defensive_awareness/checking, deeper offensive
+    # holes. This is what gives a checking line its Phase-3 identity (strong defensive
+    # suppression, little finish) instead of merely being a slightly-worse scoring line.
     Archetype("Grinder", ["LW", "RW", "C"],
-              {"checking": 12, "work_ethic": 12, "stamina": 10, "defensive_awareness": 8,
-               "shot_accuracy": -10, "playmaking": -10, "offensive_awareness": -6},
+              {"checking": 14, "work_ethic": 12, "stamina": 10, "defensive_awareness": 12,
+               "shot_accuracy": -12, "playmaking": -12, "offensive_awareness": -8},
               (71, 75)),
+    # Bottom-six defensive/faceoff center -- the center-position grinder identity (the plain
+    # Grinder is wing-or-center but skews toward wing usage; this leans into center duties:
+    # faceoffs + defensive-zone coverage). Maps to the grinder role. Fills the "shutdown fourth
+    # line needs a real defensive C" gap the line-synergy system exposes.
+    Archetype("Checking Center", ["C"],
+              {"defensive_awareness": 12, "checking": 10, "faceoffs": 10, "work_ethic": 8,
+               "shot_accuracy": -10, "playmaking": -8, "offensive_awareness": -6},
+              (72, 76)),
     Archetype("Shutdown Defenseman", ["D"],
               {"defensive_awareness": 16, "shot_blocking": 14, "checking": 10,
                "strength": 8, "shot_accuracy": -10, "playmaking": -8, "skating": -4},
@@ -364,6 +385,8 @@ DEFAULT_SKATER_ROLE = ROLE_TWO_WAY_F   # fallback for an unknown/missing skater 
 ROLE_FOR_ARCHETYPE: Dict[str, str] = {
     "Sniper": ROLE_FINISHER,
     "Playmaking Center": ROLE_PLAYMAKER,
+    "Pass-First Winger": ROLE_PLAYMAKER,
+    "Checking Center": ROLE_GRINDER,
     "Power Forward": ROLE_PHYSICAL,
     "Two-Way Forward": ROLE_TWO_WAY_F,
     "Speedster": ROLE_TWO_WAY_F,
