@@ -476,26 +476,43 @@ function SkaterTable({ teamId, skaters, teamMap, onPlayer }: SkaterTableProps) {
     {
       header: "HIT",
       accessorKey: "hits",
+      meta: { tooltip: "Hits — body checks thrown" },
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
     {
       header: "BLK",
       accessorKey: "blocks",
+      meta: { tooltip: "Blocked shots" },
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "TK",
+      accessorKey: "takeaways",
+      meta: { tooltip: "Takeaways — pucks stripped off an opponent" },
+      cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "GV",
+      accessorKey: "giveaways",
+      meta: { tooltip: "Giveaways — pucks lost to the opponent" },
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
     {
       header: "CF",
       accessorKey: "corsi_for",
+      meta: { tooltip: "Corsi For — all on-ice shot attempts by this player's team (on goal, missed, or blocked)" },
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
     {
       header: "CA",
       accessorKey: "corsi_against",
+      meta: { tooltip: "Corsi Against — all on-ice shot attempts by the opponent" },
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
     {
       header: "CF%",
       id: "corsi_pct",
+      meta: { tooltip: "Corsi For % — share of on-ice shot attempts that were this player's team's (CF / (CF+CA)); a rough puck-possession measure" },
       cell: (info) => {
         const row = info.row.original;
         const total = row.corsi_for + row.corsi_against;
@@ -506,11 +523,13 @@ function SkaterTable({ teamId, skaters, teamMap, onPlayer }: SkaterTableProps) {
     {
       header: "FF",
       accessorKey: "fenwick_for",
+      meta: { tooltip: "Fenwick For — on-ice unblocked shot attempts by this player's team" },
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
     {
       header: "FA",
       accessorKey: "fenwick_against",
+      meta: { tooltip: "Fenwick Against — on-ice unblocked shot attempts by the opponent" },
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
   ];
@@ -557,23 +576,29 @@ function SkaterTable({ teamId, skaters, teamMap, onPlayer }: SkaterTableProps) {
                 backgroundColor: "var(--color-surface)",
               }}
             >
-              {headerGroup.headers.map((header) => (
-                <th
-                  key={header.id}
-                  style={{
-                    padding: "0.75rem 1rem",
-                    textAlign: "left",
-                    fontWeight: 600,
-                    fontSize: "0.8125rem",
-                    color: "var(--color-muted)",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {header.isPlaceholder
-                    ? null
-                    : flexRender(header.column.columnDef.header, header.getContext())}
-                </th>
-              ))}
+              {headerGroup.headers.map((header) => {
+                const tooltip = (header.column.columnDef.meta as { tooltip?: string } | undefined)
+                  ?.tooltip;
+                return (
+                  <th
+                    key={header.id}
+                    title={tooltip}
+                    style={{
+                      padding: "0.75rem 1rem",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.8125rem",
+                      color: "var(--color-muted)",
+                      textTransform: "uppercase",
+                      cursor: tooltip ? "help" : undefined,
+                    }}
+                  >
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(header.column.columnDef.header, header.getContext())}
+                  </th>
+                );
+              })}
             </tr>
           ))}
         </thead>
@@ -708,23 +733,29 @@ function GoalieTable({ teamId, goalies, teamMap, onPlayer }: GoalieTableProps) {
                 backgroundColor: "var(--color-surface)",
               }}
             >
-              {headerGroup.headers.map((header) => (
-                <th
-                  key={header.id}
-                  style={{
-                    padding: "0.75rem 1rem",
-                    textAlign: "left",
-                    fontWeight: 600,
-                    fontSize: "0.8125rem",
-                    color: "var(--color-muted)",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {header.isPlaceholder
-                    ? null
-                    : flexRender(header.column.columnDef.header, header.getContext())}
-                </th>
-              ))}
+              {headerGroup.headers.map((header) => {
+                const tooltip = (header.column.columnDef.meta as { tooltip?: string } | undefined)
+                  ?.tooltip;
+                return (
+                  <th
+                    key={header.id}
+                    title={tooltip}
+                    style={{
+                      padding: "0.75rem 1rem",
+                      textAlign: "left",
+                      fontWeight: 600,
+                      fontSize: "0.8125rem",
+                      color: "var(--color-muted)",
+                      textTransform: "uppercase",
+                      cursor: tooltip ? "help" : undefined,
+                    }}
+                  >
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(header.column.columnDef.header, header.getContext())}
+                  </th>
+                );
+              })}
             </tr>
           ))}
         </thead>
