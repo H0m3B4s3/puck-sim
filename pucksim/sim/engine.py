@@ -166,6 +166,7 @@ from pucksim.sim.boxscore import (
     GameResult,
     PBPEvent,
 )
+from pucksim.systems.development import GoalieFormState, apply_goalie_form
 
 # ---------------------------------------------------------------------------
 # Tunables -- PROVISIONAL/first-pass, same framing as every other unresolved constant in this
@@ -639,11 +640,18 @@ class GameSim:
                  collect_pbp: bool = False,
                  home_goalie_id: Optional[int] = None,
                  away_goalie_id: Optional[int] = None,
-                 is_playoff: bool = False) -> None:
+                 is_playoff: bool = False,
+                 form_state: Optional[GoalieFormState] = None) -> None:
         self.world = world
         self.rng = world.rng
         self.collect_pbp = collect_pbp
         self.is_playoff = is_playoff
+        # Goalie season-form (DEVPLAN.md Step 2.7 / development.py): a per-season, symmetric
+        # (may exceed 1.0), multiplicative scalar on each goalie's effective save skill, resampled
+        # once per offseason and held for the whole season by the caller's GoalieFormState. None =
+        # every goalie plays at their straight rating (baseline 1.0) -- keeps this a strict additive
+        # extension for callers (tests, one-off sims) that don't thread a form state through.
+        self.form_state = form_state
         self.home = _TeamState(world, world.team(home_tid), is_home=True,
                                starter_override=home_goalie_id)
         self.away = _TeamState(world, world.team(away_tid), is_home=False,
@@ -913,8 +921,7 @@ class GameSim:
         if goalie is None:
             return self.rng.chance(EMPTY_NET_GOAL_BASE_P)
 
-        gr = goalie.ratings
-        goalie_skill = 0.55 * gr.get("reflexes", 25) + 0.45 * gr.get("positioning", 25)
+        goalie_skill = self._goalie_skill(goalie)
 
         gap = (shot_skill - goalie_skill) * config.SHOOTOUT_RATING_GAP_SLOPE
         shooter_real = R.morale_realization(shooter.morale)
@@ -1426,6 +1433,20 @@ class GameSim:
         idx = _weighted_index(self.rng, cache.shot_weights)
         return cache.players[idx]
 
+    def _goalie_skill(self, goalie: Player) -> float:
+        """This goalie's effective save skill for the current attempt.
+
+        The raw composite (``0.55*reflexes + 0.45*positioning``) is then scaled by this goalie's
+        season "form" multiplier when a ``GoalieFormState`` was threaded in (DEVPLAN.md Step 2.7):
+        a hot/cold season shifts the whole save-skill gap symmetrically. ``form_state is None``
+        (tests, one-off sims) returns the straight composite, unchanged. Because form is a linear
+        scalar, applying it to the composite is identical to applying it to each rating first."""
+        gr = goalie.ratings
+        skill = 0.55 * gr.get("reflexes", 25) + 0.45 * gr.get("positioning", 25)
+        if self.form_state is not None:
+            skill = apply_goalie_form(skill, goalie, self.form_state)
+        return skill
+
     def _resolve_shot_attempt(self, offense: _TeamState, defense: _TeamState, *,
                                rush: bool, rebound: bool) -> str:
         """Resolve one shot attempt end to end: pick shooter/zone/shot-type, run shooter-vs-goalie
@@ -1453,8 +1474,7 @@ class GameSim:
                       + 0.2 * r.get("offensive_awareness", 25))
         goalie_skill = 25.0
         if goalie is not None:
-            gr = goalie.ratings
-            goalie_skill = 0.55 * gr.get("reflexes", 25) + 0.45 * gr.get("positioning", 25)
+            goalie_skill = self._goalie_skill(goalie)
 
         # Realization scaling: morale x chemistry x composure, same mechanism for both sides
         # (ratings.py's ported HoopR model). Fatigue realization additionally dampens the
@@ -1931,7 +1951,8 @@ def simulate_game(world: World, home_tid: int, away_tid: int, *,
                    collect_pbp: bool = False,
                    home_goalie_id: Optional[int] = None,
                    away_goalie_id: Optional[int] = None,
-                   is_playoff: bool = False) -> GameResult:
+                   is_playoff: bool = False,
+                   form_state: Optional[GoalieFormState] = None) -> GameResult:
     """Convenience wrapper: simulate one game and return its result.
 
     ``home_goalie_id``/``away_goalie_id`` (DEVPLAN.md Step 2.2) pass through to
@@ -1943,7 +1964,12 @@ def simulate_game(world: World, home_tid: int, away_tid: int, *,
     override -- selects real 5-on-5 sudden-death playoff OT (vs. regular-season 3-on-3 -> maybe
     shootout) and the playoff officiating/discipline mode's penalty multiplier. Defaults to
     ``False`` (identical behavior to before this step for any existing caller).
+
+    ``form_state`` (DEVPLAN.md Step 2.7) pass through to ``GameSim``: the per-season goalie form
+    multipliers. Defaults to ``None`` (every goalie plays at their straight rating), so this too is
+    a strict additive extension -- ``sim/season.py``'s ``sim_one`` is the caller that threads the
+    live per-World form state in.
     """
     return GameSim(world, home_tid, away_tid, collect_pbp=collect_pbp,
                    home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id,
-                   is_playoff=is_playoff).play()
+                   is_playoff=is_playoff, form_state=form_state).play()

@@ -372,9 +372,18 @@ def sim_one(world: World, game: Game, *, is_playoff: bool = False) -> GameResult
     home_goalie_id = _choose_and_record_starter(world, game.home, rest_state, game.day)
     away_goalie_id = _choose_and_record_starter(world, game.away, rest_state, game.day)
 
+    # Goalie season-form (DEVPLAN.md Step 2.7): the per-World form state is owned by
+    # systems/offseason.py (it's resampled there, once per offseason transition). Imported lazily
+    # here to avoid the season <-> offseason import cycle (offseason imports start_season from this
+    # module). goalie_form_state() lazily creates an all-baseline (1.0) state on first call, so a
+    # brand-new World that has never been through an offseason simply plays every goalie at their
+    # straight rating -- same behavior as before this step.
+    from pucksim.systems.offseason import goalie_form_state
+    form_state = goalie_form_state(world)
+
     result = simulate_game(world, game.home, game.away,
                            home_goalie_id=home_goalie_id, away_goalie_id=away_goalie_id,
-                           is_playoff=is_playoff)
+                           is_playoff=is_playoff, form_state=form_state)
     _apply_result(world, game, result, is_playoff=is_playoff)
     return result
 
