@@ -24,7 +24,7 @@ import api, {
   TacticsUpdateRequest,
   ApiError,
 } from "../api";
-import { Panel, FaceoffDotSpinner } from "../ui";
+import { Panel, FaceoffDotSpinner, formatMoney } from "../ui";
 
 // --- Roster Table Component ---
 
@@ -69,7 +69,7 @@ const rosterColumns = (onPlayer?: (pid: number) => void) => [
     header: "Shoots",
     size: 70,
   }),
-  columnHelper.accessor((row) => `${row.contract.current_salary}`, {
+  columnHelper.accessor((row) => formatMoney(row.contract.current_salary), {
     id: "salary",
     header: "Salary",
     size: 100,

@@ -14,10 +14,12 @@ const PLAYOFF_TEAMS_PER_CONF = 8;
 
 export function StandingsScreen({
   world,
+  onNavigate,
 }: {
   world: WorldSummary;
   onPlayer?: (pid: number) => void;
   toast?: (msg: string) => void;
+  onNavigate?: (path: string) => void;
 }) {
   const { data: standings, isLoading, error } = useQuery({
     queryKey: ["standings"],
@@ -206,9 +208,21 @@ export function StandingsScreen({
         >
           <p className="text-muted">
             See the{" "}
-            <a href="#/playoffs" style={{ cursor: "pointer", color: "inherit" }}>
+            <button
+              type="button"
+              onClick={() => onNavigate?.("/playoffs")}
+              style={{
+                cursor: "pointer",
+                color: "inherit",
+                background: "none",
+                border: "none",
+                padding: 0,
+                font: "inherit",
+                textDecoration: "underline",
+              }}
+            >
               <strong>Playoffs</strong>
-            </a>{" "}
+            </button>{" "}
             tab for the current bracket.
           </p>
         </div>

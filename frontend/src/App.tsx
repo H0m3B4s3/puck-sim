@@ -313,7 +313,7 @@ export default function App() {
       case "/roster":
         return <RosterScreen onPlayer={setOpenPid} toast={toast} />;
       case "/standings":
-        return <StandingsScreen world={world} onPlayer={setOpenPid} toast={toast} />;
+        return <StandingsScreen world={world} onPlayer={setOpenPid} toast={toast} onNavigate={setCurrentPath} />;
       case "/schedule":
         return <ScheduleScreen world={world} onPlayer={setOpenPid} toast={toast} onViewBoxScore={handleViewBoxScore} />;
       case "/box-score":

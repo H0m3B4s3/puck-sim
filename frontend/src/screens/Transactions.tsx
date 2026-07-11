@@ -7,7 +7,7 @@ import {
   ColumnDef,
 } from "@tanstack/react-table";
 import api, { FreeAgentRow } from "../api";
-import { Panel, FaceoffDotSpinner } from "../ui";
+import { Panel, FaceoffDotSpinner, awardLabel } from "../ui";
 
 /**
  * Transactions Screen (Step 2.10d)
@@ -17,6 +17,7 @@ import { Panel, FaceoffDotSpinner } from "../ui";
  */
 export function Transactions({
   onPlayer,
+  toast,
 }: {
   onPlayer?: (pid: number) => void;
   toast?: (msg: string) => void;
@@ -70,7 +71,7 @@ export function Transactions({
         {/* Tab Content */}
         <div style={{ marginTop: "2rem" }}>
           {activeTab === "cap" && <CapPanel />}
-          {activeTab === "free-agents" && <FreeAgentsPanel onPlayer={onPlayer} />}
+          {activeTab === "free-agents" && <FreeAgentsPanel onPlayer={onPlayer} toast={toast} />}
           {activeTab === "awards" && <AwardsPanel />}
         </div>
       </Panel>
@@ -169,7 +170,13 @@ function CapPanel() {
 // ============================================================================
 // Free Agents Panel
 // ============================================================================
-function FreeAgentsPanel({ onPlayer }: { onPlayer?: (pid: number) => void }) {
+function FreeAgentsPanel({
+  onPlayer,
+  toast,
+}: {
+  onPlayer?: (pid: number) => void;
+  toast?: (msg: string) => void;
+}) {
   const queryClient = useQueryClient();
   const { data: freeAgents, isLoading, error } = useQuery({
     queryKey: ["freeAgents"],
@@ -177,10 +184,16 @@ function FreeAgentsPanel({ onPlayer }: { onPlayer?: (pid: number) => void }) {
   });
 
   const signMutation = useMutation({
-    mutationFn: (pid: number) => api.signFreeAgent(pid),
-    onSuccess: () => {
+    mutationFn: (fa: { pid: number; name: string }) => api.signFreeAgent(fa.pid),
+    onSuccess: (_data, fa) => {
       queryClient.invalidateQueries({ queryKey: ["freeAgents"] });
       queryClient.invalidateQueries({ queryKey: ["cap"] });
+      queryClient.invalidateQueries({ queryKey: ["roster"] });
+      queryClient.invalidateQueries({ queryKey: ["career"] });
+      toast?.(`Signed ${fa.name}`);
+    },
+    onError: (err, fa) => {
+      toast?.(`Couldn't sign ${fa.name}: ${err instanceof Error ? err.message : String(err)}`);
     },
   });
 
@@ -249,7 +262,12 @@ function FreeAgentsPanel({ onPlayer }: { onPlayer?: (pid: number) => void }) {
       cell: (info) => (
         <button
           className="btn btn-primary"
-          onClick={() => signMutation.mutate(info.row.original.pid)}
+          onClick={() =>
+            signMutation.mutate({
+              pid: info.row.original.pid,
+              name: info.row.original.name,
+            })
+          }
           disabled={signMutation.isPending}
           style={{ padding: "0.25rem 0.75rem", fontSize: "0.875rem" }}
         >
@@ -389,10 +407,9 @@ function AwardsPanel() {
                 fontWeight: 600,
                 color: "var(--color-muted)",
                 marginBottom: "0.5rem",
-                textTransform: "uppercase",
               }}
             >
-              {awardName}
+              {awardLabel(awardName)}
             </div>
             {typeof winner === "string" ? (
               <div style={{ fontWeight: 500 }}>{winner}</div>
