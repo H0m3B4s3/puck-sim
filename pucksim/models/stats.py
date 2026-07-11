@@ -40,6 +40,7 @@ _SKATER_COUNTERS = (
     "plus_minus",
     "corsi_for", "corsi_against",
     "fenwick_for", "fenwick_against",
+    "xg", "xa",
 )
 
 _GOALIE_COUNTERS = (
@@ -47,6 +48,7 @@ _GOALIE_COUNTERS = (
     "shots_faced", "saves", "goals_against",
     "wins", "losses", "otl",
     "shutouts",
+    "xga",
 )
 
 
@@ -74,6 +76,11 @@ class SkaterStatLine:
     corsi_against: int = 0
     fenwick_for: int = 0
     fenwick_against: int = 0
+    # Expected goals / assists (DESIGN.md point 10): xg is the summed shot-quality goal
+    # probability of this skater's own shots on goal; xa is the xg of goals this skater assisted.
+    # Floats -- a good xG model is roughly unbiased, so a team's summed xg tracks its actual goals.
+    xg: float = 0.0
+    xa: float = 0.0
 
     # -- derived ------------------------------------------------------------
     @property
@@ -118,6 +125,10 @@ class GoalieStatLine:
     # Incremented by the caller when a goalie completes a game with 0
     # goals_against, rather than derived from other counters here.
     shutouts: int = 0
+    # Expected goals against (DESIGN.md point 10): summed shot-quality goal probability of the
+    # shots this goalie faced. xga well below goals_against is a goalie stealing games; well above
+    # is a goalie being bailed out by his defense's shot suppression.
+    xga: float = 0.0
 
     # -- derived ------------------------------------------------------------
     @property

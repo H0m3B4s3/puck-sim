@@ -255,6 +255,8 @@ export interface SkaterBoxScoreDTO {
   corsi_against: number;
   fenwick_for: number;
   fenwick_against: number;
+  xg: number;
+  xa: number;
 }
 
 export interface GoalieBoxScoreDTO {
@@ -272,6 +274,7 @@ export interface GoalieBoxScoreDTO {
   losses: number;
   otl: number;
   shutouts: number;
+  xga: number;
 }
 
 export interface BoxScoreResponse {

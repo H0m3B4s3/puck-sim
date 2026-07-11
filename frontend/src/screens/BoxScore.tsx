@@ -469,6 +469,18 @@ function SkaterTable({ teamId, skaters, teamMap, onPlayer }: SkaterTableProps) {
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
     },
     {
+      header: "xG",
+      accessorKey: "xg",
+      meta: { tooltip: "Expected Goals — summed shot-quality goal probability of this player's shots on goal" },
+      cell: (info) => <span className="text-mono">{(info.getValue() as number).toFixed(1)}</span>,
+    },
+    {
+      header: "xA",
+      accessorKey: "xa",
+      meta: { tooltip: "Expected Assists — the xG of the chances this player set up on goals" },
+      cell: (info) => <span className="text-mono">{(info.getValue() as number).toFixed(1)}</span>,
+    },
+    {
       header: "PIM",
       accessorKey: "pim",
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
@@ -676,6 +688,12 @@ function GoalieTable({ teamId, goalies, teamMap, onPlayer }: GoalieTableProps) {
       header: "GA",
       accessorKey: "goals_against",
       cell: (info) => <span className="text-mono">{String(info.getValue())}</span>,
+    },
+    {
+      header: "xGA",
+      accessorKey: "xga",
+      meta: { tooltip: "Expected Goals Against — shot-quality goals this goalie 'should' have allowed; GA well below xGA means he stole games" },
+      cell: (info) => <span className="text-mono">{(info.getValue() as number).toFixed(1)}</span>,
     },
     {
       header: "Save %",

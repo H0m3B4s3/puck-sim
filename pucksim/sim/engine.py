@@ -1502,6 +1502,16 @@ class GameSim:
         close = abs(self.result.home_score - self.result.away_score) <= 1
         return late and close
 
+    def _expected_goals(self, quality: float, rush_bonus: float) -> float:
+        """Expected-goals (xG) value of an on-goal attempt (DESIGN.md point 10). Skill-INDEPENDENT
+        by design -- it's the goal probability a league-AVERAGE goalie would concede on a chance of
+        this quality, so it measures the chance itself, not who took or faced it. Computed by
+        reusing the save-probability shape with a neutral zero skill gap (the same quality/rush
+        terms the real save formula uses), so summed over a team's shots on goal it tracks the
+        team's actual goals rather than drifting."""
+        neutral_save_p = max(0.55, min(0.97, 0.90 - (quality - 0.5) * 0.35 - rush_bonus))
+        return 1.0 - neutral_save_p
+
     def _pick_blocker(self, defense: _TeamState) -> Optional[Player]:
         """Choose which on-ice defending skater is in the shooting lane, weighted by
         ``shot_blocking`` (DEVPLAN.md Step 2.x). Good shot-blockers get in the way more often, so
@@ -1700,12 +1710,18 @@ class GameSim:
         # Attempt reached the goalie (or an empty net): charge SOG, then resolve save/goal --
         # shots_faced is a goalie-box-score stat, so it only accrues when there's actually a
         # goalie in net to face it (an empty-net attempt has no goalie to charge shots_faced to).
+        # xG (DESIGN.md point 10): every shot on goal carries an expected-goals value credited to
+        # the shooter (xg) and charged to the goalie facing it (xga). The empty-net path scores its
+        # own (very high) xG inside _resolve_empty_net_shot, since "chance a goalie stops it" is
+        # undefined with no goalie in net.
         self.result.skater_line(shooter.pid).sog += 1
-        if goalie is not None:
-            self.result.goalie_line(goalie.pid).shots_faced += 1
-        else:
+        if goalie is None:
             return self._resolve_empty_net_shot(offense, defense, shooter, zone, shot_type,
                                                 rush, rebound)
+        xg = self._expected_goals(quality, rush_bonus)
+        self.result.skater_line(shooter.pid).xg += xg
+        self.result.goalie_line(goalie.pid).shots_faced += 1
+        self.result.goalie_line(goalie.pid).xga += xg
 
         save_p = max(0.55, min(0.97, 0.90 - (quality - 0.5) * 0.35 - rush_bonus - gap * off_real))
         # def_real scales the goalie's realized share of their save probability edge over a
@@ -1720,7 +1736,7 @@ class GameSim:
             defense.goalie_hot_hand = min(GOAL_HOT_HAND_STREAK_MAX,
                                           defense.goalie_hot_hand + GOAL_HOT_HAND_STREAK_INCREMENT)
             self._log_shot(offense, defense, shooter, goalie, zone, shot_type, rush, rebound,
-                          SHOT_OUTCOME_SAVE)
+                          SHOT_OUTCOME_SAVE, xg=xg)
             self._apply_corsi_fenwick(offense, defense, blocked=False)
             # A better rebound_control goalie smothers more pucks, kicking out fewer rebounds
             # (DEVPLAN.md Step 2.x). Centered on the goalie population mean so the league-wide
@@ -1737,7 +1753,7 @@ class GameSim:
 
         # -- goal ------------------------------------------------------------
         self._apply_corsi_fenwick(offense, defense, blocked=False)
-        self._score_goal(offense, defense, shooter, goalie, zone, shot_type, rush, rebound)
+        self._score_goal(offense, defense, shooter, goalie, zone, shot_type, rush, rebound, xg=xg)
         return SHOT_OUTCOME_GOAL
 
     def _resolve_empty_net_shot(self, offense: _TeamState, defense: _TeamState, shooter: Player,
@@ -1751,9 +1767,13 @@ class GameSim:
         no goalie in net), so a non-goal outcome here is scored as a miss/block exactly like a
         normal shot that never reached the goalie."""
         goal_p = max(0.30, min(0.85, EMPTY_NET_GOAL_BASE_P + (_ZONE_QUALITY[zone] - 0.5) * 0.3))
+        # xG for an empty-net attempt is just its goal probability (there's no goalie whose save
+        # chance to invert) -- credited to the shooter like any other shot on goal.
+        xg = goal_p
+        self.result.skater_line(shooter.pid).xg += xg
         if self.rng.chance(goal_p):
             self._apply_corsi_fenwick(offense, defense, blocked=False)
-            self._score_goal(offense, defense, shooter, None, zone, shot_type, rush, rebound)
+            self._score_goal(offense, defense, shooter, None, zone, shot_type, rush, rebound, xg=xg)
             return SHOT_OUTCOME_GOAL
 
         blocked = self.rng.chance(0.35)
@@ -1765,7 +1785,7 @@ class GameSim:
             blocker = self._pick_blocker(defense)
             if blocker is not None:
                 self.result.skater_line(blocker.pid).blocks += 1
-        self._log_shot(offense, defense, shooter, None, zone, shot_type, rush, rebound, outcome)
+        self._log_shot(offense, defense, shooter, None, zone, shot_type, rush, rebound, outcome, xg=xg)
         self._apply_corsi_fenwick(offense, defense, blocked=blocked)
         return outcome
 
@@ -1788,19 +1808,29 @@ class GameSim:
 
     def _score_goal(self, offense: _TeamState, defense: _TeamState, shooter: Player,
                      goalie: Optional[Player], zone: str, shot_type: str, rush: bool,
-                     rebound: bool) -> None:
+                     rebound: bool, xg: float = 0.0) -> None:
         if offense.is_home:
             self.result.home_score += 1
         else:
             self.result.away_score += 1
 
+        # The on-ice count that just got Corsi/Fenwick credit for this goal (the caller ran
+        # _apply_corsi_fenwick immediately before this) -- captured now, because an early penalty
+        # release below can rebuild the on-ice groups before the goal is logged.
+        on_ice_at_goal = len(offense.on_ice)
+
         self.result.skater_line(shooter.pid).g += 1
 
         assist_pid, secondary_pid = self._pick_assists(offense, shooter)
+        # Expected assists (xA, DESIGN.md point 10): a set-up man is credited the xG of the chance
+        # he helped create. The engine only attributes assisters on goals, so xA accrues on goals
+        # here -- a "quality of chances set up" measure that rewards feeding dangerous looks.
         if assist_pid is not None:
             self.result.skater_line(assist_pid).a += 1
+            self.result.skater_line(assist_pid).xa += xg
         if secondary_pid is not None:
             self.result.skater_line(secondary_pid).a += 1
+            self.result.skater_line(secondary_pid).xa += xg
 
         # Capture the strength state BEFORE any early-penalty-release reversion below, so both
         # the plus/minus gating and the logged goal event reflect the state the goal was
@@ -1866,7 +1896,7 @@ class GameSim:
 
         self._log_shot(offense, defense, shooter, goalie, zone, shot_type, rush, rebound,
                       SHOT_OUTCOME_GOAL, assist_pid=assist_pid, secondary_pid=secondary_pid,
-                      strength_state=scoring_strength_state)
+                      strength_state=scoring_strength_state, xg=xg, on_ice_size=on_ice_at_goal)
 
     def _pick_assists(self, offense: _TeamState, shooter: Player) -> Tuple[Optional[int], Optional[int]]:
         """Weighted (not deterministic-always-best) pick of a primary + optional secondary
@@ -2079,7 +2109,8 @@ class GameSim:
                   goalie: Optional[Player], zone: str, shot_type: str, rush: bool,
                   rebound: bool, outcome: str, *, assist_pid: Optional[int] = None,
                   secondary_pid: Optional[int] = None,
-                  strength_state: Optional[str] = None) -> None:
+                  strength_state: Optional[str] = None, xg: float = 0.0,
+                  on_ice_size: Optional[int] = None) -> None:
         if not self.collect_pbp:
             return
         event_type = EVENT_GOAL if outcome == SHOT_OUTCOME_GOAL else EVENT_SHOT
@@ -2099,6 +2130,12 @@ class GameSim:
             goalie_id=goalie.pid if goalie is not None else None,
             shot_type=shot_type, zone=zone, strength_state=state,
             rebound=rebound, rush=rush, outcome=outcome,
+            xg=xg,
+            # Snapshot the attacking on-ice count that actually got Corsi/Fenwick credit. A goal
+            # can release a penalty and rebuild the on-ice groups (see _score_goal) BEFORE this log
+            # call, so a caller in that situation passes the pre-reversion size explicitly rather
+            # than letting us read the already-changed offense.on_ice here.
+            on_ice_size=on_ice_size if on_ice_size is not None else len(offense.on_ice),
         ))
 
     # -- finalize ---------------------------------------------------------------
