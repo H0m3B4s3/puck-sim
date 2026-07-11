@@ -221,6 +221,19 @@ PENALTY_TYPE_WEIGHTS = {
     "misconduct": 2.0,
 }
 
+# Shot-blocking (DEVPLAN.md Step 2.x "impactful ratings"): when an off-goal attempt is split into
+# a block vs a harmless miss, a defending skater's `shot_blocking` rating modulates how likely it
+# is to be a block, and the resulting block is credited to that skater's box-score `blocks`.
+# BLOCK_RATING_PIVOT is the "average" anchor the rating delta is centered on -- deliberately set
+# slightly ABOVE the raw league skater mean (~66) because the blocker is chosen weighted by
+# shot_blocking, so the expected chosen blocker rates a bit above the population average; centering
+# here keeps the league-wide block-vs-miss split near its pre-rating baseline. SLOPE is the
+# per-point swing. PROVISIONAL/TUNABLE, same framing as every other first-pass constant here.
+BLOCK_RATING_PIVOT = 72.0
+BLOCK_RATING_SLOPE = 0.0025
+BLOCK_PROB_MIN = 0.08
+BLOCK_PROB_MAX = 0.80
+
 # Power-play / penalty-kill on-ice group sizes. A PP unit is a full-strength 5 (the shorthanded
 # opponent is down a skater); a PK unit is the shorthanded team's own 4 skaters. 5-on-3 shrinks
 # the box-checking team down to 3 -- see STRENGTH_5V3 handling in special_teams.py.
