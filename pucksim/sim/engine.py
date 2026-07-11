@@ -1020,7 +1020,9 @@ class GameSim:
         elapsed = 0.0
         goal_scored = False
         stoppage = False   # set True by an icing/offside mid-shift stoppage -- ends the shift
-        rush = True       # the first shot attempt of a shift is off the initial entry
+        # The first shot attempt of a shift is normally off the initial entry (a rush) -- unless the
+        # defending team's puck-moving goalie cuts the entry off first (DEVPLAN.md Step 2.x).
+        rush = not self._goalie_negates_rush(defense)
         rebound = False   # set True for the attempt immediately following an unconverted on-goal shot
         while elapsed < shift_secs:
             attempt_gap = self._shot_attempt_interval(offense)
@@ -1084,6 +1086,20 @@ class GameSim:
         # needed here in any case.
         self._advance_shift_for_all()
         return goal_scored
+
+    def _goalie_negates_rush(self, defense: _TeamState) -> bool:
+        """A puck-moving defending goalie (high gk_puck_handling) sometimes plays the puck and
+        cuts off a zone entry before the rush develops (DEVPLAN.md Step 2.x). One-sided: only
+        above-average puck-handlers help; nobody below the pivot hurts. No RNG is drawn when the
+        goalie can't help, keeping this a minimal, low-churn addition."""
+        goalie = defense.goalie()
+        if goalie is None:
+            return False
+        gkph = goalie.ratings.get("gk_puck_handling", 25)
+        p = (gkph - config.GK_PUCKHANDLING_PIVOT) * config.GK_PUCKHANDLING_RUSH_KILL_SLOPE
+        if p <= 0.0:
+            return False
+        return self.rng.chance(min(config.GK_PUCKHANDLING_RUSH_KILL_MAX, p))
 
     def _team_speed_mult_for_offside(self, offense: _TeamState) -> float:
         """How much more/less often this attacking group is blown offside, from its average speed

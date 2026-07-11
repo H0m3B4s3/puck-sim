@@ -19,25 +19,31 @@ def _shot_events(result):
     return [e for e in result.pbp if e.event_type in (EVENT_SHOT, EVENT_GOAL)]
 
 
+def _conversion(rebound: bool, trials: int = 4000) -> float:
+    """Directly resolve many shot attempts flagged rebound / not-rebound against the SAME shooters
+    and goalie, and return the goal rate. Driving _resolve_shot_attempt directly (rather than
+    counting the rare in-game rebounds) isolates the rebound danger bonus from game-flow noise, so
+    the effect is measured cleanly and deterministically. Period 1 so clutch gating never fires."""
+    world = build_world(seed=20)
+    tids = sorted(world.teams.keys())
+    sim = GameSim(world, tids[0], tids[1])
+    sim._advance_shift_for_all()
+    sim.period = 1
+    off, deff = sim.home, sim.away
+    goals = 0
+    for _ in range(trials):
+        sim.result.home_score = sim.result.away_score = 0
+        if sim._resolve_shot_attempt(off, deff, rush=False, rebound=rebound) == "goal":
+            goals += 1
+    return goals / trials
+
+
 def test_rebound_shots_convert_at_a_higher_rate_than_normal_shots():
     """The load-bearing assertion for the user's directive: rebound goals happen at a higher rate
-    than normal ones. Aggregated across many games so the (rarer) rebound sample is meaningful."""
-    reb_att = reb_goals = norm_att = norm_goals = 0
-    for seed in range(80):
-        world = build_world(seed=seed)
-        tids = sorted(world.teams.keys())
-        result = GameSim(world, tids[0], tids[1], collect_pbp=True).play()
-        for e in _shot_events(result):
-            is_goal = e.event_type == EVENT_GOAL
-            if e.rebound:
-                reb_att += 1
-                reb_goals += is_goal
-            else:
-                norm_att += 1
-                norm_goals += is_goal
-    assert reb_att > 100, f"too few rebound attempts to judge ({reb_att})"
-    reb_conv = reb_goals / reb_att
-    norm_conv = norm_goals / norm_att
+    than normal ones. Measured directly on the shot-resolution math (same shooters/goalie) so it's
+    a clean, deterministic read of the rebound danger bonus, not a rare-and-noisy in-game count."""
+    reb_conv = _conversion(rebound=True)
+    norm_conv = _conversion(rebound=False)
     assert reb_conv > norm_conv * 1.3, (
         f"rebound conv {reb_conv:.3f} not distinctly above normal {norm_conv:.3f}")
 
