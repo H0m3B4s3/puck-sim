@@ -276,6 +276,20 @@ class OnIceCache:
     playmaking_weights: List[float] = field(default_factory=list)  # assist-credit weights
     chem_real: float = 1.0     # this group's familiarity realization (see familiarity_realization)
     avg_morale_real: float = 1.0
+    # This group's average defensive value (SIM_SYNERGY_PLAN.md Phase 2). When this group is the
+    # DEFENDING on-ice unit, the engine suppresses the opponent's shot quality by how far this
+    # sits above config.DEF_SUPPRESSION_PIVOT. Defaults to the pivot so an empty/degenerate cache
+    # is neutral (no suppression) rather than accidentally strong or weak.
+    def_value: float = config.DEF_SUPPRESSION_PIVOT
+
+
+def defensive_value(player: Player) -> float:
+    """A skater's on-ice defensive value: mostly positional/gap defense (defensive_awareness)
+    plus some physical engagement (checking). Deliberately does NOT include shot_blocking -- that
+    rating already drives its own separate mechanic (the blocker pick / block-vs-miss split in
+    engine.py), so folding it in here too would double-count it."""
+    r = player.ratings
+    return 0.7 * r.get("defensive_awareness", 25) + 0.3 * r.get("checking", 25)
 
 
 def build_on_ice_cache(players: List[Player], chem_real: float = 1.0) -> OnIceCache:
@@ -290,4 +304,5 @@ def build_on_ice_cache(players: List[Player], chem_real: float = 1.0) -> OnIceCa
         cache.playmaking_weights.append(max(0.5, r.get("playmaking", 25) - 20))
     if players:
         cache.avg_morale_real = sum(morale_realization(p.morale) for p in players) / len(players)
+        cache.def_value = sum(defensive_value(p) for p in players) / len(players)
     return cache
