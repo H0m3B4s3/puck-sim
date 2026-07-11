@@ -57,10 +57,17 @@ export function PlayerModal({ pid, onClose }: { pid: number; onClose: () => void
       onClose={onClose}
     >
       <div style={{ lineHeight: 1.6 }}>
-        {/* Header: Position, OVR, POT */}
+        {/* Header: Position, OVR, POT, archetype/role */}
         <div style={{ fontSize: "0.9rem", color: "var(--color-muted)", marginBottom: "0.75rem" }}>
           {player.position}{player.secondary_position ? ` / ${player.secondary_position}` : ""} · OVR{" "}
           {player.overall} · POT {player.potential}
+          {player.archetype && (
+            <>
+              {" · "}
+              <span style={{ color: "var(--color-text)" }}>{player.archetype}</span>
+              {player.role_label && !player.is_goalie && ` (${player.role_label})`}
+            </>
+          )}
         </div>
 
         {/* Bio line: age, shoots, salary, team, injury */}

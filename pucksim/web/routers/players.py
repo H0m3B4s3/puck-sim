@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from pucksim.models.attributes import RATING_GROUPS, GOALIE_RATING_GROUPS
 from pucksim.models.world import World
 from pucksim.systems.legacy import resume as compute_resume
+from pucksim.web.serializers import role_label
 from pucksim.web.session import get_world
 
 router = APIRouter(prefix="/players", tags=["players"])
@@ -46,6 +47,9 @@ class PlayerDetailDTO(BaseModel):
     is_goalie: bool
     overall: int
     potential: int
+    archetype: Optional[str] = None      # generation-template name (e.g. "Sniper")
+    role: Optional[str] = None           # coarse sim role slug (attributes.ROLE_*)
+    role_label: Optional[str] = None     # display label for `role`
 
     # Team
     team_id: Optional[int] = None
@@ -215,6 +219,9 @@ def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDeta
         is_goalie=player.is_goalie,
         overall=player.overall,
         potential=player.scouted_potential(),
+        archetype=player.archetype,
+        role=player.role,
+        role_label=role_label(player.role),
         team_id=player.team_id,
         team_abbrev=team_abbrev,
         team_name=team_name,

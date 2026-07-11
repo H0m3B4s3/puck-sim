@@ -636,6 +636,27 @@ def test_get_roster_lines_returns_expected_shape(client):
         assert "pid" in body["goalie_starter"]["player"]
 
 
+def test_roster_lines_carry_roles_and_line_synergy(client):
+    """SIM_SYNERGY_PLAN.md Phase 4: player summaries carry archetype/role/role_label, and each
+    forward line carries a synergy readout (score/tier/label) so line composition is a legible
+    lever in the UI."""
+    client.post("/career/new", json={"seed": 22})
+    body = client.get("/roster/lines").json()
+
+    for line in body["lines"]:
+        for player in line["players"]:
+            assert "role" in player and "role_label" in player and "archetype" in player
+            assert player["role"] in (
+                "finisher", "playmaker", "two_way_f", "grinder", "physical",
+                "offensive_d", "shutdown_d", "two_way_d", "generational", "goalie",
+            )
+        syn = line["synergy"]
+        assert syn is not None
+        assert 0 <= syn["score"] <= 100
+        assert syn["tier"] in ("elite", "good", "ok", "poor")
+        assert syn["label"]
+
+
 # ---------------------------------------------------------------------------
 # POST /roster/lines/auto -- auto-build lines
 # ---------------------------------------------------------------------------

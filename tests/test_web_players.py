@@ -54,6 +54,10 @@ def test_get_player_detail_skater(client):
     assert detail["team_id"] == user_team_id
     assert not detail["is_goalie"]
 
+    # SIM_SYNERGY_PLAN.md Phase 4: player detail carries archetype + coarse role identity.
+    assert detail["archetype"]  # every generated player has one
+    assert detail["role"] and detail["role_label"]
+
     # Verify skater season_stats has the right keys
     season_stats = detail["season_stats"]
     assert "gp" in season_stats

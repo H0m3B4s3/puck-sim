@@ -120,9 +120,18 @@ export interface PlayerSummary {
   overall: number;
   shoots: string;
   secondary_position: string | null;
+  archetype: string | null;
+  role: string | null;
+  role_label: string | null;
   injury_status: string | null;
   key_ratings: KeyRating[];
   contract: ContractSummary;
+}
+
+export interface LineSynergy {
+  score: number; // 0-100
+  tier: "elite" | "good" | "ok" | "poor";
+  label: string;
 }
 
 export interface RosterResponse {
@@ -131,6 +140,7 @@ export interface RosterResponse {
 
 export interface LineWithPlayers {
   players: PlayerSummary[];
+  synergy: LineSynergy | null;
 }
 
 export interface PairWithPlayers {
@@ -299,6 +309,9 @@ export interface PlayerDetailDTO {
   is_goalie: boolean;
   overall: number;
   potential: number;
+  archetype: string | null;
+  role: string | null;
+  role_label: string | null;
   team_id: number | null;
   team_abbrev: string;
   team_name: string;

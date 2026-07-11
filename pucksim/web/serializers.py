@@ -334,6 +334,29 @@ class KeyRatingDTO(BaseModel):
     value: int
 
 
+# Short display labels for the coarse sim roles (attributes.ROLE_*). Kept here (presentation)
+# rather than in the domain model; a missing/unknown role falls back to a blank badge.
+ROLE_LABELS = {
+    "finisher": "Finisher",
+    "playmaker": "Playmaker",
+    "two_way_f": "Two-Way",
+    "grinder": "Grinder",
+    "physical": "Power",
+    "offensive_d": "Off. D",
+    "shutdown_d": "Shutdown D",
+    "two_way_d": "Two-Way D",
+    "generational": "Elite",
+    "goalie": "Goalie",
+}
+
+
+def role_label(role: Optional[str]) -> Optional[str]:
+    """Human-readable badge label for a player's coarse role slug (or None if unknown/missing)."""
+    if not role:
+        return None
+    return ROLE_LABELS.get(role, role.replace("_", " ").title())
+
+
 class PlayerSummaryDTO(BaseModel):
     """A player entry for roster lists -- id, name, position, ratings, and contract."""
     pid: int
@@ -343,6 +366,9 @@ class PlayerSummaryDTO(BaseModel):
     overall: int
     shoots: str
     secondary_position: Optional[str] = None
+    archetype: Optional[str] = None      # generation-template name, for flavor/UI
+    role: Optional[str] = None           # coarse sim role slug (attributes.ROLE_*)
+    role_label: Optional[str] = None     # display label for `role`
     injury_status: Optional[str] = None
     key_ratings: List[KeyRatingDTO] = []
     contract: ContractSummaryDTO
@@ -384,6 +410,9 @@ def player_summary(player: Player) -> PlayerSummaryDTO:
         overall=player.overall,
         shoots=player.shoots,
         secondary_position=player.secondary_position,
+        archetype=player.archetype,
+        role=player.role,
+        role_label=role_label(player.role),
         injury_status=injury_status,
         key_ratings=_key_ratings(player),
         contract=ContractSummaryDTO(
@@ -396,9 +425,50 @@ def player_summary(player: Player) -> PlayerSummaryDTO:
 # ---------------------------------------------------------------------------
 # Lines and pairs with player summaries
 # ---------------------------------------------------------------------------
+class LineSynergyDTO(BaseModel):
+    """A forward line's role-synergy readout (SIM_SYNERGY_PLAN.md Phase 4) -- the same
+    ``line_synergy_score`` the engine rewards, plus a tier/label explaining WHY (does the line
+    pair a setup man with a finisher?), so line-building is a legible lever."""
+    score: int                 # 0-100, the sim's line_synergy_score scaled
+    tier: str                  # "elite" | "good" | "ok" | "poor" (for coloring)
+    label: str                 # short phrase, e.g. "Setup + finish", "No setup man"
+
+
 class LineWithPlayersDTO(BaseModel):
-    """A forward line with player summaries resolved."""
+    """A forward line with player summaries resolved, plus its role-synergy readout."""
     players: List[PlayerSummaryDTO]
+    synergy: Optional[LineSynergyDTO] = None
+
+
+def _line_synergy_dto(forward_players: List[Player]) -> Optional[LineSynergyDTO]:
+    """Compute the forward line's synergy readout, or None for an empty line. Mirrors the engine:
+    synergy is a forward-line concept, so only forwards' roles feed it."""
+    from pucksim.sim.ratings import line_role_balance, line_synergy_score
+
+    roles = [p.role for p in forward_players if p.role]
+    if not roles:
+        return None
+    score = line_synergy_score(roles)
+    best_create, best_finish = line_role_balance(roles)
+    has_creator = best_create >= 0.7        # a playmaker/generational-tier setup man is present
+    has_finisher = best_finish >= 0.7       # a finisher/generational-tier trigger is present
+    if has_creator and has_finisher:
+        label = "Setup + finish"
+    elif has_finisher:
+        label = "No setup man"
+    elif has_creator:
+        label = "No finisher"
+    else:
+        label = "Grind line"
+    if score >= 0.85:
+        tier = "elite"
+    elif score >= 0.72:
+        tier = "good"
+    elif score >= 0.55:
+        tier = "ok"
+    else:
+        tier = "poor"
+    return LineSynergyDTO(score=round(score * 100), tier=tier, label=label)
 
 
 class PairWithPlayersDTO(BaseModel):
@@ -431,12 +501,13 @@ def roster_lines_response(team: Team, world: World) -> RosterLinesDTO:
     players_dict = world.players
 
     # Forward lines
-    lines = [
-        LineWithPlayersDTO(
-            players=[player_summary(players_dict[pid]) for pid in line if pid in players_dict]
-        )
-        for line in team.lines
-    ]
+    lines = []
+    for line in team.lines:
+        line_players = [players_dict[pid] for pid in line if pid in players_dict]
+        lines.append(LineWithPlayersDTO(
+            players=[player_summary(p) for p in line_players],
+            synergy=_line_synergy_dto(line_players),
+        ))
 
     # D pairs
     pairs = [
