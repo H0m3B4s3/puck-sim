@@ -234,6 +234,20 @@ BLOCK_RATING_SLOPE = 0.0025
 BLOCK_PROB_MIN = 0.08
 BLOCK_PROB_MAX = 0.80
 
+# Rebound control (DEVPLAN.md Step 2.x "impactful ratings"): a goalie's `rebound_control` rating
+# scales how often a save kicks out a rebound. PIVOT is the "average" anchor (goalie population
+# mean ~68); a goalie above it surrenders proportionally fewer rebounds, below it more. SLOPE is
+# the per-point swing on the rebound-generation multiplier; MIN_MULT floors it so even a 99 still
+# occasionally gives one up. Centered so the league-wide rebound rate stays near the base rate.
+REBOUND_CONTROL_PIVOT = 68.0
+REBOUND_CONTROL_SLOPE = 0.010
+REBOUND_CONTROL_MIN_MULT = 0.35
+# A rebound is a genuine high-danger chance: the goalie is out of position and the net is
+# open, so a shot off a rebound converts at a distinctly higher rate than a normal shot. This
+# bonus is added directly to the attempt's shot-quality term (raising on-goal odds and lowering
+# save odds). PROVISIONAL/TUNABLE magnitude.
+REBOUND_QUALITY_BONUS = 0.32
+
 # Power-play / penalty-kill on-ice group sizes. A PP unit is a full-strength 5 (the shorthanded
 # opponent is down a skater); a PK unit is the shorthanded team's own 4 skaters. 5-on-3 shrinks
 # the box-checking team down to 3 -- see STRENGTH_5V3 handling in special_teams.py.

@@ -188,7 +188,13 @@ GOAL_HOT_HAND_STREAK_INCREMENT = 1.0   # streak credit gained per consecutive sa
 GOAL_HOT_HAND_STREAK_MAX = 12.0        # streak counter ceiling (well past hot_hand_boost's own
                                         # saturation point, just a sanity bound on the counter)
 
-REBOUND_CHANCE_BASE = 0.22            # probability an unconverted on-goal shot produces a rebound
+# Probability a saved on-goal shot kicks out a rebound (before rebound_control scaling). Lowered
+# from an earlier 0.22 now that a rebound resolves as an IMMEDIATE extra look (see the shift loop's
+# bounded rebound chain) rather than usually being lost to the shift clock -- 0.22 with immediate
+# resolution would produce far too many second-chance goals. Tuned so total goals/game stays in the
+# realistic band with rebound shots now actually converting. PROVISIONAL/TUNABLE.
+REBOUND_CHANCE_BASE = 0.09
+MAX_REBOUND_CHAIN = 2                 # most immediate rebound looks off a single original shot
 SHIFT_SECONDS_JITTER = 8.0            # +/- gaussian spread around config.SHIFT_SECONDS_TARGET
 
 # ---------------------------------------------------------------------------
@@ -1041,18 +1047,23 @@ class GameSim:
                 self._pending_faceoff = self._log_faceoff(stoppage_type)
                 break
 
-            outcome = self._resolve_shot_attempt(offense, defense, rush=rush, rebound=rebound)
+            outcome = self._resolve_shot_attempt(offense, defense, rush=rush, rebound=False)
             rush = False
-            rebound = False
+            # A rebound is an IMMEDIATE extra look for the same team -- a scramble in front of the
+            # net, not a fresh entry a full attempt-cycle later. Resolve it (and any short chain of
+            # further rebounds) right now, bounded by MAX_REBOUND_CHAIN so a hot streak of saves
+            # can't loop forever. This is what actually makes rebounds -- and rebound_control --
+            # matter: before, a rebound was usually lost when the next cycle overran the shift clock.
+            chain = 0
+            while outcome == "rebound" and chain < MAX_REBOUND_CHAIN:
+                chain += 1
+                outcome = self._resolve_shot_attempt(offense, defense, rush=False, rebound=True)
             if outcome == SHOT_OUTCOME_GOAL:
                 goal_scored = True
                 yield self._decision_view()
                 break
-            if outcome == "rebound":
-                # Same team keeps the puck for an immediate extra look (DEVPLAN.md's rebound flag
-                # requirement) -- no possession flip, next attempt is flagged as a rebound.
-                rebound = True
-                continue
+            # An exhausted rebound chain (still "rebound") means the puck was finally smothered/
+            # cleared -- fall through to the normal possession-flip flow.
             # Otherwise possession may flip for the remainder of the shift (a turnover-ish flow
             # abstraction -- MVP doesn't model discrete turnovers/zone-entries as separate events,
             # per this step's scope).
@@ -1517,9 +1528,13 @@ class GameSim:
         # cleanly), so a PP's quality edge needs to be a direct, reliable effect on scoring rate,
         # not only an indirect one filtered through selection odds.
         strength_quality_delta = R.strength_state_shot_quality_delta(self.strength.state_for(offense.tid))
+        # A rebound attempt is a high-danger scramble (goalie out of position, net gaping) -- it
+        # converts at a distinctly higher rate than a normal shot (DEVPLAN.md Step 2.x). This is a
+        # direct quality bump, so it raises on-goal odds AND lowers the save odds below.
+        rebound_quality_delta = config.REBOUND_QUALITY_BONUS if rebound else 0.0
         quality = max(0.05, min(0.98,
                       0.5 * _ZONE_QUALITY[zone] + 0.5 * _SHOT_TYPE_QUALITY[shot_type]
-                      + strength_quality_delta))
+                      + strength_quality_delta + rebound_quality_delta))
         rush_bonus = 0.03 if rush else 0.0
 
         # -- on-goal (not blocked/missed) probability -----------------------
@@ -1573,7 +1588,16 @@ class GameSim:
             self._log_shot(offense, defense, shooter, goalie, zone, shot_type, rush, rebound,
                           SHOT_OUTCOME_SAVE)
             self._apply_corsi_fenwick(offense, defense, blocked=False)
-            if self.rng.chance(REBOUND_CHANCE_BASE):
+            # A better rebound_control goalie smothers more pucks, kicking out fewer rebounds
+            # (DEVPLAN.md Step 2.x). Centered on the goalie population mean so the league-wide
+            # rebound rate stays near REBOUND_CHANCE_BASE. goalie is guaranteed non-None here (a
+            # save requires a goalie in net), but guard defensively.
+            rebound_chance = REBOUND_CHANCE_BASE
+            if goalie is not None:
+                rc = goalie.ratings.get("rebound_control", 25)
+                mult = 1.0 - (rc - config.REBOUND_CONTROL_PIVOT) * config.REBOUND_CONTROL_SLOPE
+                rebound_chance *= max(config.REBOUND_CONTROL_MIN_MULT, mult)
+            if self.rng.chance(rebound_chance):
                 return "rebound"
             return SHOT_OUTCOME_SAVE
 
@@ -1600,6 +1624,13 @@ class GameSim:
 
         blocked = self.rng.chance(0.35)
         outcome = SHOT_OUTCOME_BLOCK if blocked else SHOT_OUTCOME_MISS
+        # A backchecking skater on the (goalie-pulled) defending team blocks the empty-net attempt
+        # -- credit it just like any other block so the blocks stat reconciles with every block
+        # outcome, pulled net or not (DEVPLAN.md Step 2.x).
+        if blocked:
+            blocker = self._pick_blocker(defense)
+            if blocker is not None:
+                self.result.skater_line(blocker.pid).blocks += 1
         self._log_shot(offense, defense, shooter, None, zone, shot_type, rush, rebound, outcome)
         self._apply_corsi_fenwick(offense, defense, blocked=blocked)
         return outcome
