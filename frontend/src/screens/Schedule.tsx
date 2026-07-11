@@ -5,7 +5,7 @@
 // Uses TeamTag for opponent display via a standings lookup map.
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api, { StandingsEntry, WorldSummary } from "../api";
 import { Panel, FaceoffDotSpinner } from "../ui";
 import { TeamTag } from "../theme";
@@ -26,6 +26,7 @@ interface ScheduleGameExt {
 
 export function ScheduleScreen({
   world,
+  toast,
   onViewBoxScore,
 }: {
   world: WorldSummary;
@@ -33,6 +34,7 @@ export function ScheduleScreen({
   toast?: (msg: string) => void;
   onViewBoxScore?: (gid: number) => void;
 }) {
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<"my-team" | "around-league">("my-team");
   const [selectedDay, setSelectedDay] = useState(Math.max(0, world.day - 1));
 
@@ -83,11 +85,14 @@ export function ScheduleScreen({
   const handleSimGame = async (gid: number) => {
     try {
       await api.simGame(gid);
-      // Invalidate schedule and standings after simming
-      // (in a real app, would use react-query's invalidation)
-      window.location.reload();
+      // Refresh the schedule, standings and scoreboard in place rather than doing a full page
+      // reload (which lost scroll/tab state and flashed the whole app).
+      queryClient.invalidateQueries({ queryKey: ["schedule"] });
+      queryClient.invalidateQueries({ queryKey: ["standings"] });
+      queryClient.invalidateQueries({ queryKey: ["career"] });
+      toast?.("Game simulated");
     } catch (err) {
-      console.error("Failed to sim game:", err);
+      toast?.(`Failed to sim game: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 

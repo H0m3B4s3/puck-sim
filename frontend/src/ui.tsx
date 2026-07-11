@@ -12,6 +12,35 @@ import { ReactNode, useState } from "react";
 import { useTheme, TeamTag } from "./theme";
 import { TeamSummary } from "./api";
 
+// --- formatMoney: consistent "$8.5M" salary/cap formatting --------------------
+// Previously duplicated inline across screens (and skipped entirely on the Roster, which showed a
+// raw integer). One place so every dollar figure reads the same.
+export function formatMoney(dollars: number): string {
+  return `$${(dollars / 1_000_000).toFixed(1)}M`;
+}
+
+// --- awardLabel: friendly trophy names for raw award keys ---------------------
+// The backend keys awards as "hart", "norris", etc.; screens previously rendered those raw. This
+// maps them to their real trophy names (with the award's meaning), falling back to a Title-Cased
+// key for any award not listed here.
+const AWARD_NAMES: Record<string, string> = {
+  hart: "Hart Trophy (MVP)",
+  norris: "Norris Trophy (Best Defenseman)",
+  vezina: "Vezina Trophy (Best Goaltender)",
+  calder: "Calder Trophy (Rookie of the Year)",
+  selke: "Selke Trophy (Best Defensive Forward)",
+  art_ross: "Art Ross Trophy (Points Leader)",
+  rocket_richard: "Rocket Richard Trophy (Goals Leader)",
+  conn_smythe: "Conn Smythe Trophy (Playoff MVP)",
+};
+
+export function awardLabel(key: string): string {
+  return (
+    AWARD_NAMES[key] ||
+    key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+  );
+}
+
 // --- Panel: the signature rink-cornered card ----------------------------------
 export function Panel({
   children,
