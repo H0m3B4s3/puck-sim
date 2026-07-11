@@ -380,6 +380,7 @@ def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
         ratings=ratings,
         potential=_potential(rng, final_ovr, age),
         scout_error=_scout_error(rng, age),
+        archetype=archetype.name,   # role auto-derives from this in Player.__post_init__
         shoots=_pick_shoots(rng),
         team_id=None,
         contract=_modest_contract(rng, target_overall, age),
@@ -414,6 +415,7 @@ def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int) -> Player
         ratings=ratings,
         potential=_potential(rng, final_ovr, age),
         scout_error=_scout_error(rng, age),
+        archetype=archetype.name,   # role auto-derives from this in Player.__post_init__
         shoots=_pick_shoots(rng),
         team_id=None,
         contract=_modest_contract(rng, target_overall, age),
