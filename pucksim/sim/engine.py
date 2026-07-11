@@ -1458,6 +1458,14 @@ class GameSim:
             skill = apply_goalie_form(skill, goalie, self.form_state)
         return skill
 
+    def _is_clutch_situation(self) -> bool:
+        """A high-leverage moment where composure (see clutch_realization) comes into play: the
+        third period or any overtime, with the score within one goal (tie or one-goal game). This
+        is the ONLY context clutch gating is applied -- routine early/blowout play is unaffected."""
+        late = self._is_ot or self.period >= config.PERIODS
+        close = abs(self.result.home_score - self.result.away_score) <= 1
+        return late and close
+
     def _pick_blocker(self, defense: _TeamState) -> Optional[Player]:
         """Choose which on-ice defending skater is in the shooting lane, weighted by
         ``shot_blocking`` (DEVPLAN.md Step 2.x). Good shot-blockers get in the way more often, so
@@ -1504,6 +1512,14 @@ class GameSim:
         # shooter's effective skill for their remaining shifts this game.
         off_real = (R.morale_realization(shooter.morale) * offense.cache.chem_real
                     * R.fatigue_realization(offense.fatigue.get(shooter.pid, 0.0)))
+        # Clutch/composure (DEVPLAN.md Step 2.x): ONLY in a high-leverage moment (late and close),
+        # the shooter's composure gates how fully they finish. This is downside-only, exactly like
+        # every other realization factor -- an elite-composure shooter simply holds his normal
+        # level (clutch_realization -> 1.0, no boost), while a low-composure shooter's realized
+        # scoring edge dips (he tightens up). It NEVER pushes anyone above their rating. Outside
+        # clutch moments it's a no-op, so ordinary play is unchanged.
+        if self._is_clutch_situation():
+            off_real *= R.clutch_realization(shooter.ratings.get("composure", 70))
         def_real = defense.cache.chem_real * defense.cache.avg_morale_real
         if goalie is not None:
             def_real *= R.morale_realization(goalie.morale)
