@@ -1041,7 +1041,7 @@ class GameSim:
             # comments). A stoppage ends the shift immediately (real hockey: play stops dead) and
             # sets ``self._pending_faceoff`` from the resulting faceoff's winner so the NEXT
             # shift's possession is gated by it, exactly like a period-start/after-goal faceoff.
-            stoppage_type = self._roll_for_icing_or_offside()
+            stoppage_type = self._roll_for_icing_or_offside(offense)
             if stoppage_type is not None:
                 stoppage = True
                 self._pending_faceoff = self._log_faceoff(stoppage_type)
@@ -1085,14 +1085,29 @@ class GameSim:
         self._advance_shift_for_all()
         return goal_scored
 
-    def _roll_for_icing_or_offside(self) -> Optional[str]:
+    def _team_speed_mult_for_offside(self, offense: _TeamState) -> float:
+        """How much more/less often this attacking group is blown offside, from its average speed
+        (0.5*skating + 0.5*agility). Centered on the rating mean so an average group sits at the
+        base offside rate; a fast, agile group enters cleaner (fewer offsides) (DEVPLAN.md Step
+        2.x)."""
+        skaters = self._on_ice_skaters(offense)
+        if not skaters:
+            return 1.0
+        avg = sum(0.5 * (p.ratings.get("skating", 25) + p.ratings.get("agility", 25))
+                  for p in skaters) / len(skaters)
+        mult = 1.0 - (avg - config.RUSH_SPEED_PIVOT) * config.OFFSIDE_SPEED_SLOPE
+        return max(config.OFFSIDE_SPEED_MIN_MULT, min(config.OFFSIDE_SPEED_MAX_MULT, mult))
+
+    def _roll_for_icing_or_offside(self, offense: _TeamState) -> Optional[str]:
         """Roll once for an icing or offside stoppage this attempt cycle (DEVPLAN.md Step 2.3).
         Independent rolls (icing checked first, arbitrarily -- both are rare enough that the
-        order has no meaningful effect on the resulting rate of either). Returns the stoppage
-        type string if one fires, else ``None``."""
+        order has no meaningful effect on the resulting rate of either). The offside chance is
+        scaled by the attacking group's speed (a fast, agile team enters cleaner). Returns the
+        stoppage type string if one fires, else ``None``."""
         if self.rng.chance(ICING_CHANCE_PER_ATTEMPT_CYCLE):
             return FACEOFF_ICING
-        if self.rng.chance(OFFSIDE_CHANCE_PER_ATTEMPT_CYCLE):
+        offside_chance = OFFSIDE_CHANCE_PER_ATTEMPT_CYCLE * self._team_speed_mult_for_offside(offense)
+        if self.rng.chance(offside_chance):
             return FACEOFF_OFFSIDE
         return None
 
@@ -1630,7 +1645,15 @@ class GameSim:
         quality = max(0.05, min(0.98,
                       0.5 * _ZONE_QUALITY[zone] + 0.5 * _SHOT_TYPE_QUALITY[shot_type]
                       + strength_quality_delta + rebound_quality_delta))
-        rush_bonus = 0.03 if rush else 0.0
+        # On a rush, the shooter's speed (skating/agility) scales how dangerous the look is: a
+        # burner flying in off the entry gets a bigger save-suppression than a plodder does
+        # (DEVPLAN.md Step 2.x). Centered on the rating mean so an average rush is the old flat 0.03.
+        if rush:
+            speed = 0.5 * r.get("skating", 25) + 0.5 * r.get("agility", 25)
+            rush_bonus = max(config.RUSH_BONUS_MIN, min(config.RUSH_BONUS_MAX,
+                             config.RUSH_BONUS_BASE + (speed - config.RUSH_SPEED_PIVOT) * config.RUSH_SPEED_SLOPE))
+        else:
+            rush_bonus = 0.0
 
         # -- on-goal (not blocked/missed) probability -----------------------
         on_goal_p = max(0.35, min(0.92, 0.55 + (quality - 0.5) * 0.5 + gap * off_real))
