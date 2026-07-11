@@ -1668,9 +1668,18 @@ class GameSim:
         # converts at a distinctly higher rate than a normal shot (DEVPLAN.md Step 2.x). This is a
         # direct quality bump, so it raises on-goal odds AND lowers the save odds below.
         rebound_quality_delta = config.REBOUND_QUALITY_BONUS if rebound else 0.0
+        # On-ice defender suppression (SIM_SYNERGY_PLAN.md Phase 2): the DEFENDING group's average
+        # defensive value lowers (or, for a weak group, raises) the attempt's shot quality,
+        # centered on config.DEF_SUPPRESSION_PIVOT so an average group is a no-op and league
+        # goals/game is conserved. This is what finally gives the five on-ice defenders real teeth
+        # on shot outcomes -- it flows into on_goal_p, save_p, AND xg (a strong defensive group
+        # genuinely yields lower-xG chances against), not just the block/hit side mechanics.
+        def_quality_delta = max(-config.DEF_SUPPRESSION_MAX, min(config.DEF_SUPPRESSION_MAX,
+                                (defense.cache.def_value - config.DEF_SUPPRESSION_PIVOT)
+                                * config.DEF_SUPPRESSION_SLOPE))
         quality = max(0.05, min(0.98,
                       0.5 * _ZONE_QUALITY[zone] + 0.5 * _SHOT_TYPE_QUALITY[shot_type]
-                      + strength_quality_delta + rebound_quality_delta))
+                      + strength_quality_delta + rebound_quality_delta - def_quality_delta))
         # On a rush, the shooter's speed (skating/agility) scales how dangerous the look is: a
         # burner flying in off the entry gets a bigger save-suppression than a plodder does
         # (DEVPLAN.md Step 2.x). Centered on the rating mean so an average rush is the old flat 0.03.

@@ -248,6 +248,25 @@ REBOUND_CONTROL_MIN_MULT = 0.35
 # save odds). PROVISIONAL/TUNABLE magnitude.
 REBOUND_QUALITY_BONUS = 0.32
 
+# Defender shot-quality suppression (SIM_SYNERGY_PLAN.md Phase 2). Before this, the five on-ice
+# defenders barely affected a shot -- resolution pitted shooter skill vs goalie skill, and the
+# skaters mattered only via chemistry, the shot-blocker pick, and hits. Now the DEFENDING on-ice
+# group's average defensive value (0.7*defensive_awareness + 0.3*checking, see
+# ratings.defensive_value) suppresses the attempt's shot-quality term: a strong defensive group
+# forces lower-quality looks (tighter gaps, fewer clean lanes), a weak one concedes better ones.
+# Centered on DEF_SUPPRESSION_PIVOT (~measured league-average on-ice 3F+2D group value) so an
+# AVERAGE defensive group is a no-op and league-wide goals/game is conserved -- the same
+# constant-pivot, tune-against-the-sweep approach as BLOCK_RATING_PIVOT / HIT_SEPARATION_PIVOT
+# above. Symmetric clamp so an extreme group can't invert or trivialize a chance. PROVISIONAL/
+# TUNABLE (verify goals/game against a multi-seed season sweep in Phase 5).
+DEF_SUPPRESSION_PIVOT = 70.0     # measured shot-weighted mean of the defending on-ice group's
+                                  # def_value in-sim (~70.1), so an average defense is a no-op and
+                                  # league goals/game is conserved. NOT the raw all-skater rating
+                                  # mean (~67): shots cluster toward certain defensive alignments,
+                                  # which pulls the shot-weighted mean up -- measure, don't assume.
+DEF_SUPPRESSION_SLOPE = 0.004    # shot-quality points removed per defensive-value point above pivot
+DEF_SUPPRESSION_MAX = 0.12       # symmetric clamp on the total quality delta (either direction)
+
 # Hitting / body checks (DEVPLAN.md Step 2.x "impactful ratings"): the engine had no hit mechanic
 # at all and the SkaterStatLine `hits` field was never incremented. Each shot-attempt cycle, the
 # checking (defending) team may throw a body check on the puck carrier, and the fore-checking
