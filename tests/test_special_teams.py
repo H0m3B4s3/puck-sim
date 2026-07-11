@@ -367,7 +367,12 @@ def test_no_penalty_game_is_pure_5v5_strict_extension(monkeypatch):
     assert not any(e.event_type == EVENT_PENALTY for e in result.pbp)
     shot_events = [e for e in result.pbp if e.event_type in (EVENT_SHOT, EVENT_GOAL)]
     assert shot_events
-    assert all(e.strength_state == config.STRENGTH_5V5 for e in shot_events)
+    # A no-penalty game must never produce a penalty-derived strength state (PP/PK/5v3, or the
+    # 4v4 of coincidental minors). It CAN still reach regular-season 3-on-3 OT if it's tied after
+    # regulation -- that's a non-penalty even-strength state, not a special-teams situation -- so
+    # the strict-extension guarantee is "no special teams", not literally "5v5 on every shift".
+    penalty_states = {config.STRENGTH_PP, config.STRENGTH_PK, config.STRENGTH_5V3, config.STRENGTH_4V4}
+    assert all(e.strength_state not in penalty_states for e in shot_events)
 
 
 def test_pp_scores_at_higher_rate_than_5v5():
