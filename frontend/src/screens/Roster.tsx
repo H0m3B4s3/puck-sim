@@ -20,11 +20,63 @@ import type { SortingState } from "@tanstack/react-table";
 
 import api, {
   PlayerSummary,
+  LineSynergy,
   ManualLinesEditRequest,
   TacticsUpdateRequest,
   ApiError,
 } from "../api";
 import { Panel, FaceoffDotSpinner, formatMoney } from "../ui";
+
+// Map a synergy tier to a theme color (elite=green, good=blue, ok=muted, poor=red).
+const synergyTierColor = (tier: string): string =>
+  tier === "elite"
+    ? "var(--color-accent-green)"
+    : tier === "good"
+    ? "var(--color-accent-blue)"
+    : tier === "poor"
+    ? "var(--color-accent-red)"
+    : "var(--color-muted)";
+
+// A small pill for a player's coarse role (Finisher / Playmaker / Grinder / ...).
+function RoleBadge({ label }: { label: string | null }) {
+  if (!label) return null;
+  return (
+    <span
+      style={{
+        fontSize: "0.75rem",
+        padding: "0.1rem 0.45rem",
+        borderRadius: "var(--radius-sm)",
+        background: "var(--color-surface-raised, rgba(127,127,127,0.14))",
+        color: "var(--color-muted)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+// The line's role-synergy readout: a tier-colored pill ("Setup + finish 88").
+function SynergyBadge({ synergy }: { synergy: LineSynergy | null }) {
+  if (!synergy) return null;
+  const color = synergyTierColor(synergy.tier);
+  return (
+    <span
+      title={`Line role synergy: ${synergy.score}/100 — a line that pairs a setup man with a finisher generates better looks`}
+      style={{
+        fontSize: "0.75rem",
+        fontWeight: 600,
+        padding: "0.1rem 0.5rem",
+        borderRadius: "999px",
+        border: `1px solid ${color}`,
+        color,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {synergy.label} · {synergy.score}
+    </span>
+  );
+}
 
 // --- Roster Table Component ---
 
@@ -64,6 +116,11 @@ const rosterColumns = (onPlayer?: (pid: number) => void) => [
   columnHelper.accessor("overall", {
     header: "Overall",
     size: 80,
+  }),
+  columnHelper.accessor("role_label", {
+    header: "Role",
+    size: 110,
+    cell: (info) => <RoleBadge label={info.getValue() as string | null} />,
   }),
   columnHelper.display({
     id: "key_ratings",
@@ -222,6 +279,18 @@ function LineSlot({
       {player ? (
         <div className="line-slot__player">
           <span className="line-slot__name">{player.name}</span>
+          {player.role_label && (
+            <span
+              style={{
+                display: "block",
+                fontSize: "0.7rem",
+                color: "var(--color-muted)",
+                marginTop: "0.1rem",
+              }}
+            >
+              {player.role_label}
+            </span>
+          )}
         </div>
       ) : (
         <div className="line-slot__empty">Empty</div>
@@ -233,18 +302,26 @@ function LineSlot({
 function ForwardLine({
   lineIndex,
   players,
+  synergy,
   canPlace,
   onSlotClick,
 }: {
   lineIndex: number;
   players: PlayerSummary[];
+  synergy: LineSynergy | null;
   canPlace: boolean;
   onSlotClick: (slotIndex: number) => void;
 }) {
   const positionLabels = ["LW", "C", "RW"];
   return (
     <div className="line-group">
-      <h4 className="line-group__title">Line {lineIndex + 1}</h4>
+      <h4
+        className="line-group__title"
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}
+      >
+        <span>Line {lineIndex + 1}</span>
+        <SynergyBadge synergy={synergy} />
+      </h4>
       <div className="line-slots">
         {positionLabels.map((pos, i) => (
           <LineSlot
@@ -352,6 +429,7 @@ function SpecialTeamsPanel({
 
 function LinesEditor({
   lines,
+  lineSynergies,
   pairs,
   goalieStarter,
   goalieBackup,
@@ -361,6 +439,7 @@ function LinesEditor({
   onSetGoalie,
 }: {
   lines: PlayerSummary[][];
+  lineSynergies: (LineSynergy | null)[];
   pairs: PlayerSummary[][];
   goalieStarter: PlayerSummary | null;
   goalieBackup: PlayerSummary | null;
@@ -387,6 +466,7 @@ function LinesEditor({
             key={`line-${i}`}
             lineIndex={i}
             players={line}
+            synergy={lineSynergies[i] ?? null}
             canPlace={canPlace}
             onSlotClick={(slotIndex) => onPlaceInLine(i, slotIndex)}
           />
@@ -628,6 +708,7 @@ export function RosterScreen({
   }
 
   const currentLines = linesData.lines.map((line) => line.players);
+  const lineSynergies = linesData.lines.map((line) => line.synergy);
   const currentPairs = linesData.pairs.map((pair) => pair.players);
   const selectedPlayerObj = rosterData.players.find((p) => p.pid === selectedPlayer) ?? null;
 
@@ -691,6 +772,7 @@ export function RosterScreen({
       <div style={{ marginTop: "2rem" }}>
         <LinesEditor
           lines={currentLines}
+          lineSynergies={lineSynergies}
           pairs={currentPairs}
           goalieStarter={linesData.goalie_starter.player}
           goalieBackup={linesData.goalie_backup.player}

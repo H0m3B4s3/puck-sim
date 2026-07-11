@@ -337,6 +337,16 @@ def line_synergy_score(roles: List[str]) -> float:
     return math.sqrt(best_create * best_finish)
 
 
+def line_role_balance(roles: List[str]) -> tuple:
+    """Return ``(best_create, best_finish)`` over a group's roles -- the two ingredients
+    ``line_synergy_score`` multiplies. Exposed so a UI can explain WHY a line's synergy is high or
+    low (a missing setup man vs a missing finisher) rather than only showing the scalar."""
+    if not roles:
+        return 0.0, 0.0
+    cf = [_ROLE_CREATE_FINISH.get(r, _DEFAULT_CREATE_FINISH) for r in roles]
+    return max(c for c, _ in cf), max(f for _, f in cf)
+
+
 def build_on_ice_cache(players: List[Player], chem_real: float = 1.0) -> OnIceCache:
     cache = OnIceCache(players=players, chem_real=chem_real)
     for p in players:
