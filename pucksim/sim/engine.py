@@ -1447,6 +1447,18 @@ class GameSim:
             skill = apply_goalie_form(skill, goalie, self.form_state)
         return skill
 
+    def _pick_blocker(self, defense: _TeamState) -> Optional[Player]:
+        """Choose which on-ice defending skater is in the shooting lane, weighted by
+        ``shot_blocking`` (DEVPLAN.md Step 2.x). Good shot-blockers get in the way more often, so
+        they both raise the block chance and collect the resulting ``blocks`` stat. Returns None
+        only if the defending team somehow has no on-ice skaters (degenerate, but guarded)."""
+        skaters = [defense.players[pid] for pid in defense.on_ice
+                   if pid in defense.players and pid != defense.goalie_id]
+        if not skaters:
+            return None
+        weights = [max(1.0, float(p.ratings.get("shot_blocking", 25))) for p in skaters]
+        return skaters[_weighted_index(self.rng, weights)]
+
     def _resolve_shot_attempt(self, offense: _TeamState, defense: _TeamState, *,
                                rush: bool, rebound: bool) -> str:
         """Resolve one shot attempt end to end: pick shooter/zone/shot-type, run shooter-vs-goalie
@@ -1517,10 +1529,20 @@ class GameSim:
         if not on_goal:
             # Blocked or wide -- split roughly evenly, weighted slightly toward "miss" for
             # high-danger zones (less time for a shot-blocker to get across) and toward "block" for
-            # low-danger zones (point shots get blocked more in real hockey).
+            # low-danger zones (point shots get blocked more in real hockey). A defending skater's
+            # shot_blocking rating (DEVPLAN.md Step 2.x) then nudges that split: the skater in the
+            # lane is chosen weighted by shot_blocking, and their rating (relative to a league
+            # anchor) raises/lowers the block chance and, on a block, earns the box-score credit.
+            blocker = self._pick_blocker(defense)
             block_p = 0.30 + (0.20 if zone in ZONES_LOW_DANGER else 0.0)
+            if blocker is not None:
+                block_p += (blocker.ratings.get("shot_blocking", 25)
+                            - config.BLOCK_RATING_PIVOT) * config.BLOCK_RATING_SLOPE
+            block_p = max(config.BLOCK_PROB_MIN, min(config.BLOCK_PROB_MAX, block_p))
             blocked = self.rng.chance(block_p)
             outcome = SHOT_OUTCOME_BLOCK if blocked else SHOT_OUTCOME_MISS
+            if blocked and blocker is not None:
+                self.result.skater_line(blocker.pid).blocks += 1
             self._log_shot(offense, defense, shooter, goalie, zone, shot_type, rush, rebound,
                           outcome)
             self._apply_corsi_fenwick(offense, defense, blocked=blocked)
