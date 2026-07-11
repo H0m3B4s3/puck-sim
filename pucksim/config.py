@@ -291,6 +291,21 @@ OFFSIDE_SPEED_SLOPE = 0.008
 OFFSIDE_SPEED_MIN_MULT = 0.45
 OFFSIDE_SPEED_MAX_MULT = 1.6
 
+# Goalie puck-handling (DEVPLAN.md Step 2.x): a puck-moving goalie plays the puck behind the net /
+# cuts off dump-ins, occasionally killing an opponent's rush before it starts. A one-sided benefit
+# above the goalie-population mean (a poor puck-handler simply doesn't help, he doesn't hurt), kept
+# modest. PROVISIONAL/TUNABLE.
+GK_PUCKHANDLING_PIVOT = 67.0
+GK_PUCKHANDLING_RUSH_KILL_SLOPE = 0.006
+GK_PUCKHANDLING_RUSH_KILL_MAX = 0.25
+
+# NOTE (condition/durability, DEVPLAN.md Step 2.x): Player.condition-based between-game durability
+# was scoped here but deliberately NOT wired -- the season schedule is fully abstracted (every team
+# plays every day, no rest days), so a "played -> drain, rest -> recover" model can neither hold a
+# stable value nor create any inter-team variation. It needs a schedule with real off-days first;
+# deferred rather than shipping an inert/degenerate mechanic. config.BASE_INJURY_RATE stays unused
+# for the same reason (it presumes a between-game injury cadence that this schedule doesn't model).
+
 # Power-play / penalty-kill on-ice group sizes. A PP unit is a full-strength 5 (the shorthanded
 # opponent is down a skater); a PK unit is the shorthanded team's own 4 skaters. 5-on-3 shrinks
 # the box-checking team down to 3 -- see STRENGTH_5V3 handling in special_teams.py.
