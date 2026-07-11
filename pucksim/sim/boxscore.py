@@ -77,6 +77,13 @@ class PBPEvent:
     rebound: bool = False
     rush: bool = False
     outcome: Optional[str] = None            # one of the SHOT_OUTCOME_* constants
+    xg: float = 0.0                          # this attempt's expected-goals value (0 for a
+                                              # blocked/missed attempt that never threatened)
+    on_ice_size: int = 0                     # attacking team's on-ice skater count at this attempt
+                                              # (4 PK / 5 even / 6 pulled goalie) -- lets Corsi/
+                                              # Fenwick box totals reconcile exactly against the
+                                              # event stream regardless of strength (DEVPLAN.md
+                                              # Step 2.5 "Known latent test bug" fix)
 
     # -- penalty context (EVENT_PENALTY only, DEVPLAN.md Step 2.1) ------------
     penalty_type: Optional[str] = None       # "minor" | "major" | "misconduct"

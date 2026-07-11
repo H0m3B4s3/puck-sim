@@ -140,55 +140,34 @@ def test_total_ice_time_reconciles_with_game_length():
 
 def test_corsi_and_fenwick_tallied_as_event_stream_filter():
     """Corsi (every attempt, blocked included) and Fenwick (unblocked only) must reconcile
-    exactly against a direct filter over the collected event stream, proving these are tallied
+    EXACTLY against a direct filter over the collected event stream, proving these are tallied
     as a filter over the shot-attempt events rather than a separately-bolted-on pass.
 
-    KNOWN PRE-EXISTING LANDMINE (documented in DEVPLAN.md's Phase 2 intro, "Known latent test
-    bug, found during Step 2.5 review" -- not introduced by this change, just newly exposed by
-    it): ``_apply_corsi_fenwick`` in engine.py correctly credits every skater in the actual
-    on-ice group for a shot attempt, but that group's size varies (4 on a PK, 5 at normal
-    strength, 6 with a pulled goalie) and ``PBPEvent`` carries no per-event on-ice-size field to
-    reconstruct the exact expected total from event count alone -- a fixed divisor (the original
-    ``// 5``) only happens to work for a seed whose game never actually varies its on-ice group
-    size. A proper fix (per DEVPLAN.md's own note) needs either a new per-event on-ice-size field
-    on PBPEvent, or restricting reconciliation to true 5v5-no-pulled-goalie shifts -- this test
-    takes that second, already-documented-as-acceptable path (option (b) from DEVPLAN.md's own
-    note) rather than inventing a third approach: it searches for a game where EVERY one of the
-    home team's own shot attempts happened at ``STRENGTH_5V5`` AND no empty-net goal occurred
-    anywhere in the game (a strong proxy for "no pulled-goalie extra-attacker shift happened,"
-    since ``PBPEvent`` has no direct pulled-goalie flag -- an empty-net goal can only happen
-    against a pulled goalie, so its absence is meaningful, if not logically airtight, evidence).
-    In such a game the on-ice group size is provably a constant 5 for every one of the home
-    team's own attempts, making the ``// 5`` reconciliation exact rather than coincidental.
+    Every ``EVENT_SHOT``/``EVENT_GOAL`` now carries ``on_ice_size`` -- the attacking team's on-ice
+    skater count that actually received Corsi/Fenwick credit for that attempt (4 on a PK, 5 at
+    even strength, 6 with a pulled goalie). Summing that per-event size over a team's own attempts
+    reproduces the box-score Corsi/Fenwick totals for ANY game, regardless of strength state or
+    pulled goalies -- so this reconciliation is exact across a whole range of seeds, not just the
+    ones that happen to stay 5v5. (This replaces the old ``* 5`` fixed-divisor reconciliation and
+    its all-5v5-game search, the DEVPLAN.md "Known latent test bug" -- a per-event on-ice-size
+    field was option (a) from that note.)
     """
-    home_tid = away_tid = None
-    result = None
-    for seed in range(1, 60):
-        world, home_tid, away_tid, candidate = _play(seed=seed, collect_pbp=True)
+    for seed in range(1, 40):
+        world, home_tid, away_tid, result = _play(seed=seed, collect_pbp=True)
         home_team = world.team(home_tid)
-        shot_events = [e for e in candidate.pbp if e.event_type in (EVENT_SHOT, EVENT_GOAL)]
+        shot_events = [e for e in result.pbp if e.event_type in (EVENT_SHOT, EVENT_GOAL)]
         home_events = [e for e in shot_events if e.team_id == home_tid]
-        empty_net_goals = [e for e in candidate.pbp
-                          if e.event_type == EVENT_GOAL and e.goalie_id is None]
-        if (home_events and not empty_net_goals
-                and all(e.strength_state == config.STRENGTH_5V5 for e in home_events)):
-            result = candidate
-            break
-    assert result is not None, "expected at least one all-5v5, no-empty-net game in this range"
 
-    home_team = world.team(home_tid)
-    shot_events = [e for e in result.pbp if e.event_type in (EVENT_SHOT, EVENT_GOAL)]
-    home_corsi_for_events = sum(1 for e in shot_events if e.team_id == home_tid)
-    home_fenwick_for_events = sum(1 for e in shot_events
-                                  if e.team_id == home_tid and e.outcome != "block")
+        expected_corsi = sum(e.on_ice_size for e in home_events)
+        expected_fenwick = sum(e.on_ice_size for e in home_events if e.outcome != "block")
 
-    home_corsi_for_box_total = sum(result.skater_box[pid].corsi_for for pid in home_team.roster
-                                   if pid in result.skater_box)
-    home_fenwick_for_box_total = sum(result.skater_box[pid].fenwick_for for pid in home_team.roster
-                                     if pid in result.skater_box)
+        box_corsi = sum(result.skater_box[pid].corsi_for for pid in home_team.roster
+                        if pid in result.skater_box)
+        box_fenwick = sum(result.skater_box[pid].fenwick_for for pid in home_team.roster
+                          if pid in result.skater_box)
 
-    assert home_corsi_for_box_total == home_corsi_for_events * 5
-    assert home_fenwick_for_box_total == home_fenwick_for_events * 5
+        assert box_corsi == expected_corsi, f"seed {seed}: corsi {box_corsi} != {expected_corsi}"
+        assert box_fenwick == expected_fenwick, f"seed {seed}: fenwick {box_fenwick} != {expected_fenwick}"
 
 
 # ---------------------------------------------------------------------------

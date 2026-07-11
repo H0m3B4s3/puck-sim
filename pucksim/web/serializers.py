@@ -573,6 +573,8 @@ class SkaterBoxScoreDTO(BaseModel):
     corsi_against: int = 0
     fenwick_for: int = 0
     fenwick_against: int = 0
+    xg: float = 0.0
+    xa: float = 0.0
 
 
 class GoalieBoxScoreDTO(BaseModel):
@@ -591,6 +593,7 @@ class GoalieBoxScoreDTO(BaseModel):
     losses: int = 0
     otl: int = 0
     shutouts: int = 0
+    xga: float = 0.0
 
 
 class GameSummaryDTO(BaseModel):
