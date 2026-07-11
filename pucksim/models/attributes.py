@@ -38,7 +38,7 @@ collisions in a combined ratings dict on a single Player record.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from pucksim.config import RATING_MAX, RATING_MIN
 
@@ -331,3 +331,104 @@ RARE_GOALIE_ARCHETYPES: List[Archetype] = [
 RARE_GOALIE_ARCHETYPES_BY_POSITION: Dict[str, List[Archetype]] = {
     "G": list(RARE_GOALIE_ARCHETYPES)
 }
+
+
+# ---------------------------------------------------------------------------
+# Player roles (SIM_SYNERGY_PLAN.md Phase 0) -- a coarse identity tag the sim's
+# line-synergy system keys on, persisted on Player. Distinct from the specific
+# archetype NAME (kept for UI/flavor): many archetypes collapse to one role, and
+# roles are the vocabulary the synergy math is written against so the archetype
+# roster can be refined (Phase 1) without rewriting the engine.
+# ---------------------------------------------------------------------------
+ROLE_FINISHER = "finisher"          # shoots to score; realizes his scoring only when set up
+ROLE_PLAYMAKER = "playmaker"        # sets up finishers; a playmaker on the ice unlocks one-timers
+ROLE_TWO_WAY_F = "two_way_f"        # flexible forward; mild positive fit with anything
+ROLE_GRINDER = "grinder"            # low offense, strong defensive suppression (energy/checking)
+ROLE_PHYSICAL = "physical"          # heavy forechecker; physical/defensive lean
+ROLE_OFFENSIVE_D = "offensive_d"    # PP/transition offense from the back end
+ROLE_SHUTDOWN_D = "shutdown_d"      # max defensive suppression from the pair
+ROLE_TWO_WAY_D = "two_way_d"        # balanced defenseman
+ROLE_GENERATIONAL = "generational"  # no holes; complements every composition
+ROLE_GOALIE = "goalie"              # sentinel -- goalies are not part of line synergy
+
+SKATER_ROLES: Tuple[str, ...] = (
+    ROLE_FINISHER, ROLE_PLAYMAKER, ROLE_TWO_WAY_F, ROLE_GRINDER, ROLE_PHYSICAL,
+    ROLE_OFFENSIVE_D, ROLE_SHUTDOWN_D, ROLE_TWO_WAY_D, ROLE_GENERATIONAL,
+)
+ALL_ROLES: Tuple[str, ...] = SKATER_ROLES + (ROLE_GOALIE,)
+
+DEFAULT_SKATER_ROLE = ROLE_TWO_WAY_F   # fallback for an unknown/missing skater archetype
+
+# Archetype NAME -> role. Every archetype defined above (normal, rare, and goalie) has an
+# entry so ``role_for_archetype`` never has to guess for a generated player.
+ROLE_FOR_ARCHETYPE: Dict[str, str] = {
+    "Sniper": ROLE_FINISHER,
+    "Playmaking Center": ROLE_PLAYMAKER,
+    "Power Forward": ROLE_PHYSICAL,
+    "Two-Way Forward": ROLE_TWO_WAY_F,
+    "Speedster": ROLE_TWO_WAY_F,
+    "Grinder": ROLE_GRINDER,
+    "Shutdown Defenseman": ROLE_SHUTDOWN_D,
+    "Offensive Defenseman": ROLE_OFFENSIVE_D,
+    "Two-Way Defenseman": ROLE_TWO_WAY_D,
+    "Enforcer-Physical": ROLE_PHYSICAL,
+    "Generational Forward": ROLE_GENERATIONAL,
+    "Unicorn Defenseman": ROLE_GENERATIONAL,
+    "Reflex Goalie": ROLE_GOALIE,
+    "Positional Goalie": ROLE_GOALIE,
+    "Puck-Moving Goalie": ROLE_GOALIE,
+    "Battler Goalie": ROLE_GOALIE,
+    "Generational Goalie": ROLE_GOALIE,
+}
+
+# Margins (composite-rating points) for the rating-only fallback classifier below. Provisional/
+# tunable, and low-stakes: this path only runs for players with no stored archetype (pre-role
+# saves, hand-built test players), never for freshly-generated players (those map by name).
+_ROLE_D_OFFENSE_MARGIN = 4.0
+_ROLE_D_DEFENSE_MARGIN = 4.0
+_ROLE_F_GRINDER_MARGIN = 3.0
+_ROLE_F_PHYSICAL_MARGIN = 5.0
+_ROLE_F_FINISHER_MARGIN = 4.0
+_ROLE_F_PLAYMAKER_MARGIN = 4.0
+
+
+def role_for_archetype(archetype_name: Optional[str], position: str) -> str:
+    """Map an archetype NAME to its coarse role. Goalies always map to ``ROLE_GOALIE``
+    regardless of the (goalie) archetype. An unknown/missing skater name falls back to
+    ``DEFAULT_SKATER_ROLE`` rather than raising -- same never-crash-on-stale-data philosophy
+    as ``coach.profile_for``."""
+    if position == "G":
+        return ROLE_GOALIE
+    if archetype_name and archetype_name in ROLE_FOR_ARCHETYPE:
+        return ROLE_FOR_ARCHETYPE[archetype_name]
+    return DEFAULT_SKATER_ROLE
+
+
+def role_for_ratings(ratings: Dict[str, int], position: str) -> str:
+    """Best-effort role classification from a rating profile alone -- the fallback used ONLY to
+    backfill a role for a player with no stored archetype (a save from before roles existed, or a
+    hand-built test player). Deterministic (no RNG) and compares the same composites ``overall()``
+    is built from, so it never disagrees with how a player is otherwise valued."""
+    if position == "G":
+        return ROLE_GOALIE
+    comps = all_composites(ratings)
+    scoring, playmaking = comps["scoring"], comps["playmaking_c"]
+    defense, physicality = comps["defense"], comps["physicality"]
+    if position == "D":
+        off = 0.5 * scoring + 0.5 * playmaking
+        if off - defense >= _ROLE_D_OFFENSE_MARGIN:
+            return ROLE_OFFENSIVE_D
+        if defense - off >= _ROLE_D_DEFENSE_MARGIN:
+            return ROLE_SHUTDOWN_D
+        return ROLE_TWO_WAY_D
+    # Forwards.
+    offense = max(scoring, playmaking)
+    if defense - offense >= _ROLE_F_GRINDER_MARGIN and physicality >= scoring:
+        return ROLE_GRINDER
+    if physicality - offense >= _ROLE_F_PHYSICAL_MARGIN:
+        return ROLE_PHYSICAL
+    if scoring - playmaking >= _ROLE_F_FINISHER_MARGIN:
+        return ROLE_FINISHER
+    if playmaking - scoring >= _ROLE_F_PLAYMAKER_MARGIN:
+        return ROLE_PLAYMAKER
+    return ROLE_TWO_WAY_F

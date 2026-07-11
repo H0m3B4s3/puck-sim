@@ -55,7 +55,13 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Union
 
 from pucksim.config import RATING_MIN
-from pucksim.models.attributes import ALL_GOALIE_RATINGS, ALL_RATINGS, overall
+from pucksim.models.attributes import (
+    ALL_GOALIE_RATINGS,
+    ALL_RATINGS,
+    overall,
+    role_for_archetype,
+    role_for_ratings,
+)
 from pucksim.models.contract import Contract
 from pucksim.models.stats import GoalieStatLine, SkaterStatLine
 
@@ -94,6 +100,16 @@ class Player:
     ratings: Dict[str, int] = field(default_factory=dict)
     potential: int = 25                  # overall ceiling, 25-99
     scout_error: float = 0.0             # hidden noise driving scouted_potential() fog-of-war
+
+    # Identity tags (SIM_SYNERGY_PLAN.md Phase 0). ``archetype`` is the generation-template NAME
+    # (e.g. "Sniper") kept for UI/flavor; ``role`` is the coarse sim tag (attributes.ROLE_*) the
+    # line-synergy system keys on. Both default to None and are filled by __post_init__: role is
+    # derived from the archetype when known, else classified from the rating profile -- so every
+    # Player (generated, hand-built, or loaded from a pre-role save) always ends up with a valid
+    # role without callers having to supply one.
+    archetype: Optional[str] = None
+    role: Optional[str] = None
+
     secondary_position: Optional[str] = None
     shoots: str = "L"                    # "L" or "R" -- shot/stick handedness.
     # Distinct from `position`: two players can both be "D" but shoot opposite
@@ -144,6 +160,12 @@ class Player:
             self.season = GoalieStatLine() if self.is_goalie else SkaterStatLine()
         if self.playoffs is None:
             self.playoffs = GoalieStatLine() if self.is_goalie else SkaterStatLine()
+        if self.role is None:
+            # Prefer the archetype mapping (exact); fall back to rating-profile classification
+            # for a player with no stored archetype (pre-role save / hand-built test player).
+            self.role = (role_for_archetype(self.archetype, self.position)
+                         if self.archetype is not None
+                         else role_for_ratings(self.ratings, self.position))
 
     # -- identity -------------------------------------------------------------
     @property
@@ -202,6 +224,8 @@ class Player:
             "ratings": dict(self.ratings),
             "potential": self.potential,
             "scout_error": self.scout_error,
+            "archetype": self.archetype,
+            "role": self.role,
             "team_id": self.team_id,
             "contract": self.contract.to_dict(),
             "condition": self.condition,
@@ -236,6 +260,8 @@ class Player:
             ratings=ratings,
             potential=d.get("potential", RATING_MIN),
             scout_error=d.get("scout_error", 0.0),
+            archetype=d.get("archetype"),
+            role=d.get("role"),   # None on a pre-role save -> __post_init__ backfills it
             team_id=d.get("team_id"),
             contract=Contract.from_dict(d.get("contract", {})),
             condition=d.get("condition", 100.0),
