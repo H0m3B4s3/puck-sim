@@ -328,6 +328,12 @@ class ContractSummaryDTO(BaseModel):
     years_remaining: int
 
 
+class KeyRatingDTO(BaseModel):
+    """One headline rating for the roster peek: a short label and its 25-99 value."""
+    label: str
+    value: int
+
+
 class PlayerSummaryDTO(BaseModel):
     """A player entry for roster lists -- id, name, position, ratings, and contract."""
     pid: int
@@ -338,12 +344,30 @@ class PlayerSummaryDTO(BaseModel):
     shoots: str
     secondary_position: Optional[str] = None
     injury_status: Optional[str] = None
+    key_ratings: List[KeyRatingDTO] = []
     contract: ContractSummaryDTO
 
 
 class RosterDTO(BaseModel):
     """Full roster for a team with player summaries."""
     players: List[PlayerSummaryDTO]
+
+
+def _key_ratings(player: Player) -> List[KeyRatingDTO]:
+    """A few headline ratings for the roster peek so a manager can compare players at a glance
+    without opening each modal. Position-appropriate: goalies get their save-skill attributes,
+    skaters get the derived offense/playmaking/defense/physicality composite axes."""
+    from pucksim.models import attributes as A
+
+    if player.is_goalie:
+        keys = [("REF", "reflexes"), ("POS", "positioning"),
+                ("REB", "rebound_control"), ("HND", "gk_puck_handling")]
+        return [KeyRatingDTO(label=label, value=player.rating(key)) for label, key in keys]
+
+    axes = [("OFF", "scoring"), ("PLY", "playmaking_c"),
+            ("DEF", "defense"), ("PHY", "physicality")]
+    return [KeyRatingDTO(label=label, value=round(A.composite(player.ratings, name)))
+            for label, name in axes]
 
 
 def player_summary(player: Player) -> PlayerSummaryDTO:
@@ -361,6 +385,7 @@ def player_summary(player: Player) -> PlayerSummaryDTO:
         shoots=player.shoots,
         secondary_position=player.secondary_position,
         injury_status=injury_status,
+        key_ratings=_key_ratings(player),
         contract=ContractSummaryDTO(
             current_salary=player.contract.current_salary,
             years_remaining=player.contract.years_remaining,

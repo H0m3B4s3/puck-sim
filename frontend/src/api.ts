@@ -107,6 +107,11 @@ export interface ContractSummary {
   years_remaining: number;
 }
 
+export interface KeyRating {
+  label: string;
+  value: number;
+}
+
 export interface PlayerSummary {
   pid: number;
   name: string;
@@ -116,6 +121,7 @@ export interface PlayerSummary {
   shoots: string;
   secondary_position: string | null;
   injury_status: string | null;
+  key_ratings: KeyRating[];
   contract: ContractSummary;
 }
 

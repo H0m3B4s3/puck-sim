@@ -65,6 +65,26 @@ const rosterColumns = (onPlayer?: (pid: number) => void) => [
     header: "Overall",
     size: 80,
   }),
+  columnHelper.display({
+    id: "key_ratings",
+    header: "Key Ratings",
+    size: 210,
+    cell: (info) => (
+      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+        {(info.row.original.key_ratings ?? []).map((r) => (
+          <span
+            key={r.label}
+            title={`${r.label}: ${r.value}`}
+            className="text-mono"
+            style={{ fontSize: "0.8125rem", color: "var(--color-muted)" }}
+          >
+            {r.label}{" "}
+            <strong style={{ color: "var(--color-text)" }}>{r.value}</strong>
+          </span>
+        ))}
+      </div>
+    ),
+  }),
   columnHelper.accessor("shoots", {
     header: "Shoots",
     size: 70,
