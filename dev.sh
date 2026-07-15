@@ -2,9 +2,10 @@
 # Launches the PuckSim web app for local development: the FastAPI backend (with
 # auto-reload) and the Vite frontend dev server, together, in one terminal.
 #
-# Both are pinned to 127.0.0.1 (not "localhost") so they share an origin for the
-# session cookie -- see README.md's "Run the web app" section for why mixing
-# localhost/127.0.0.1 silently breaks login.
+# The frontend calls the backend through a same-origin "/api" proxy (frontend/vite.config.ts),
+# so the session cookie is retained whether you open the app at localhost:5173 or 127.0.0.1:5173.
+# The 127.0.0.1 pinning below is just a sensible default bind address -- see README.md's "Run the
+# web app" section.
 #
 # Usage: ./dev.sh
 # Stop both servers with Ctrl+C.

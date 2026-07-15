@@ -56,15 +56,18 @@ npm install    # first run only
 npm run dev
 ```
 
-Open the frontend URL printed by Vite (usually `http://127.0.0.1:5173`) in a browser. The
-frontend talks to the backend at `http://127.0.0.1:8000` by default; point it elsewhere by setting
-`VITE_API_BASE_URL` (e.g. `VITE_API_BASE_URL=http://127.0.0.1:9000 npm run dev`) if you're running
-the backend on a different port.
+Open the frontend URL printed by Vite in a browser — **either `http://127.0.0.1:5173` or
+`http://localhost:5173` works**. By default the frontend calls the backend through a same-origin
+`/api` proxy (configured in `frontend/vite.config.ts`), so the `samesite="lax"` session cookie is
+retained no matter which hostname you use. (Previously the frontend called `http://127.0.0.1:8000`
+directly, and opening the app at `localhost:5173` made every API call cross-site — the browser
+silently dropped the session cookie after `POST /career/new` and the app looped back to "Start New
+Career". The proxy removes that footgun.)
 
-Note: the frontend and backend must be reached via the **same hostname** (both `127.0.0.1` or
-both `localhost`, not one of each) -- the session cookie is `samesite="lax"`, and browsers treat
-`localhost`/`127.0.0.1` as different sites, which silently drops the cookie on cross-site fetches
-and breaks the app after `POST /career/new`.
+To point at a backend on a non-default host/port, set `VITE_API_BASE_URL` (e.g.
+`VITE_API_BASE_URL=http://127.0.0.1:9000 npm run dev`) — this overrides the `/api` proxy default.
+For a production build served without the dev proxy, set `VITE_API_BASE_URL` to the backend's
+absolute URL (ideally same-origin behind a reverse proxy, for the same cookie reason).
 
 To build a static production bundle instead of running the dev server: `cd frontend && npm run
 build` (output in `frontend/dist/`, served by any static file server — the FastAPI backend does

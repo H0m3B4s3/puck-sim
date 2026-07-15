@@ -5,13 +5,19 @@
 // so the browser attaches it automatically. There is no bearer token or header to
 // manage client-side.
 //
-// Base URL is configurable via VITE_API_BASE_URL (a Vite env var, see
-// src/vite-env.d.ts) rather than hardcoded or proxied through the dev server, so
-// this client works unmodified against whatever host/port the backend happens to
-// be running on (default 127.0.0.1:8000, matching pucksim.web.app's own default).
+// Base URL is configurable via VITE_API_BASE_URL (a Vite env var, see src/vite-env.d.ts).
+// The DEFAULT is now the SAME-ORIGIN relative prefix "/api", which the Vite dev server proxies
+// to the backend (see vite.config.ts). This is deliberate: the session cookie is samesite="lax"
+// (pucksim/web/session.py), so calling the backend at a DIFFERENT origin (e.g. the old default
+// http://127.0.0.1:8000 while the page is open at http://localhost:5173) is cross-site -- the
+// browser silently drops the cookie after POST /career/new and the app loops back to "Start New
+// Career" forever. Going through a same-origin "/api" proxy makes the cookie work no matter which
+// hostname (localhost or 127.0.0.1) you open the app at. Production (static bundle, no proxy)
+// should set VITE_API_BASE_URL to the backend's absolute URL, ideally same-origin behind a reverse
+// proxy for the same reason.
 
 const API_BASE_URL: string =
-  import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "") || "http://127.0.0.1:8000";
+  import.meta.env.VITE_API_BASE_URL?.replace(/\/+$/, "") || "/api";
 
 export class ApiError extends Error {
   status: number;
