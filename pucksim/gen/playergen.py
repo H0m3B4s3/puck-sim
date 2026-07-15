@@ -69,8 +69,9 @@ from pucksim.rng import Rng
 # --- Rare/"unicorn" archetype gate (BUG FIX, 2026-07-02) -------------------
 # attributes.py's RARE_ARCHETYPES docstring has always claimed these are
 # "generated only on elite-ceiling players... and never in the normal pool"
-# (see attributes.py's "Generational Forward"/"Unicorn Defenseman" -- the
-# former is literally commented "McDavid/Crosby-style generational forward").
+# (see attributes.py's RARE_ARCHETYPES -- the distinct legend styles like
+# "Offensive Juggernaut"/"Two-Way Driver"/"Puck-Moving Norris", each modeled on a
+# real McDavid/Crosby/Makar-caliber talent).
 # That gate was never actually implemented: _choose_archetype() below used to
 # roll the rare chance unconditionally for every generated skater/goalie
 # regardless of target_overall, so a replacement-level player had the exact
@@ -111,9 +112,9 @@ _RARE_ARCHETYPE_MIN_OVERALL = 82
 #     => ~0.066 elite-ceiling-eligible prospects/season, ~0.66 over a decade.
 #   Total elite-ceiling-eligible skaters over a 10-season span:
 #     ~38.8 (one-time roster fill) + ~0.66 (draft classes) =~ 39.4.
-# Target: "once a decade" for Generational Forward/Unicorn Defenseman
-# specifically (per direct design input -- Crosby/McDavid-caliber prospects
-# should be that rare). chance = 1 / eligible_count =~ 1/39.4 =~ 0.0254;
+# Target: "once a decade" for a rare/"unicorn" archetype at all (any of the
+# distinct legend styles in RARE_ARCHETYPES -- Crosby/McDavid/Makar-caliber
+# talent should be that rare). chance = 1 / eligible_count =~ 1/39.4 =~ 0.0254;
 # rounded to a clean 0.025 (2.5%) -- roughly HALF of one expected
 # "generational" skater across a decade of both pipelines combined, since a
 # rare archetype assignment alone doesn't guarantee the FINAL calibrated
