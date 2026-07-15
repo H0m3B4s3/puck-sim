@@ -1,22 +1,27 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Step 2.10a: standalone Vite dev server talking to the FastAPI backend over an
-// absolute base URL (VITE_API_BASE_URL, see src/api.ts) rather than a dev-server
-// proxy -- keeps the frontend able to point at any backend host/port without
-// touching this file, and there's no "build straight into the backend's static
-// dir" story yet (unlike HoopR) since PuckSim's web app hasn't wired static
-// file serving -- revisit if/when it does.
+// The frontend talks to the FastAPI backend through a SAME-ORIGIN "/api" proxy (see the
+// server.proxy block below), NOT an absolute cross-origin base URL. Why: the session cookie is
+// samesite="lax" (pucksim/web/session.py). If the page is open at http://localhost:5173 while the
+// API is called at http://127.0.0.1:8000, the browser treats those as different sites (hostname,
+// not port, defines a "site"), silently drops the cookie set by POST /career/new, and the app
+// loops straight back to "Start New Career" on every subsequent request. Proxying "/api" through
+// the dev server means every API call is same-origin with the page, so the cookie works whether
+// you open the app at localhost:5173 OR 127.0.0.1:5173 -- the hostname footgun is gone.
 //
-// server.host is pinned to 127.0.0.1 (not the "localhost" default) to match the
-// backend's default bind address. The session cookie is samesite="lax"
-// (pucksim/web/session.py), and browsers treat "localhost" and "127.0.0.1" as
-// different sites -- serving the frontend from "localhost" while the backend
-// runs on "127.0.0.1" makes every API fetch cross-site, silently dropping the
-// cookie and turning every post-login request into a 404.
+// src/api.ts defaults its base URL to "/api" to match; VITE_API_BASE_URL still overrides it for a
+// production build served without this proxy.
 export default defineConfig({
   plugins: [react()],
   server: {
     host: "127.0.0.1",
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8000",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+    },
   },
 });
