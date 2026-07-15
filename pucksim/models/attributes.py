@@ -235,6 +235,13 @@ ARCHETYPES: List[Archetype] = [
               {"strength": 16, "checking": 14, "shot_power": 8, "skating": -8,
                "agility": -10, "playmaking": -6},
               (74, 78)),
+    # Skilled power forward (Tkachuk-style "pest who can actually score") -- physical AND a real
+    # finisher, the everyday-tier gap between Power Forward (which guts offense) and Sniper (which
+    # has no physical game). Maps to the FINISHER role: he finishes, and still wants a setup man.
+    Archetype("Power Winger", ["LW", "RW"],
+              {"strength": 12, "checking": 10, "shot_power": 10, "shot_accuracy": 8,
+               "offensive_awareness": 6, "agility": -6, "playmaking": -6},
+              (73, 77)),
     Archetype("Two-Way Forward", ["LW", "RW", "C"],
               {"defensive_awareness": 8, "checking": 6, "shot_accuracy": 5,
                "work_ethic": 7, "composure": 5},
@@ -259,6 +266,13 @@ ARCHETYPES: List[Archetype] = [
               {"defensive_awareness": 12, "checking": 10, "faceoffs": 10, "work_ethic": 8,
                "shot_accuracy": -10, "playmaking": -8, "offensive_awareness": -6},
               (72, 76)),
+    # Power center (Messier-style physical driving center) -- strength/checking plus real shot and
+    # faceoff ability, unlike Checking Center (which guts offense). Maps to the flexible TWO_WAY_F
+    # role: a do-a-bit-of-everything pivot rather than a pure finisher or setup man.
+    Archetype("Power Center", ["C"],
+              {"strength": 10, "checking": 8, "shot_power": 8, "faceoffs": 10,
+               "offensive_awareness": 6, "work_ethic": 6, "agility": -6},
+              (73, 77)),
     Archetype("Shutdown Defenseman", ["D"],
               {"defensive_awareness": 16, "shot_blocking": 14, "checking": 10,
                "strength": 8, "shot_accuracy": -10, "playmaking": -8, "skating": -4},
@@ -294,20 +308,73 @@ for _arch in ARCHETYPES:
 # later playergen step's _choose_archetype-equivalent) and never in the normal
 # pool, so they stay special.
 # ---------------------------------------------------------------------------
+# Distinct legend styles rather than one blurry "generational forward." Only the true
+# do-everything talents (Two-Way Driver / Offensive Juggernaut) carry ROLE_GENERATIONAL (no holes,
+# complements any line); the others map to their NATURAL role (an elite sniper is still a
+# ROLE_FINISHER who wants a setup man, an elite distributor is still a ROLE_PLAYMAKER), so lineup
+# construction stays meaningful even with stars -- see ROLE_FOR_ARCHETYPE and the synergy engine.
 RARE_ARCHETYPES: List[Archetype] = [
-    # Do-everything forward: elite shot AND elite playmaking AND real faceoff
-    # ability, minimal holes (McDavid/Crosby-style generational forward).
-    Archetype("Generational Forward", ["C", "LW", "RW"],
-              {"shot_accuracy": 14, "playmaking": 14, "skating": 12, "puck_handling": 10,
-               "offensive_awareness": 10, "faceoffs": 6, "composure": 6},
+    # Crosby-style two-way driver: elite create AND finish AND faceoffs, defensively responsible,
+    # no real holes. ROLE_GENERATIONAL.
+    Archetype("Two-Way Driver", ["C"],
+              {"playmaking": 14, "shot_accuracy": 12, "offensive_awareness": 12,
+               "puck_handling": 10, "faceoffs": 8, "defensive_awareness": 8, "composure": 8},
               (71, 75)),
+    # McDavid-style offensive juggernaut: game-breaking speed + puck skill that generates and
+    # finishes. ROLE_GENERATIONAL.
+    Archetype("Offensive Juggernaut", ["C", "LW", "RW"],
+              {"skating": 16, "agility": 14, "puck_handling": 14, "playmaking": 12,
+               "offensive_awareness": 12, "shot_accuracy": 8},
+              (71, 75)),
+    # Gretzky-style playmaking juggernaut: otherworldly vision/setup, a distributor first rather
+    # than a volume shooter. ROLE_PLAYMAKER (elite, but still unlocks finishers around him).
+    Archetype("Playmaking Juggernaut", ["C"],
+              {"playmaking": 18, "offensive_awareness": 16, "puck_handling": 12,
+               "composure": 10, "faceoffs": 6, "shot_power": -4},
+              (71, 75)),
+    # Ovechkin/Matthews-style franchise sniper: elite shot volume + accuracy, the pure finisher a
+    # scoring line is built around. ROLE_FINISHER.
+    Archetype("Elite Sniper", ["LW", "RW", "C"],
+              {"shot_power": 16, "shot_accuracy": 18, "offensive_awareness": 12,
+               "puck_handling": 6, "checking": -6},
+              (72, 76)),
+    # Jagr/Lindros-style skilled power winger: big, strong, AND an elite finisher -- the pure-offense
+    # ceiling above the everyday Power Winger. ROLE_FINISHER.
+    Archetype("Elite Power Winger", ["LW", "RW"],
+              {"strength": 14, "shot_power": 14, "shot_accuracy": 12, "puck_handling": 12,
+               "offensive_awareness": 10, "checking": 6},
+              (74, 78)),
+    # Bergeron/Datsyuk-style defensive driver: elite defense-first two-way center who still moves
+    # the puck and scores. ROLE_TWO_WAY_F (does everything, defensively anchored).
+    Archetype("Defensive Driver", ["C"],
+              {"defensive_awareness": 16, "faceoffs": 14, "playmaking": 10, "puck_handling": 10,
+               "offensive_awareness": 8, "checking": 8, "composure": 8},
+              (72, 76)),
     # Defenseman who plays 30 minutes a night and quarterbacks the power play
-    # while still shutting down top lines (Bobby-Orr-into-modern-Norris flavor).
+    # while still shutting down top lines (Bobby-Orr-into-modern-Norris flavor). ROLE_GENERATIONAL.
     Archetype("Unicorn Defenseman", ["D"],
               {"playmaking": 12, "skating": 14, "defensive_awareness": 12,
                "shot_power": 8, "puck_handling": 10, "stamina": 8,
                "shot_blocking": 6},
               (73, 77)),
+    # Makar-style puck-moving Norris: his DEFENSE is possession -- elite skating/handling/vision,
+    # so defensive_awareness stays neutral/slightly-positive rather than a hole. ROLE_OFFENSIVE_D.
+    Archetype("Puck-Moving Norris", ["D"],
+              {"skating": 16, "puck_handling": 14, "playmaking": 14, "offensive_awareness": 12,
+               "agility": 10, "shot_power": 8, "defensive_awareness": 4},
+              (72, 76)),
+    # Leetch/Fox-style smooth two-way defenseman: elite mobility and puck-moving with genuine
+    # defensive chops -- balanced rather than tilted either way. ROLE_TWO_WAY_D.
+    Archetype("Smooth Two-Way D", ["D"],
+              {"playmaking": 12, "skating": 12, "puck_handling": 10, "offensive_awareness": 8,
+               "defensive_awareness": 8, "composure": 8},
+              (73, 77)),
+    # Lidstrom/Chara-style shutdown colossus: minutes-eating defensive anchor, elite defensive
+    # awareness + shot-blocking + reach/strength. ROLE_SHUTDOWN_D.
+    Archetype("Shutdown Colossus", ["D"],
+              {"defensive_awareness": 16, "shot_blocking": 12, "strength": 12, "checking": 10,
+               "composure": 8, "playmaking": 4},
+              (75, 80)),
 ]
 
 RARE_ARCHETYPES_BY_POSITION: Dict[str, List[Archetype]] = {pos: [] for pos in SKATER_POSITIONS}
@@ -388,6 +455,8 @@ ROLE_FOR_ARCHETYPE: Dict[str, str] = {
     "Pass-First Winger": ROLE_PLAYMAKER,
     "Checking Center": ROLE_GRINDER,
     "Power Forward": ROLE_PHYSICAL,
+    "Power Winger": ROLE_FINISHER,
+    "Power Center": ROLE_TWO_WAY_F,
     "Two-Way Forward": ROLE_TWO_WAY_F,
     "Speedster": ROLE_TWO_WAY_F,
     "Grinder": ROLE_GRINDER,
@@ -395,8 +464,17 @@ ROLE_FOR_ARCHETYPE: Dict[str, str] = {
     "Offensive Defenseman": ROLE_OFFENSIVE_D,
     "Two-Way Defenseman": ROLE_TWO_WAY_D,
     "Enforcer-Physical": ROLE_PHYSICAL,
-    "Generational Forward": ROLE_GENERATIONAL,
+    # Elite/rare skaters map to their NATURAL role, not all to generational (see RARE_ARCHETYPES).
+    "Two-Way Driver": ROLE_GENERATIONAL,
+    "Offensive Juggernaut": ROLE_GENERATIONAL,
+    "Playmaking Juggernaut": ROLE_PLAYMAKER,
+    "Elite Sniper": ROLE_FINISHER,
+    "Elite Power Winger": ROLE_FINISHER,
+    "Defensive Driver": ROLE_TWO_WAY_F,
     "Unicorn Defenseman": ROLE_GENERATIONAL,
+    "Puck-Moving Norris": ROLE_OFFENSIVE_D,
+    "Smooth Two-Way D": ROLE_TWO_WAY_D,
+    "Shutdown Colossus": ROLE_SHUTDOWN_D,
     "Reflex Goalie": ROLE_GOALIE,
     "Positional Goalie": ROLE_GOALIE,
     "Puck-Moving Goalie": ROLE_GOALIE,

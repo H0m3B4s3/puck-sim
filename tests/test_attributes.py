@@ -205,3 +205,49 @@ def test_no_archetype_has_a_fighting_or_enforcer_skew():
         for rating in archetype.skews:
             assert "fight" not in rating.lower()
             assert "enforcer" not in rating.lower()
+
+
+# ---------------------------------------------------------------------------
+# Role mapping (SIM_SYNERGY_PLAN Phase 0/1 + archetype-refresh round) -- every
+# archetype the generator can hand out must map explicitly to a role, or it
+# silently falls back to DEFAULT_SKATER_ROLE (a synergy-signal bug that never
+# raises). These guards fail loudly when a new archetype is added without a role.
+# ---------------------------------------------------------------------------
+def test_every_archetype_name_maps_to_a_valid_role():
+    all_archetypes = (
+        attr.ARCHETYPES + attr.RARE_ARCHETYPES
+        + attr.GOALIE_ARCHETYPES + attr.RARE_GOALIE_ARCHETYPES
+    )
+    for archetype in all_archetypes:
+        assert archetype.name in attr.ROLE_FOR_ARCHETYPE, (
+            f"{archetype.name} has no ROLE_FOR_ARCHETYPE entry -- it would silently "
+            f"fall back to DEFAULT_SKATER_ROLE and lose its synergy identity")
+        assert attr.ROLE_FOR_ARCHETYPE[archetype.name] in attr.ALL_ROLES
+
+
+def test_role_for_archetype_uses_the_stored_mapping_for_forwards():
+    # Spot-check the refresh round's role assignments actually route through role_for_archetype.
+    assert attr.role_for_archetype("Elite Sniper", "RW") == attr.ROLE_FINISHER
+    assert attr.role_for_archetype("Power Winger", "LW") == attr.ROLE_FINISHER
+    assert attr.role_for_archetype("Playmaking Juggernaut", "C") == attr.ROLE_PLAYMAKER
+    assert attr.role_for_archetype("Offensive Juggernaut", "C") == attr.ROLE_GENERATIONAL
+    assert attr.role_for_archetype("Puck-Moving Norris", "D") == attr.ROLE_OFFENSIVE_D
+    # Goalies always collapse to ROLE_GOALIE regardless of the (goalie) archetype.
+    assert attr.role_for_archetype("Generational Goalie", "G") == attr.ROLE_GOALIE
+
+
+def test_skater_archetype_skews_reference_only_real_skater_ratings():
+    # A skew keyed on a mistyped rating name silently no-ops in generation
+    # (_build_calibrated_ratings only applies keys already in the ratings dict),
+    # so an identity would quietly vanish. Guard every skater archetype's keys.
+    valid = set(attr.ALL_RATINGS)
+    for archetype in attr.ARCHETYPES + attr.RARE_ARCHETYPES:
+        for rating in archetype.skews:
+            assert rating in valid, f"{archetype.name}: unknown skater rating {rating!r}"
+
+
+def test_goalie_archetype_skews_reference_only_real_goalie_ratings():
+    valid = set(attr.ALL_GOALIE_RATINGS)
+    for archetype in attr.GOALIE_ARCHETYPES + attr.RARE_GOALIE_ARCHETYPES:
+        for rating in archetype.skews:
+            assert rating in valid, f"{archetype.name}: unknown goalie rating {rating!r}"

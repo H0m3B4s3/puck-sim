@@ -187,6 +187,13 @@ def test_generated_overall_distribution_is_believable():
 # league-wide" design intent (a Crosby/McDavid-caliber prospect should be
 # rare, not common).
 # ---------------------------------------------------------------------------
+# Rare pool is now several distinct legend styles per position (not one named archetype), so these
+# tests detect "landed a rare archetype" by membership in RARE_ARCHETYPES_BY_POSITION rather than a
+# single hard-coded name.
+_RARE_NAMES_C = {a.name for a in attr.RARE_ARCHETYPES_BY_POSITION["C"]}
+_RARE_NAMES_D = {a.name for a in attr.RARE_ARCHETYPES_BY_POSITION["D"]}
+
+
 def test_rare_archetype_never_rolled_below_elite_ceiling_threshold():
     rng = Rng(seed=100)
     below = playergen._RARE_ARCHETYPE_MIN_OVERALL - 1
@@ -194,7 +201,7 @@ def test_rare_archetype_never_rolled_below_elite_ceiling_threshold():
         1 for _ in range(20_000)
         if playergen._choose_archetype(
             rng, "C", below, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
-        ).name == "Generational Forward"
+        ).name in _RARE_NAMES_C
     )
     assert hits == 0
 
@@ -206,7 +213,7 @@ def test_rare_archetype_never_rolled_below_elite_ceiling_threshold_defenseman():
         1 for _ in range(20_000)
         if playergen._choose_archetype(
             rng, "D", below, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
-        ).name == "Unicorn Defenseman"
+        ).name in _RARE_NAMES_D
     )
     assert hits == 0
 
@@ -223,7 +230,7 @@ def test_rare_archetype_is_genuinely_scarce_even_at_elite_ceiling():
         1 for _ in range(n)
         if playergen._choose_archetype(
             rng, "C", elite, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
-        ).name == "Generational Forward"
+        ).name in _RARE_NAMES_C
     )
     frac = hits / n
     assert 0.0 < frac < 0.10   # genuinely rare even among the best prospects
@@ -242,7 +249,7 @@ def test_rare_archetype_chance_matches_documented_value_at_elite_ceiling():
         1 for _ in range(n)
         if playergen._choose_archetype(
             rng, "C", elite, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
-        ).name == "Generational Forward"
+        ).name in _RARE_NAMES_C
     )
     frac = hits / n
     assert abs(frac - playergen._RARE_ARCHETYPE_CHANCE) < 0.01
