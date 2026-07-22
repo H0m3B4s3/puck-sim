@@ -273,6 +273,59 @@ def test_generate_skater_end_to_end_respects_the_gate():
 
 
 # ---------------------------------------------------------------------------
+# Overall-weighted archetype selection (archetype-refresh round, Phase B) -- scorers should
+# concentrate at high target overall (top-6), checking/physical depth at low target (bottom-6).
+# It is a LEAN, not a hard rule, so these assert directional shifts, not thresholds.
+# ---------------------------------------------------------------------------
+def test_archetype_weight_blends_by_target_overall():
+    # At a high target, a scorer outweighs a grinder; at a low target, the reverse.
+    assert playergen._archetype_weight("Sniper", 80) > playergen._archetype_weight("Grinder", 80)
+    assert playergen._archetype_weight("Grinder", 58) > playergen._archetype_weight("Sniper", 58)
+    # A given archetype's scorer weight rises with target; a grinder's falls.
+    assert (playergen._archetype_weight("Sniper", 80)
+            > playergen._archetype_weight("Sniper", 58))
+    assert (playergen._archetype_weight("Grinder", 58)
+            > playergen._archetype_weight("Grinder", 80))
+    # Unlisted archetypes (e.g. any goalie archetype) fall back to a flat, target-independent weight.
+    assert (playergen._archetype_weight("Reflex Goalie", 80)
+            == playergen._archetype_weight("Reflex Goalie", 58)
+            == 1.0)
+
+
+def _archetype_share(rng, position, target, names, n=20_000):
+    hits = sum(
+        1 for _ in range(n)
+        if playergen._choose_archetype(
+            rng, position, target, attr.ARCHETYPES_BY_POSITION, attr.RARE_ARCHETYPES_BY_POSITION
+        ).name in names
+    )
+    return hits / n
+
+
+def test_scoring_archetypes_concentrate_at_high_overall():
+    rng = Rng(seed=200)
+    scoring = {"Sniper", "Pass-First Winger", "Speedster", "Power Winger"}
+    depth = {"Grinder", "Power Forward", "Enforcer-Physical"}
+    # target 80 stays just under the OVR-82 rare gate, so no rare archetypes leak into the counts.
+    hi_scoring = _archetype_share(rng, "LW", 80, scoring)
+    lo_scoring = _archetype_share(rng, "LW", 58, scoring)
+    hi_depth = _archetype_share(rng, "LW", 80, depth)
+    lo_depth = _archetype_share(rng, "LW", 58, depth)
+    assert hi_scoring > lo_scoring          # scorers cluster in the top-6
+    assert lo_depth > hi_depth              # grinders/physical cluster in the bottom-6
+    assert hi_scoring > hi_depth            # a top-line slot is scorer-dominated
+    assert lo_depth > lo_scoring            # a 4th-line slot is depth-dominated
+
+
+def test_every_normal_archetype_has_a_selection_weight():
+    # Guard: a new normal archetype without a weight silently falls back to flat (1,1), quietly
+    # undoing the top-6/bottom-6 lean for that archetype. Fail loudly instead.
+    for arch in attr.ARCHETYPES:
+        assert arch.name in playergen._ARCHETYPE_SELECTION_WEIGHTS, (
+            f"{arch.name} has no _ARCHETYPE_SELECTION_WEIGHTS entry")
+
+
+# ---------------------------------------------------------------------------
 # gk_consistency generation-time rarity gate (DEVPLAN.md Step 2.7, "Generation-time rarity
 # correlation") -- companion mechanism to the rare-archetype gate above, on a DIFFERENT axis
 # (a single rating's resample band, not archetype choice). See

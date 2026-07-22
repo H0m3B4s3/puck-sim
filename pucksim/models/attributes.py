@@ -277,11 +277,30 @@ ARCHETYPES: List[Archetype] = [
               {"defensive_awareness": 16, "shot_blocking": 14, "checking": 10,
                "strength": 8, "shot_accuracy": -10, "playmaking": -8, "skating": -4},
               (73, 77)),
+    # Limited stay-at-home defenseman -- the sheltered 3rd-pairing defensive specialist. Modest
+    # defensive competence with real, deep offensive/mobility holes (a genuinely LIMITED player,
+    # not the top-pair Shutdown Defenseman stud above). Maps to ROLE_SHUTDOWN_D like the stud --
+    # same defensive-suppression identity, just lower-rated, so the engine's def_value naturally
+    # separates the two by skill. Fills the "3rd pair needs a stay-at-home guy, not a goon" gap.
+    Archetype("Stay-at-Home Defenseman", ["D"],
+              {"shot_blocking": 10, "defensive_awareness": 8, "checking": 6, "strength": 6,
+               "playmaking": -12, "shot_power": -12, "puck_handling": -10, "skating": -4},
+              (73, 77)),
     Archetype("Offensive Defenseman", ["D"],
               {"playmaking": 14, "shot_power": 10, "puck_handling": 10,
                "offensive_awareness": 8, "checking": -10, "shot_blocking": -8,
                "defensive_awareness": -6},
               (72, 76)),
+    # Limited puck-rushing defenseman (Tony-DeAngelo-style depth offensive D). Real but modest
+    # offense -- can advance the puck and chip in points -- bought with a genuine defensive hole you
+    # have to shelter (deep defensive_awareness/checking/shot_blocking negatives). Distinct from the
+    # top-4 Offensive Defenseman above: milder offense, deeper defensive liability, a 3rd-pairing
+    # player. Maps to ROLE_OFFENSIVE_D (back-end creation); his low def_value makes the tradeoff
+    # real in-engine. The offensive mirror of Stay-at-Home Defenseman.
+    Archetype("Puck-Rushing Defenseman", ["D"],
+              {"puck_handling": 10, "playmaking": 8, "offensive_awareness": 8, "skating": 6,
+               "defensive_awareness": -14, "checking": -12, "shot_blocking": -10, "strength": -6},
+              (71, 75)),
     Archetype("Two-Way Defenseman", ["D"],
               {"defensive_awareness": 6, "playmaking": 6, "skating": 5,
                "composure": 6, "work_ethic": 5},
@@ -461,7 +480,9 @@ ROLE_FOR_ARCHETYPE: Dict[str, str] = {
     "Speedster": ROLE_TWO_WAY_F,
     "Grinder": ROLE_GRINDER,
     "Shutdown Defenseman": ROLE_SHUTDOWN_D,
+    "Stay-at-Home Defenseman": ROLE_SHUTDOWN_D,
     "Offensive Defenseman": ROLE_OFFENSIVE_D,
+    "Puck-Rushing Defenseman": ROLE_OFFENSIVE_D,
     "Two-Way Defenseman": ROLE_TWO_WAY_D,
     "Enforcer-Physical": ROLE_PHYSICAL,
     # Elite/rare skaters map to their NATURAL role, not all to generational (see RARE_ARCHETYPES).

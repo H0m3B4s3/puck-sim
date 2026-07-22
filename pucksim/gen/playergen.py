@@ -228,6 +228,65 @@ _GK_CONSISTENCY_ELITE_MAX = 99
 _GK_RELIABILITY_ROLL_CHANCE = 0.08
 
 
+# --- Overall-weighted archetype selection (archetype-refresh round, Phase B) -------------
+# Fixes grinder over-production. The old selection was a flat, OVERALL-BLIND rng.choice over the
+# position's normal pool, so a 90-target winger was exactly as likely to roll Grinder as a
+# 60-target one -- and since a majority of forward archetypes are checking/physical, most rosters
+# came out grinder-heavy. Real rosters concentrate scorers in the top-6 (which auto_build_lines
+# fills by descending overall) and checking/physical depth in the bottom-6.
+#
+# Each normal archetype gets a (depth_weight, star_weight); its effective selection weight blends
+# between them by the player's target overall:
+#     t = clamp((target_overall - _ARCHETYPE_WEIGHT_OVR_LO) / (HI - LO), 0, 1)
+#     weight = depth_weight * (1 - t) + star_weight * t
+# High targets -> star weights dominate (scorers); low targets -> depth weights (grinders). It is a
+# LEAN, not a hard rule: a two-way winger or the odd depth scorer still appears off-tier, matching
+# real hockey. Breakpoints/weights are provisional and re-tuned against the per-line distribution
+# check in Phase D. Archetypes absent from the table (all GOALIE archetypes) fall back to a flat
+# (1.0, 1.0), i.e. unchanged uniform behavior -- goalies are intentionally left alone this round.
+_ARCHETYPE_WEIGHT_OVR_LO = 56.0
+_ARCHETYPE_WEIGHT_OVR_HI = 78.0
+_DEFAULT_ARCHETYPE_WEIGHT = (1.0, 1.0)
+
+_ARCHETYPE_SELECTION_WEIGHTS: Dict[str, tuple] = {
+    # Scorers / pure skill -- concentrate in the top-6.
+    "Sniper": (0.3, 3.0),
+    "Playmaking Center": (0.3, 3.0),
+    "Pass-First Winger": (0.3, 3.0),
+    "Speedster": (0.8, 1.8),
+    # Physical-but-skilled -- top-6 capable, lean scoring (Tkachuk / Messier flavor).
+    "Power Winger": (0.8, 2.0),
+    "Power Center": (0.8, 2.0),
+    # Flexible two-way -- appears everywhere, flat.
+    "Two-Way Forward": (1.2, 1.2),
+    # Checking / physical depth -- concentrate in the bottom-6.
+    "Power Forward": (2.0, 0.6),
+    "Grinder": (3.0, 0.2),
+    "Checking Center": (3.0, 0.2),
+    # Pure enforcers are a niche/dying breed in the modern game -- keep the depth weight well below
+    # Grinder/Stay-at-Home so they stay uncommon rather than filling every 4th line and 3rd pair.
+    "Enforcer-Physical": (1.6, 0.12),
+    # Defensemen -- milder tilt than forwards: a shutdown stud is a legit top-pair option, unlike a
+    # 4th-line grinder, so the depth/star spread is compressed toward 1.0. The Shutdown *stud* (elite
+    # defensive D, defensive_awareness +16) leans slightly top-pair; the *limited* Stay-at-Home D is
+    # the depth defensive specialist that concentrates on the 3rd pair.
+    "Offensive Defenseman": (0.7, 1.8),
+    "Puck-Rushing Defenseman": (2.4, 0.5),
+    "Two-Way Defenseman": (1.2, 1.2),
+    "Shutdown Defenseman": (1.0, 1.3),
+    "Stay-at-Home Defenseman": (2.6, 0.4),
+}
+
+
+def _archetype_weight(name: str, target_overall: int) -> float:
+    """Blend an archetype's (depth_weight, star_weight) by target overall -- see the table above."""
+    depth, star = _ARCHETYPE_SELECTION_WEIGHTS.get(name, _DEFAULT_ARCHETYPE_WEIGHT)
+    span = _ARCHETYPE_WEIGHT_OVR_HI - _ARCHETYPE_WEIGHT_OVR_LO
+    t = (target_overall - _ARCHETYPE_WEIGHT_OVR_LO) / span
+    t = max(0.0, min(1.0, t))
+    return depth * (1.0 - t) + star * t
+
+
 def _pick_shoots(rng: Rng) -> str:
     return rng.weighted_one(("L", "R"), (_SHOOTS_L_WEIGHT, _SHOOTS_R_WEIGHT))
 
@@ -256,7 +315,11 @@ def _choose_archetype(rng: Rng, position: str, target_overall: int,
     rolled_rare = rng.chance(_RARE_ARCHETYPE_CHANCE)
     if rare_choices and target_overall >= _RARE_ARCHETYPE_MIN_OVERALL and rolled_rare:
         return rng.choice(rare_choices)
-    return rng.choice(normal_pool[position])
+    # Normal pool: overall-weighted rather than uniform (see _ARCHETYPE_SELECTION_WEIGHTS) so
+    # scorers concentrate at high targets (top-6) and checking/physical depth at low ones (bottom-6).
+    pool = normal_pool[position]
+    weights = [_archetype_weight(a.name, target_overall) for a in pool]
+    return rng.weighted_one(pool, weights)
 
 
 def _build_calibrated_ratings(rng: Rng, position: str, target_overall: int,
