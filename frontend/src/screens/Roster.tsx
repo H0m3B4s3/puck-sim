@@ -296,17 +296,25 @@ function readDragPayload(e: React.DragEvent): DragPayload | null {
 function LineSlot({
   player,
   target,
+  expectedPosition,
   canPlace,
   onClick,
   onDropPlayer,
 }: {
   player: PlayerSummary | null;
   target: SlotRef;
+  expectedPosition: string;
   canPlace: boolean;
   onClick: () => void;
   onDropPlayer: (payload: DragPayload, target: SlotRef) => void;
 }) {
   const [dragOver, setDragOver] = useState(false);
+  // Out of position: the slot wants one position and this player plays another. A listed
+  // secondary position counts as natural, so a C/LW filling a wing slot is not flagged.
+  const outOfPosition =
+    !!player &&
+    player.position !== expectedPosition &&
+    player.secondary_position !== expectedPosition;
   const classes = [
     "line-slot",
     canPlace ? "line-slot--placeable" : "",
@@ -354,9 +362,22 @@ function LineSlot({
       {player ? (
         <div className="line-slot__player">
           <span className="line-slot__name">{player.name}</span>
-          {player.role_label && (
-            <span className="line-slot__role">{player.role_label}</span>
-          )}
+          <span className="line-slot__meta">
+            <span
+              className={`line-slot__pos${outOfPosition ? " line-slot__pos--off" : ""}`}
+              title={
+                outOfPosition
+                  ? `Natural ${player.position}, playing ${expectedPosition}`
+                  : undefined
+              }
+            >
+              {player.position}
+              {player.secondary_position ? `/${player.secondary_position}` : ""}
+            </span>
+            {player.role_label && (
+              <span className="line-slot__role">{player.role_label}</span>
+            )}
+          </span>
         </div>
       ) : (
         <div className="line-slot__empty">Empty</div>
@@ -372,6 +393,7 @@ function LineSlot({
 function LineupGrid({
   group,
   columnLabels,
+  columnPositions,
   rows,
   rowLabel,
   rowBadge,
@@ -381,6 +403,9 @@ function LineupGrid({
 }: {
   group: SlotGroup;
   columnLabels: string[];
+  // The roster POSITION each column expects. Distinct from columnLabels because the defense
+  // grid's LD/RD headers are a display convention over a single blended "D" position.
+  columnPositions: string[];
   rows: PlayerSummary[][];
   rowLabel: (index: number) => string;
   rowBadge?: (index: number) => React.ReactNode;
@@ -410,6 +435,7 @@ function LineupGrid({
               key={c}
               player={rowPlayers[c] || null}
               target={{ group, row: r, slot: c }}
+              expectedPosition={columnPositions[c]}
               canPlace={canPlace}
               onClick={() => onSlotClick(r, c)}
               onDropPlayer={onDropPlayer}
@@ -520,6 +546,7 @@ function LinesEditor({
       <LineupGrid
         group="lines"
         columnLabels={["LW", "C", "RW"]}
+        columnPositions={["LW", "C", "RW"]}
         rows={lines}
         rowLabel={(i) => `Line ${i + 1}`}
         rowBadge={(i) => <SynergyBadge synergy={lineSynergies[i] ?? null} />}
@@ -534,6 +561,7 @@ function LinesEditor({
       <LineupGrid
         group="pairs"
         columnLabels={["LD", "RD"]}
+        columnPositions={["D", "D"]}
         rows={pairs}
         rowLabel={(i) => `Pair ${i + 1}`}
         canPlace={canPlace}
