@@ -49,6 +49,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+from pucksim.config import (GEN_SALARY_NOISE_MAX, GEN_SALARY_NOISE_MIN, MAX_CONTRACT_YEARS,
+                             MINIMUM_SALARY, ROOKIE_CONTRACT_YEARS, SALARY_CAP_BASE)
 from pucksim.gen.namegen import random_name
 from pucksim.models.attributes import (
     ALL_GOALIE_RATINGS,
@@ -65,6 +67,12 @@ from pucksim.models.attributes import (
 from pucksim.models.contract import Contract, flat_contract
 from pucksim.models.player import Player
 from pucksim.rng import Rng
+from pucksim.systems.cap import market_salary, max_salary, rookie_salary
+
+# Age at and below which a generated player is still on an entry-level deal. Real ELCs
+# run through age 21 for most signing ages (a 25-year-old European signee is the edge
+# case v1's simplified contract model doesn't try to represent).
+ENTRY_LEVEL_MAX_AGE = 21
 
 # --- Rare/"unicorn" archetype gate (BUG FIX, 2026-07-02) -------------------
 # attributes.py's RARE_ARCHETYPES docstring has always claimed these are
@@ -440,27 +448,79 @@ def _scout_error(rng: Rng, age: int) -> float:
     return rng.gauss(0.0, spread)
 
 
-def _modest_contract(rng: Rng, target_overall: int, age: int) -> Contract:
-    """A modest rookie/vet flat contract -- not economically sophisticated (MVP scope).
+def _contract_years(rng: Rng, age: int) -> int:
+    """Years left on a generated player's deal.
 
-    Salary is a coarse function of overall (higher-rated players cost more),
-    with a bit of noise; young players (<=21) get a rookie-scale flag. Purely
-    illustrative -- real cap/contract fidelity is out of scope until Step 3.1.
+    A generated league is an already-running one, so contracts must be at staggered
+    points in their life -- if every deal expired together the first offseason would
+    dump the whole league into free agency at once. Term skews long for players in
+    their early prime (that's when real teams buy up the UFA years) and short for
+    veterans past the aging curve, and every player is somewhere between year 1 and
+    the end of their deal.
     """
-    base = 750_000 + max(0, target_overall - 60) * 90_000
-    salary = int(max(750_000, base * rng.uniform(0.85, 1.2)))
-    years = rng.randint(1, 4)
-    is_rookie_scale = age <= 21
-    return flat_contract(salary, years, is_rookie_scale=is_rookie_scale)
+    if age <= 23:
+        hi = 5
+    elif age <= 29:
+        hi = 6
+    elif age <= 33:
+        hi = 4
+    else:
+        hi = 2
+    return rng.randint(1, min(hi, MAX_CONTRACT_YEARS))
+
+
+def _generated_contract(rng: Rng, player: Player, cap: int) -> Contract:
+    """The contract a generated player is already playing under at world gen.
+
+    Anchored to ``systems/cap.py::market_salary()`` -- the same valuation the free-agent
+    market, extensions, and trade-surplus math all use -- rather than a private formula.
+    That shared anchor is the fix for the old ``_modest_contract``: it priced players off
+    an unrelated ``750K + (ovr-60)*90K`` line that ran roughly 40% below market, so a
+    generated league opened with every team ~$49M under the cap and no economic pressure
+    on roster building at all.
+
+    Two deviations from a straight market price, both real:
+
+    - Players 21-and-under are on entry-level deals (``cap.rookie_salary()``), cheap by
+      rule rather than by negotiation -- same path ``freeagency.sign_rookie`` uses.
+    - Everyone else gets multiplicative negotiation noise (``config.GEN_SALARY_NOISE_*``)
+      so the league opens with overpays and bargains rather than every contract sitting
+      exactly on its player's computed value. ``trade_value()``'s surplus term reads that
+      spread directly, so it's what makes some generated contracts genuinely good assets
+      and others albatrosses.
+
+    Note this prices off the player's *final* overall (post-archetype-skew, post-
+    calibration), not the pre-generation ``target_overall`` the old version used -- a
+    player whose archetype skew moved them several points off their target was previously
+    paid for a rating they don't have.
+    """
+    entry_level = player.age <= ENTRY_LEVEL_MAX_AGE
+    if entry_level:
+        salary = rookie_salary(cap)
+        # Staggered like every other deal -- some of these rookies are already a
+        # year or two into their ELC when the world opens.
+        years = rng.randint(1, ROOKIE_CONTRACT_YEARS)
+    else:
+        salary = market_salary(player, cap)
+        salary = int(salary * rng.uniform(GEN_SALARY_NOISE_MIN, GEN_SALARY_NOISE_MAX))
+        salary = max(MINIMUM_SALARY, min(salary, max_salary(cap)))
+        years = _contract_years(rng, player.age)
+    return flat_contract(salary, years, is_rookie_scale=entry_level)
 
 
 def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
-                     position: Optional[str] = None) -> Player:
+                     position: Optional[str] = None,
+                     cap: int = SALARY_CAP_BASE) -> Player:
     """Generate one skater (non-goalie) Player at a given age/target overall.
 
     Picks a position from ``SKATER_POSITIONS`` if not given, an archetype
     (mostly normal, rarely rare), builds+calibrates ratings around the
     target, and constructs a full ``Player`` with ``team_id=None``.
+
+    ``cap`` is the league cap the player's generated contract is priced against
+    (see ``_generated_contract``); it defaults to ``config.SALARY_CAP_BASE`` for the
+    normal world-gen case, and callers generating into an existing world should pass
+    ``world.salary_cap`` so mid-career worlds price at their own inflated cap.
     """
     position = position or rng.choice(SKATER_POSITIONS)
     archetype = _choose_archetype(rng, position, target_overall,
@@ -468,7 +528,7 @@ def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
     ratings = _build_calibrated_ratings(rng, position, target_overall, ALL_RATINGS, archetype)
     final_ovr = overall(position, ratings)
 
-    return Player(
+    player = Player(
         pid=pid,
         name=random_name(rng),
         age=age,
@@ -479,11 +539,16 @@ def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
         archetype=archetype.name,   # role auto-derives from this in Player.__post_init__
         shoots=_pick_shoots(rng),
         team_id=None,
-        contract=_modest_contract(rng, target_overall, age),
     )
+    # Priced after construction, not inline: the contract is anchored to the player's
+    # *final* rating and scouted potential (see _generated_contract), both of which only
+    # exist once the Player is built.
+    player.contract = _generated_contract(rng, player, cap)
+    return player
 
 
-def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int) -> Player:
+def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int,
+                     cap: int = SALARY_CAP_BASE) -> Player:
     """Generate one goalie Player at a given age/target overall.
 
     Same shape as ``generate_skater`` but over ``ALL_GOALIE_RATINGS`` and the
@@ -503,7 +568,7 @@ def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int) -> Player
     _apply_gk_consistency_rarity_gate(rng, ratings, overall(position, ratings))
     final_ovr = overall(position, ratings)
 
-    return Player(
+    goalie = Player(
         pid=pid,
         name=random_name(rng),
         age=age,
@@ -514,5 +579,6 @@ def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int) -> Player
         archetype=archetype.name,   # role auto-derives from this in Player.__post_init__
         shoots=_pick_shoots(rng),
         team_id=None,
-        contract=_modest_contract(rng, target_overall, age),
     )
+    goalie.contract = _generated_contract(rng, goalie, cap)   # see generate_skater
+    return goalie

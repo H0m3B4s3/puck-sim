@@ -69,6 +69,7 @@ from pucksim.models.player import Player
 from pucksim.models.team import auto_build_lines
 from pucksim.models.world import World
 from pucksim.systems.freeagency import sign_rookie
+from pucksim.systems.prospects import development_years
 
 # Real NHL drafts run 7 rounds. Nothing in DEVPLAN.md pins an exact round
 # count for v1; 7 is the obvious low-risk default (matches the real league
@@ -78,6 +79,24 @@ from pucksim.systems.freeagency import sign_rookie
 # how a too-small pool degrades gracefully rather than crashing).
 # PROVISIONAL/TUNABLE, flagged as a judgment call in this step's report.
 DRAFT_ROUNDS = 7
+
+# Which picks may go straight to the NHL in their draft year is decided by
+# ``prospects.development_years()`` (a zero-season development window means "eligible
+# now"), so the schedule lives in one place -- config.PROSPECT_DEVELOPMENT_YEARS_BY_PICK.
+# In practice that's the first-overall pick. Everyone else is recorded in full (draft
+# rights, provenance bio, ``picks_made``) but stays unsigned as a reserved prospect -- the
+# "drafted but not yet on an NHL roster" state ``make_pick`` has always supported for the
+# roster-full case, now the normal path rather than an edge case.
+
+# Even the first-overall pick has to actually be NHL-caliber to take a roster spot; a weak
+# draft class's top pick doesn't automatically belong in the league. Set just above the
+# league's median regular (~67).
+#
+# The gate exists for economic reasons, not just realism: without it every draft signed
+# ~150 prospects (median overall ~52) straight onto NHL rosters at entry-level prices,
+# displacing real market-priced players until 41% of the league was on entry-level deals
+# and payroll had collapsed from ~94% of the cap to ~65%.
+DRAFT_NHL_READY_OVERALL = 68
 
 
 def _effective_rounds(num_teams: int, pool_size: int, requested_rounds: int) -> int:
@@ -265,6 +284,12 @@ def make_pick(world: World, prospect_id: int) -> bool:
         "pick": pick_number,
         "team": team.abbrev,
     }
+
+    # Reserve gate: a pick who owes development seasons, or isn't yet an NHL player, keeps
+    # their draft rights but stays off the active roster (see systems/prospects.py). They
+    # cost no cap space and take no roster spot until they graduate into free agency.
+    if development_years(pick_number) > 0 or player.overall < DRAFT_NHL_READY_OVERALL:
+        return False
 
     ok, _reason = sign_rookie(world, team, prospect_id)
     return ok

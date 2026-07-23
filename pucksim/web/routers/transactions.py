@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from pucksim.models.world import World
 from pucksim.systems import awards, cap, draft_system, freeagency, trades
+from pucksim.systems.prospects import is_reserved_prospect
 from pucksim.web.serializers import (
     CapSummaryDTO,
     DraftBoardDTO,
@@ -185,11 +186,14 @@ def get_free_agents(world=Depends(get_world)) -> List[TransactionPlayerSummaryDT
     Includes wave-adjusted ask (market salary) and preferred contract years when
     in the offseason FA market (fa_wave is set), otherwise uses full market salary.
     """
-    # Use wave pool when in offseason, otherwise all FAs
+    # Use wave pool when in offseason, otherwise all FAs. Either way reserved prospects
+    # (systems/prospects.py) are excluded -- they're developing, not on the market, and
+    # listing a few hundred unsignable teenagers would swamp the board.
     if getattr(world, "fa_wave", None) is not None:
         fa_players = freeagency.fa_wave_pool(world)
     else:
-        fa_players = world.free_agent_players()
+        fa_players = [p for p in world.free_agent_players()
+                      if not is_reserved_prospect(p, world.season_year)]
         # Sort by overall (highest first) to match draft board behavior
         fa_players = sorted(fa_players, key=lambda p: p.overall, reverse=True)
 

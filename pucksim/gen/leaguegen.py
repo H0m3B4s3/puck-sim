@@ -37,12 +37,14 @@ from __future__ import annotations
 from typing import Optional
 
 from pucksim import config
+from pucksim.config import MINIMUM_SALARY
 from pucksim.gen.playergen import generate_goalie, generate_skater
 from pucksim.models.coach import assign_coach
 from pucksim.models.tactics import Tactics
 from pucksim.models.team import Team, auto_build_lines, seed_chemistry
 from pucksim.models.world import World
 from pucksim.rng import Rng
+from pucksim.systems.cap import max_salary, payroll
 
 # ---------------------------------------------------------------------------
 # Illustrative placeholder flavor text -- NOT real NHL team names. Just needs
@@ -163,6 +165,15 @@ _OVERALL_MU = 66.0
 _OVERALL_SIGMA = 10.0
 _OVERALL_FLOOR = 40
 
+# ---------------------------------------------------------------------------
+# Payroll fitting (see _fit_payroll_to_cap). The scaling converges in 2-3 passes
+# for any realistic roster; the extra passes are headroom for rosters where many
+# contracts pin against the minimum or the max-salary ceiling at once.
+# ---------------------------------------------------------------------------
+_PAYROLL_FIT_PASSES = 6
+_PAYROLL_FIT_TOLERANCE = 250_000     # within a quarter-million of target is "landed"
+_PAYROLL_FIT_MAX_SHAVES = 200        # defensive bound on the cap-legality clamp loop
+
 
 def _random_age(rng: Rng) -> int:
     return int(round(max(_AGE_MIN, min(_AGE_MAX, rng.triangular(_AGE_MIN, _AGE_MAX, _AGE_MODE)))))
@@ -205,6 +216,118 @@ def _team_name_and_abbrev(rng: Rng, used_names: set, used_abbrevs: set) -> tuple
     return name, abbrev
 
 
+def _payroll_target(rng: Rng, cap: int) -> int:
+    """The share of the cap this team's roster should consume.
+
+    Most teams draw from the normal band (`config.GEN_PAYROLL_FRACTION_MIN/MAX`); a
+    minority are rebuilding and draw from a lower one, which is what gives the opening
+    league a realistic *spread* of cap space instead of 32 identically-squeezed teams.
+    """
+    if rng.random() < config.GEN_REBUILDING_TEAM_SHARE:
+        lo = config.GEN_REBUILDING_PAYROLL_FRACTION_MIN
+        hi = config.GEN_REBUILDING_PAYROLL_FRACTION_MAX
+    else:
+        lo = config.GEN_PAYROLL_FRACTION_MIN
+        hi = config.GEN_PAYROLL_FRACTION_MAX
+    return int(cap * rng.uniform(lo, hi))
+
+
+def _fit_payroll_to_cap(world: World, team: Team, rng: Rng) -> None:
+    """Scale a freshly generated roster's contracts onto a realistic payroll target.
+
+    ``playergen`` prices each contract independently off the shared market curve, which
+    gets the *league-wide* economy right (mean payroll lands near the target on its own)
+    but leaves enormous per-team variance -- a roster that happens to draw three stars
+    can generate $25M over the cap while an unlucky one sits $28M under. Neither is a
+    legal or interesting starting position, so each roster is scaled onto a target drawn
+    by ``_payroll_target``.
+
+    Scaling (rather than re-rolling contracts) is deliberate: it preserves the *relative*
+    pay ordering playergen produced -- the team's best player is still its highest-paid,
+    the overpays are still overpays -- while moving the aggregate. Two salaries are held
+    fixed and excluded from the scaling:
+
+    - entry-level deals, which are cheap by rule and don't flex with a team's cap
+      situation, and
+    - anything already at the league minimum when scaling down, which cannot legally go
+      lower.
+
+    Because those exclusions (and the per-contract ``max_salary`` ceiling) can absorb
+    less than their share of the adjustment, the scale is applied iteratively, with the
+    residual redistributed over whatever contracts still have room. The final guard
+    clamps into cap legality outright, so this function's postcondition is unconditional:
+    the team is under the cap when it returns.
+    """
+    cap = world.salary_cap
+    target = _payroll_target(rng, cap)
+    ceiling = max_salary(cap)
+
+    # Entry-level deals are fixed by rule -- they're a floor of committed money the
+    # scaling has to work around, not part of what flexes.
+    roster = [world.players[pid] for pid in team.roster]
+    fixed = [p for p in roster if p.contract.is_rookie_scale]
+    flexible = [p for p in roster if not p.contract.is_rookie_scale]
+    if not flexible:
+        return
+
+    fixed_total = sum(p.contract.current_salary for p in fixed)
+    flex_target = max(len(flexible) * MINIMUM_SALARY, target - fixed_total)
+
+    for _ in range(_PAYROLL_FIT_PASSES):
+        flex_total = sum(p.contract.current_salary for p in flexible)
+        if flex_total <= 0:
+            break
+        # Contracts pinned at a bound can't absorb their share, so each pass rescales
+        # only those still free to move and lets the next pass mop up the residual.
+        movable = [p for p in flexible
+                   if MINIMUM_SALARY < p.contract.current_salary < ceiling]
+        if not movable:
+            break
+        movable_total = sum(p.contract.current_salary for p in movable)
+        pinned_total = flex_total - movable_total
+        if movable_total <= 0:
+            break
+        scale = (flex_target - pinned_total) / movable_total
+        for player in movable:
+            salary = _round_salary(player.contract.current_salary * scale, ceiling)
+            player.contract.salaries = [salary] * player.contract.years_remaining
+            player.contract.guaranteed = [True] * player.contract.years_remaining
+        if abs(sum(p.contract.current_salary for p in flexible) - flex_target) <= _PAYROLL_FIT_TOLERANCE:
+            break
+
+    _force_under_cap(world, team, flexible, ceiling)
+
+
+def _round_salary(raw: float, ceiling: int) -> int:
+    """Snap a scaled salary to a legal, human-readable $50K increment."""
+    salary = int(round(raw / 50_000) * 50_000)
+    return max(MINIMUM_SALARY, min(salary, ceiling))
+
+
+def _force_under_cap(world: World, team: Team, flexible: list, ceiling: int) -> None:
+    """Last-resort clamp guaranteeing the generated team opens cap-legal.
+
+    ``_fit_payroll_to_cap``'s iterative scaling normally lands well inside the cap, but
+    it can't in principle if a roster's fixed (entry-level) and minimum-salary money
+    alone exceeds the cap. Rather than let world gen emit an illegal team -- which every
+    downstream system (`cap.can_sign`, trades, free agency) assumes never happens -- this
+    shaves the highest salaries down until the payroll fits, in $50K steps.
+    """
+    guard = 0
+    while payroll(world, team) > world.salary_cap and guard < _PAYROLL_FIT_MAX_SHAVES:
+        guard += 1
+        reducible = [p for p in flexible if p.contract.current_salary > MINIMUM_SALARY]
+        if not reducible:
+            return
+        richest = max(reducible, key=lambda p: p.contract.current_salary)
+        overage = payroll(world, team) - world.salary_cap
+        headroom = richest.contract.current_salary - MINIMUM_SALARY
+        cut = min(headroom, max(50_000, int(round(overage / 50_000) * 50_000)))
+        salary = _round_salary(richest.contract.current_salary - cut, ceiling)
+        richest.contract.salaries = [salary] * richest.contract.years_remaining
+        richest.contract.guaranteed = [True] * richest.contract.years_remaining
+
+
 def _build_roster(world: World, team: Team) -> None:
     rng = world.rng
 
@@ -214,14 +337,16 @@ def _build_roster(world: World, team: Team) -> None:
         position = _FORWARD_POSITIONS[i % len(_FORWARD_POSITIONS)]
         age = _random_age(rng)
         target = _random_target_overall(rng)
-        player = generate_skater(world.new_pid(), rng, age, target, position=position)
+        player = generate_skater(world.new_pid(), rng, age, target, position=position,
+                                  cap=world.salary_cap)
         world.add_player(player)
         world.sign_player(player.pid, team.tid)
 
     for _ in range(_DEFENSEMEN_PER_TEAM):
         age = _random_age(rng)
         target = _random_target_overall(rng)
-        player = generate_skater(world.new_pid(), rng, age, target, position="D")
+        player = generate_skater(world.new_pid(), rng, age, target, position="D",
+                                  cap=world.salary_cap)
         world.add_player(player)
         world.sign_player(player.pid, team.tid)
 
@@ -231,10 +356,11 @@ def _build_roster(world: World, team: Team) -> None:
         # distribution's center up slightly relative to skaters is
         # unnecessary for MVP -- reuse the same distribution for simplicity.
         target = _random_target_overall(rng)
-        goalie = generate_goalie(world.new_pid(), rng, age, target)
+        goalie = generate_goalie(world.new_pid(), rng, age, target, cap=world.salary_cap)
         world.add_player(goalie)
         world.sign_player(goalie.pid, team.tid)
 
+    _fit_payroll_to_cap(world, team, rng)
     auto_build_lines(team, world.players)
     seed_chemistry(team, rng, base=_CHEMISTRY_BASE_SECS, spread=_CHEMISTRY_SPREAD_SECS)
 
