@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from pucksim.config import MINIMUM_SALARY, ROOKIE_CONTRACT_YEARS
+from pucksim.config import MINIMUM_SALARY, ROOKIE_CONTRACT_YEARS, ROSTER_MAX
 from pucksim.models.contract import flat_contract
 from pucksim.models.player import Player
 from pucksim.models.team import Team, auto_build_lines
@@ -46,6 +46,28 @@ WAVE_DISCOUNT = 0.07                 # per-wave price cooling for a still-unsign
 MIN_DISCOUNT_FACTOR = 0.6            # a cooling market never drops a player below 60% of value
 
 TARGET_ROSTER = 21                   # AI teams sign toward this size (mid-band of 20-23)
+
+# Headcount is not the only thing an AI team is shopping for -- money is. A team that has
+# reached TARGET_ROSTER but is still sitting on real cap space keeps bidding (up to the
+# hard ROSTER_MAX) rather than banking the room.
+#
+# Without this, the league's economy deflates every single offseason: contracts expire,
+# teams re-fill to exactly 21 bodies with whatever the wave discount makes cheap, and stop
+# -- so payroll ratchets down year over year (measured: ~94% of the cap at world gen
+# decaying to ~62% within three offseasons) while the cap itself grows 3% annually under
+# `cap.grow_cap()`. The generated league's cap pressure has to be *maintained* by the AI's
+# spending behavior, not just set correctly once at world gen.
+#
+# Expressed as a fraction of the live cap rather than flat dollars so the rule keeps its
+# meaning as the cap grows.
+AI_SPEND_SPACE_FRACTION = 0.05       # ~$4.1M at an $82.5M cap
+
+# Bidding competition (see `competitive_salary`). Each rival team that could also have
+# signed the player lifts the winning bid, up to a ceiling. Without this the market is
+# purely one-directional -- every free agent signs at their cooled asking price and league
+# payroll can only ever drift down.
+BIDDING_PREMIUM_PER_RIVAL = 0.012
+MAX_BIDDING_PREMIUM = 1.30
 
 
 def natural_wave(player: Player) -> int:
@@ -74,10 +96,18 @@ def wave_market_salary(world: World, player: Player) -> int:
 
 
 def fa_wave_pool(world: World) -> List[Player]:
-    """Free agents whose tier has opened in the current wave (highest overall first)."""
+    """Free agents whose tier has opened in the current wave (highest overall first).
+
+    Reserved prospects are excluded (``systems/prospects.py``): a player still inside their
+    post-draft development window belongs to the team that drafted them and isn't on the
+    open market yet. They enter it automatically once the window closes.
+    """
+    from pucksim.systems.prospects import is_reserved_prospect
+
     wave = getattr(world, "fa_wave", None)
     wave = wave if wave is not None else NUM_FA_WAVES - 1
-    pool = [p for p in world.free_agent_players() if natural_wave(p) <= wave]
+    pool = [p for p in world.free_agent_players()
+            if natural_wave(p) <= wave and not is_reserved_prospect(p, world.season_year)]
     return sorted(pool, key=lambda p: p.overall, reverse=True)
 
 
@@ -117,11 +147,27 @@ def advance_fa_wave(world: World) -> bool:
 
 
 def contract_years_for(player: Player) -> int:
-    """Contract length a free agent prefers: younger players bet on term, veterans
-    increasingly prefer short deals."""
-    if player.age < 28:
-        return 4
-    if player.age < 32:
+    """Contract length a free agent signs for: younger players lock in term, veterans
+    increasingly take short deals.
+
+    Lengthened from the original 4/2/1 bands, which were both unrealistic (the real NHL
+    averages a bit over three years per contract) and quietly deflationary. Because every
+    expiring contract dumps its player onto the open market, short terms meant roughly
+    two-thirds of the league re-signed *every single offseason* -- rosters fell to 6-16
+    players before free agency opened -- so nearly every contract in the league was
+    repeatedly repriced through ``wave_market_salary``'s cooling discount (down to 60% of
+    market for anyone left in the late waves). That compounded into a league-wide pay cut
+    year over year. Longer terms mean only ~a quarter of the league turns over annually,
+    which is both realistic and what keeps the discount a market-clearing mechanism
+    instead of a deflationary ratchet.
+    """
+    if player.age <= 24:
+        return 6
+    if player.age <= 28:
+        return 5
+    if player.age <= 31:
+        return 3
+    if player.age <= 34:
         return 2
     return 1
 
@@ -134,10 +180,19 @@ def sign_free_agent(world: World, team: Team, pid: int, salary: int, years: int
     DEVPLAN.md's Done criteria for this step is market-clearing behavior, not a full
     user-negotiation UI; a simple "is this deal legal" gate is a reasonable first pass,
     matching this step's documented scope-limiting judgment calls elsewhere.
+
+    Enforced here rather than only in the AI loop so the rule is the same for everyone:
+    ``run_fa_wave`` skips reserved prospects by filtering ``fa_wave_pool``, but a user (or
+    any other caller) reaching this function directly must hit the same wall, or the human
+    team gets to raid developing prospects the AI can't touch.
     """
+    from pucksim.systems.prospects import is_reserved_prospect
+
     player = world.players.get(pid)
     if player is None or not player.is_free_agent:
         return False, "Player is not a free agent."
+    if is_reserved_prospect(player, world.season_year):
+        return False, "Player is a developing prospect and cannot be signed yet."
     if years < 1:
         return False, "Contract must be at least 1 year."
     ok, reason = cap.can_sign(world, team, salary)
@@ -175,6 +230,45 @@ def sign_rookie(world: World, team: Team, pid: int, years: int = None) -> Tuple[
 # ---------------------------------------------------------------------------
 # AI-driven market clearing
 # ---------------------------------------------------------------------------
+def wants_to_sign(world: World, team: Team) -> bool:
+    """Is this AI team still shopping?
+
+    Two reasons a team keeps bidding: it needs bodies (under ``TARGET_ROSTER``), or it has
+    real money left to spend (see ``AI_SPEND_SPACE_FRACTION``) and a roster spot to put a
+    player in. Cap legality is checked separately by ``cap.can_sign`` -- this is the
+    *appetite* question, not the *legality* one.
+    """
+    if len(team.roster) >= ROSTER_MAX:
+        return False
+    if len(team.roster) < TARGET_ROSTER:
+        return True
+    return cap.cap_space(world, team) >= world.salary_cap * AI_SPEND_SPACE_FRACTION
+
+
+def competitive_salary(world: World, team: Team, asking: int, bidders: int) -> int:
+    """What the winning team actually pays, given how many rivals were also in on the player.
+
+    ``wave_market_salary`` is the player's *asking* price, and paying exactly that models a
+    market with no competition in it -- every free agent signs for their cooled ask and no
+    team ever has to outbid anyone. That is a poor model of real free agency (a good player
+    with twenty suitors gets bid up, not discounted) and it's economically one-directional:
+    it can only ever move league payroll down, which is a large part of why teams finished
+    each offseason still sitting on cap space they had no way to spend.
+
+    So a contested signing carries a premium that scales with the number of teams able to
+    make the offer, capped by ``MAX_BIDDING_PREMIUM``. The premium is bounded by the league
+    max salary and by ``cap.signing_allowance`` -- not raw cap space, which would let a
+    bidding war eat the room the team must keep back to fill its roster minimum -- so it
+    can never turn a legal signing into an illegal one.
+    """
+    if bidders <= 1:
+        return asking
+    premium = min(MAX_BIDDING_PREMIUM, 1.0 + BIDDING_PREMIUM_PER_RIVAL * (bidders - 1))
+    salary = int(round(asking * premium / 50_000) * 50_000)
+    salary = min(salary, cap.max_salary(world.salary_cap), cap.signing_allowance(world, team))
+    return max(asking, salary)
+
+
 def run_fa_wave(world: World, exclude_tid: int = None) -> dict:
     """AI teams bid on the tier open in the current wave, within their own cap space.
 
@@ -189,13 +283,14 @@ def run_fa_wave(world: World, exclude_tid: int = None) -> dict:
     ai_teams = [t for t in world.team_list() if t.tid != exclude_tid]
     signings = 0
     for player in fa_wave_pool(world):
-        salary = wave_market_salary(world, player)
+        asking = wave_market_salary(world, player)
         years = contract_years_for(player)
         candidates = [t for t in ai_teams
-                      if len(t.roster) < TARGET_ROSTER and cap.can_sign(world, t, salary)[0]]
+                      if wants_to_sign(world, t) and cap.can_sign(world, t, asking)[0]]
         if not candidates:
             continue
         team = max(candidates, key=lambda t: cap.cap_space(world, t))
+        salary = competitive_salary(world, team, asking, len(candidates))
         player.contract = flat_contract(salary, years, signed_year=world.season_year)
         world.sign_player(player.pid, team.tid)
         signings += 1

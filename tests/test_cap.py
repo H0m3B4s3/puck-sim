@@ -293,12 +293,48 @@ def test_can_sign_false_when_over_cap_space():
 
 def test_can_sign_true_within_cap_space_and_roster_room():
     world = build_world()
-    world.salary_cap = 20_000_000
+    world.salary_cap = 80_000_000
     team = world.team(1)
     sign(world, team, make_skater(1, salary=4_000_000))
 
     ok, _ = cap.can_sign(world, team, 2_000_000)
     assert ok is True
+
+
+def test_can_sign_reserves_room_to_fill_the_roster_minimum():
+    """A team may not spend down past what it needs to ice a legal roster.
+
+    Without this, a team can legally commit every dollar it has while still short of
+    ``ROSTER_MIN``, and ``offseason.fill_rosters`` -- which must complete, since a team
+    below the minimum can't ice a lineup -- is then forced to sign it over the hard cap.
+    """
+    world = build_world()
+    world.salary_cap = 20_000_000
+    team = world.team(1)
+    sign(world, team, make_skater(1, salary=4_000_000))
+
+    # 1 player rostered, so 18 more are still required to reach ROSTER_MIN (20) after
+    # this signing; that room is held back out of the $16M of raw space.
+    reserve = (config.ROSTER_MIN - 2) * config.MINIMUM_SALARY
+    assert cap.signing_allowance(world, team) == cap.cap_space(world, team) - reserve
+
+    ok, reason = cap.can_sign(world, team, 2_000_000)
+    assert ok is False
+    assert "roster minimum" in reason.lower()
+
+    ok, _ = cap.can_sign(world, team, cap.signing_allowance(world, team))
+    assert ok is True
+
+
+def test_signing_allowance_is_plain_cap_space_for_a_full_roster():
+    """Once no mandatory spots remain, nothing is held back."""
+    world = build_world()
+    world.salary_cap = 80_000_000
+    team = world.team(1)
+    for pid in range(1, config.ROSTER_MIN + 1):
+        sign(world, team, make_skater(pid, salary=config.MINIMUM_SALARY))
+
+    assert cap.signing_allowance(world, team) == cap.cap_space(world, team)
 
 
 def test_can_sign_hard_cap_no_exception_over_the_line():

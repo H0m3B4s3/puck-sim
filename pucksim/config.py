@@ -504,6 +504,30 @@ MINIMUM_SALARY = 800_000
 # `systems/cap.py::max_salary()`.
 MAX_SALARY_CAP_FRACTION = 0.20
 
+# ---------------------------------------------------------------------------
+# Prospect development (`systems/prospects.py`)
+# ---------------------------------------------------------------------------
+# How many seasons a drafted player spends developing before they may sign an NHL
+# contract, by where they were picked. v1 has no AHL/junior league to place them in, so
+# this is a *status* rather than a place -- see systems/prospects.py's module docstring for
+# why the missing minor leagues were an economic problem and not just a missing feature.
+#
+# The staggered shape mirrors how a real draft class actually reaches the NHL: the first
+# overall pick usually plays immediately; the rest of the top ten mostly arrive a year
+# later; the balance of the first round the year after that; and later-round picks spend
+# three-plus years in junior, the AHL, the NCAA, or Europe, with many never arriving at
+# all. Read as (last pick number in the band, seasons of development required); anything
+# past the final band uses PROSPECT_DEVELOPMENT_YEARS_DEFAULT.
+#
+# Economically this is what stops cheap entry-level teenagers from displacing
+# market-priced NHL players, which is what collapsed league payroll before it existed.
+PROSPECT_DEVELOPMENT_YEARS_BY_PICK = (
+    (1, 0),      # first overall: NHL-ready now (still subject to a rating check)
+    (10, 1),     # rest of the top ten: mostly arrive the following season
+    (32, 2),     # remainder of round one
+)
+PROSPECT_DEVELOPMENT_YEARS_DEFAULT = 3   # round two and later
+
 # Contract length bounds. Real NHL max is 8 years (7 for a sign-and-trade,
 # simplified away here); rookie-scale (entry-level) deals are always 3 years
 # flat, matching the real ELC's fixed 3-year term regardless of signing age.
@@ -529,3 +553,82 @@ TRADE_MATCH_BUFFER = 3_000_000
 # rate mirroring real-world NHL cap growth (~a few percent most years, though
 # real growth is negotiated and lumpy). PROVISIONAL/tunable.
 CAP_GROWTH_RATE = 0.03
+
+# ---------------------------------------------------------------------------
+# Salary curve (`systems/cap.py::base_salary_for()`)
+# ---------------------------------------------------------------------------
+# Breakpoints of the league's ability->pay curve, as (overall, annual salary at
+# an $82.5M cap) pairs on attributes.py's 25-99 rating scale, linearly
+# interpolated between points and flat outside the ends. Salaries scale with the
+# live cap (see `base_salary_for()`), so the curve keeps its shape as the cap
+# grows each offseason.
+#
+# CALIBRATED, not guessed: the curve is fitted so that applying it to
+# leaguegen's actual generated rating/age distribution (a ~N(66, 10) overall
+# spread over a 22-man roster) produces a mean team payroll of ~95% of the cap
+# -- i.e. real NHL cap pressure, where a team's roster genuinely consumes its
+# cap and adding a star means shedding salary. The resulting per-team shape is
+# roughly 1 player above $9M, 2-3 in the $6-9M band, 5 in $4-6M, 7 in $2-4M,
+# and 7 at or near the minimum, which matches a real NHL cap sheet's silhouette.
+#
+# Convexity is the point: pay rises much faster than ability at the top (a
+# 90-overall is ~3x a 70-overall's rating percentile but ~3x their salary too),
+# which is what makes star contracts a genuine roster-building tradeoff rather
+# than a rounding error.
+SALARY_CURVE = (
+    (45, 800_000),
+    (50, 875_000),
+    (55, 1_050_000),
+    (60, 1_600_000),
+    (65, 2_600_000),
+    (70, 4_000_000),
+    (75, 5_600_000),
+    (80, 7_400_000),
+    (85, 9_400_000),
+    (90, 11_500_000),
+    (95, 13_600_000),
+    (99, 15_200_000),
+)
+
+# The cap the SALARY_CURVE dollar figures above are quoted at. `base_salary_for()`
+# scales the curve by (live cap / this) so a growing cap lifts salaries with it
+# rather than silently making every contract cheaper in cap-percentage terms.
+SALARY_CURVE_REFERENCE_CAP = SALARY_CAP_BASE
+
+# Aging adjustments applied on top of the curve in `systems/cap.py::market_salary()`.
+# Teams pay a premium for young players whose scouted potential outruns their
+# current ability, and get a discount on players past the NHL aging curve's cliff.
+YOUNG_UPSIDE_PREMIUM = 1.12
+VETERAN_DISCOUNT_AGE = 34
+VETERAN_DISCOUNT = 0.80
+
+# ---------------------------------------------------------------------------
+# World-generation payroll targets (`gen/leaguegen.py`)
+# ---------------------------------------------------------------------------
+# A freshly generated league represents an *already-running* NHL, where teams
+# have spent years accumulating contracts and sit right up against the cap --
+# not an expansion league with $50M of open space. After building a roster,
+# leaguegen fits that roster's generated contracts to a per-team payroll target
+# drawn uniformly from this band (as a fraction of the cap), so the league opens
+# with realistic cap pressure and a realistic *spread*: contenders pressed to the
+# ceiling, rebuilding clubs carrying real space.
+#
+# The band's top stops short of 1.0 so every team opens cap-legal with at least a
+# little room to make a move, and its bottom keeps a normal team inside ~$6M of the
+# ceiling -- real NHL teams operate pressed right up against the cap, not $20M under it.
+GEN_PAYROLL_FRACTION_MIN = 0.93
+GEN_PAYROLL_FRACTION_MAX = 0.995
+
+# Roughly a fifth of the league is mid-teardown at any time and carries real space to
+# absorb salary in a trade. Those teams draw from this lower band instead. Note the cap
+# is *hard* in v1 (see systems/cap.py) -- no team ever generates above it; the spread is
+# entirely about how much room teams have underneath, not about who's over.
+GEN_REBUILDING_TEAM_SHARE = 0.20
+GEN_REBUILDING_PAYROLL_FRACTION_MIN = 0.78
+GEN_REBUILDING_PAYROLL_FRACTION_MAX = 0.92
+
+# Contract-negotiation noise at world gen: a generated deal lands within this
+# multiplicative band of the player's market value (some teams overpaid, some got
+# a bargain), before the payroll fit above scales the roster onto its target.
+GEN_SALARY_NOISE_MIN = 0.88
+GEN_SALARY_NOISE_MAX = 1.18

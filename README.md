@@ -44,7 +44,17 @@ Two sim-depth rounds have landed on top of that, both documented in
   six, full depth-defenseman vocabulary, and a skew-preserving calibration pass so an archetype's
   signature survives at elite overall instead of being averaged away.
 
-783 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
+An economy round then rebalanced the salary cap, which had no teeth: world gen opened every team
+roughly $49M under an $82.5M cap because contracts were priced off a formula unrelated to the cap
+system's own market curve. Salaries now follow a curve calibrated against the real generated
+rating distribution, and each generated roster is fitted onto a payroll target — so a league opens
+at ~94% of the cap with most teams pressed to the ceiling, a few rebuilders holding real space,
+and nobody over the hard cap. Sustaining that across seasons meant closing the gap where drafted
+players had nowhere to develop: `systems/prospects.py` keeps a pick who isn't NHL-ready developing
+outside the roster until a window staggered by draft position elapses, rather than handing them an
+NHL job at entry-level money. League payroll now holds 91–95% of the cap across a dozen seasons.
+
+814 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
 end-to-end, both headlessly and through the web app. Note the suite takes roughly ten minutes —
 several tests sim multiple full seasons back to back. See [DEVPLAN.md](DEVPLAN.md) for the full
 step-by-step plan and status notes, including a handful of known non-blocking loose ends (search

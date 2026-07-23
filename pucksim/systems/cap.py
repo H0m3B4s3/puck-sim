@@ -31,15 +31,20 @@ and by structural differences between the two sports:
 
 Ratings note: PuckSim's ``overall`` is on attributes.py's 25-99 scale (not HoopR's 0-99),
 so ``base_salary_for()``'s breakpoints are hockey-native numbers, not a straight port of
-HoopR's dollar curve.
+HoopR's dollar curve. Those breakpoints live in ``config.SALARY_CURVE`` and are *fitted*
+to leaguegen's generated rating distribution so a full roster consumes ~95% of the cap
+(real NHL cap pressure) rather than being eyeballed dollar bands -- see that constant's
+comment, and ``gen/leaguegen.py``'s payroll-fit pass which lands each generated team on a
+realistic share of the cap.
 """
 from __future__ import annotations
 
 from typing import Tuple
 
 from pucksim.config import (CAP_GROWTH_RATE, MAX_CONTRACT_YEARS, MAX_SALARY_CAP_FRACTION,
-                             MINIMUM_SALARY, ROSTER_MAX, ROOKIE_SALARY_CAP_FRACTION,
-                             TRADE_MATCH_BUFFER)
+                             MINIMUM_SALARY, ROSTER_MAX, ROSTER_MIN, ROOKIE_SALARY_CAP_FRACTION,
+                             SALARY_CURVE, SALARY_CURVE_REFERENCE_CAP, TRADE_MATCH_BUFFER,
+                             VETERAN_DISCOUNT, VETERAN_DISCOUNT_AGE, YOUNG_UPSIDE_PREMIUM)
 from pucksim.models.player import Player
 from pucksim.models.team import Team, team_salary
 from pucksim.models.world import World
@@ -77,25 +82,33 @@ def max_salary(cap: int) -> int:
     return int(cap * MAX_SALARY_CAP_FRACTION)
 
 
-def base_salary_for(ovr: int) -> int:
+def base_salary_for(ovr: int, cap: int = SALARY_CURVE_REFERENCE_CAP) -> int:
     """Deterministic 'fair' annual salary for a given overall (no noise), on attributes.py's
-    25-99 rating scale. PROVISIONAL curve -- reasonable NHL-scale dollar bands, not tuned
-    against a real generated-player salary distribution yet."""
-    if ovr >= 90:
-        base = 11_000_000 + (ovr - 90) * 900_000
-    elif ovr >= 85:
-        base = 8_000_000 + (ovr - 85) * 600_000
-    elif ovr >= 80:
-        base = 5_500_000 + (ovr - 80) * 500_000
-    elif ovr >= 75:
-        base = 3_200_000 + (ovr - 75) * 460_000
-    elif ovr >= 70:
-        base = 1_800_000 + (ovr - 70) * 280_000
-    elif ovr >= 60:
-        base = 950_000 + (ovr - 60) * 85_000
+    25-99 rating scale.
+
+    Linear interpolation over ``config.SALARY_CURVE``'s breakpoints, flat outside the ends,
+    scaled by ``cap / config.SALARY_CURVE_REFERENCE_CAP`` so the curve holds its shape *in
+    cap percentage terms* as the cap grows each offseason (a $9M contract at an $82.5M cap
+    is the same roster commitment as a $9.9M one after a decade of ``grow_cap()``; without
+    this scaling every existing salary would quietly deflate into irrelevance).
+
+    The curve is calibrated against leaguegen's real generated rating distribution rather
+    than eyeballed -- see ``config.SALARY_CURVE``'s comment for the fit and the resulting
+    per-team cap-sheet shape.
+    """
+    points = SALARY_CURVE
+    if ovr <= points[0][0]:
+        base = float(points[0][1])
+    elif ovr >= points[-1][0]:
+        base = float(points[-1][1])
     else:
-        base = MINIMUM_SALARY
-    return base
+        # Guaranteed to find a bracketing segment: the two branches above already
+        # excluded everything outside the curve's endpoints.
+        x0, y0 = next((p for p in reversed(points) if p[0] <= ovr))
+        x1, y1 = next((p for p in points if p[0] > ovr))
+        base = y0 + (y1 - y0) * (ovr - x0) / (x1 - x0)
+    base *= cap / SALARY_CURVE_REFERENCE_CAP
+    return max(MINIMUM_SALARY, int(base))
 
 
 def market_salary(player: Player, cap: int) -> int:
@@ -106,11 +119,11 @@ def market_salary(player: Player, cap: int) -> int:
     -- it's a pure "what would this player's ability alone command" estimate, useful for
     trade-value comparisons regardless of what contract they're actually on.
     """
-    base = base_salary_for(player.overall)
+    base = base_salary_for(player.overall, cap)
     if player.age <= 23 and player.scouted_potential() > player.overall + 4:
-        base *= 1.12          # unrealized-upside premium -- teams pay for projection, not just today
-    if player.age >= 34:
-        base *= 0.75          # aging-curve discount
+        base *= YOUNG_UPSIDE_PREMIUM   # teams pay for projection, not just today
+    if player.age >= VETERAN_DISCOUNT_AGE:
+        base *= VETERAN_DISCOUNT       # aging-curve discount
     base = min(base, max_salary(cap))
     return max(MINIMUM_SALARY, int(round(base / 50_000) * 50_000))
 
@@ -220,9 +233,35 @@ def can_sign(world: World, team: Team, salary: int) -> Tuple[bool, str]:
     that pushes payroll over ``world.salary_cap`` -- there is no exception mechanism.
     Roster-size legality uses hockey's real 23-man active-roster ceiling
     (``config.ROSTER_MAX``).
+
+    A team must also keep back enough room to fill its *remaining mandatory* roster spots
+    at the league minimum (``config.ROSTER_MIN``). Without that reserve a team can legally
+    spend itself down to near-zero space while still short of a full roster, and then
+    ``offseason.fill_rosters`` -- which must complete, since a team below ``ROSTER_MIN``
+    (or below ``GOALIES_MIN``) cannot ice a legal lineup -- has no choice but to sign over
+    the cap. That was directly observed breaking the hard cap for 27 of 32 teams in a
+    single offseason once the economy got tight enough for it to bite. Reserving the room
+    up front is both the realistic GM behavior and the only fix that keeps the hard cap an
+    actual invariant rather than a hope.
     """
     if len(team.roster) >= ROSTER_MAX:
         return False, "Roster is full (23-man active-roster maximum)."
-    if salary > cap_space(world, team):
+    allowance = signing_allowance(world, team)
+    if salary > allowance:
+        if allowance < cap_space(world, team):
+            return False, "Not enough cap space (room is reserved to fill the roster minimum)."
         return False, "Not enough cap space."
     return True, "Cap space available."
+
+
+def signing_allowance(world: World, team: Team) -> int:
+    """The largest salary this team may legally commit to one more player.
+
+    Cap space less whatever must be held back to fill the team's *remaining mandatory*
+    roster spots at the league minimum. Callers that price a signing themselves (rather
+    than just asking ``can_sign`` yes/no) must clamp to this, or they can spend the reserve
+    that ``can_sign`` exists to protect and push the team into the illegal state described
+    there.
+    """
+    spots_still_required = max(0, ROSTER_MIN - (len(team.roster) + 1))
+    return max(0, cap_space(world, team) - spots_still_required * MINIMUM_SALARY)

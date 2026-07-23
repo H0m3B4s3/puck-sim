@@ -270,9 +270,24 @@ def fill_rosters(world: World) -> None:
     skater free agents vastly outnumber goalie free agents in the pool. Goalie needs are
     resolved FIRST (a team literally cannot ice a game with zero rostered goalies), then skater
     needs, then any remaining shortfall against the overall ``ROSTER_MIN``.
+
+    Reserved prospects (``systems/prospects.py``) are normally off-limits -- a roster hole is
+    filled from the real free-agent market, not by yanking a developing teenager up early.
+    But a position minimum is a legality requirement, not a preference: if the market is
+    genuinely out of goalies, a team must still ice two of them. So each fill falls back to
+    an EMERGENCY RECALL of the best reserved prospect at that position rather than leaving
+    the roster illegal. This mirrors the real NHL's emergency-recall rule, and it's not
+    hypothetical -- goalies are a thin sub-pool (2 per team generated, ~64 league-wide) and
+    once reserved prospects stopped being freely signable, teams were directly observed
+    finishing the offseason with a single goalie.
     """
-    def _sign_best(team, pool_filter) -> bool:
-        candidates = [pid for pid in world.free_agents if pool_filter(world.players[pid])]
+    from pucksim.systems.prospects import is_reserved_prospect
+
+    def _sign_best(team, pool_filter, allow_reserved: bool = False) -> bool:
+        candidates = [pid for pid in world.free_agents
+                      if pool_filter(world.players[pid])
+                      and (allow_reserved
+                           or not is_reserved_prospect(world.players[pid], world.season_year))]
         if not candidates:
             return False
         best = max(candidates, key=lambda pid: world.players[pid].overall)
@@ -282,25 +297,59 @@ def fill_rosters(world: World) -> None:
         world.players[best].contract = contract
         return True
 
+    def _fill(team, pool_filter) -> bool:
+        """Sign from the open market, falling back to an emergency recall (see docstring)."""
+        return (_sign_best(team, pool_filter)
+                or _sign_best(team, pool_filter, allow_reserved=True))
+
     for team in world.team_list():
         while len(_goalies(world, team.roster)) < GOALIES_MIN:
-            if not _sign_best(team, lambda p: p.is_goalie):
-                break   # no goalie free agents left -- can't fully satisfy the minimum
+            if not _fill(team, lambda p: p.is_goalie):
+                break   # no goalies left in the league at all -- nothing more this can do
         while len(_skaters(world, team.roster)) < SKATERS_MIN:
-            if not _sign_best(team, lambda p: not p.is_goalie):
+            if not _fill(team, lambda p: not p.is_goalie):
                 break
         while len(team.roster) < ROSTER_MIN and world.free_agents:
-            if not _sign_best(team, lambda p: True):
+            if not _fill(team, lambda p: True):
                 break
+
+
+# Goalie free agents the cull always leaves on the market, regardless of how they rank by
+# overall against skaters -- enough for every team that loses a goalie to retirement or
+# expiry in one offseason to be able to replace them (see cull_free_agents).
+KEEP_FREE_AGENT_GOALIES = 12
 
 
 def cull_free_agents(world: World, keep: int = 80) -> int:
-    """Keep the league population bounded: unsigned, lowest-rated free agents leave the league."""
-    if len(world.free_agents) <= keep:
+    """Keep the league population bounded: unsigned, lowest-rated free agents leave the league.
+
+    Reserved prospects are exempt (``systems/prospects.py``). Culling by *current* overall
+    would delete every drafted teenager before they ever developed -- a raw prospect is by
+    definition below the league's established free agents today, which is precisely what
+    their development window exists to fix. That exemption is what keeps the
+    draft -> development -> NHL pipeline supplying real talent to the league; without it
+    the draft fed nothing in, and teams ended up sitting on tens of millions in cap space
+    with no one worth signing.
+    """
+    from pucksim.systems.prospects import is_reserved_prospect
+
+    eligible = [pid for pid in world.free_agents
+                if not is_reserved_prospect(world.players[pid], world.season_year)]
+    if len(eligible) <= keep:
         return 0
-    ranked = sorted(world.free_agents,
-                    key=lambda pid: world.players[pid].overall, reverse=True)
-    cut = ranked[keep:]
+    ranked = sorted(eligible, key=lambda pid: world.players[pid].overall, reverse=True)
+    kept = set(ranked[:keep])
+
+    # Position-aware for the same reason enforce_roster_max/fill_rosters are: goalies are a
+    # small, easily-exhausted sub-pool, and culling purely by overall can leave the market
+    # with no goalie free agents at all. `fill_rosters` then can't repair a team that fell
+    # below GOALIES_MIN, and the offseason ends with a team unable to ice a legal lineup
+    # (directly observed once reserved prospects stopped being signable).
+    spare_goalies = [pid for pid in ranked[keep:] if world.players[pid].is_goalie]
+    shortfall = KEEP_FREE_AGENT_GOALIES - sum(1 for pid in kept if world.players[pid].is_goalie)
+    kept.update(spare_goalies[:max(0, shortfall)])
+
+    cut = [pid for pid in ranked if pid not in kept]
     for pid in cut:
         world.free_agents.remove(pid)
         world.players.pop(pid, None)

@@ -206,21 +206,73 @@ def test_setup_draft_registers_prospects_on_world():
         assert world.players[pid].team_id is None
 
 
+def _make_nhl_ready(player: Player) -> None:
+    """Raise a prospect's ratings until they clear ``DRAFT_NHL_READY_OVERALL``.
+
+    Generated prospects are usually well below NHL caliber (pool median overall ~52), so a
+    test that needs the immediate-entry path has to build the rare prospect who's actually
+    ready rather than relying on whatever the pool happened to produce.
+    """
+    for name in player.ratings:
+        player.ratings[name] = 90
+    assert player.overall >= ds.DRAFT_NHL_READY_OVERALL
+
+
 def test_make_pick_records_via_world_and_draft_class():
+    """The pick itself is always recorded, whether or not the player signs -- draft rights
+    and roster occupancy are separate facts (see make_pick's docstring)."""
     world = build_world_with_teams(n_teams=4, roster_headroom=2)
     _play_fake_season(world)
     dc = ds.setup_draft(world, rounds=1, pool_size=20)
 
     on_clock = dc.team_on_clock()
     pid = ds.best_available(world)
+    ds.make_pick(world, pid)
+
+    assert (pid, on_clock) in dc.picks_made
+    assert world.player(pid).draft["team"] == world.teams[on_clock].abbrev
+
+
+def test_nhl_ready_first_overall_pick_signs_immediately():
+    """A first-overall pick who is genuinely NHL-caliber goes straight onto the roster."""
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=1, pool_size=20)
+
+    on_clock = dc.team_on_clock()
+    pid = ds.best_available(world)
+    _make_nhl_ready(world.player(pid))
     signed = ds.make_pick(world, pid)
 
     assert signed is True
-    assert (pid, on_clock) in dc.picks_made
     player = world.player(pid)
     assert player.team_id == on_clock
     assert pid in world.teams[on_clock].roster
     assert pid not in world.free_agents
+
+
+def test_later_picks_are_reserved_rather_than_signed():
+    """Everyone past the immediate-entry window keeps their draft rights but stays off the
+    active roster to develop (systems/prospects.py) -- they cost no cap space and take no
+    roster spot. This is what stops entry-level teenagers from displacing paid NHL
+    players and collapsing league payroll."""
+    from pucksim.systems.prospects import is_reserved_prospect
+
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    dc = ds.setup_draft(world, rounds=2, pool_size=20)
+
+    ds.make_pick(world, ds.best_available(world))       # pick 1
+    pid = ds.best_available(world)
+    _make_nhl_ready(world.player(pid))                  # good enough, but picked too late
+    signed = ds.make_pick(world, pid)                   # pick 2
+
+    assert signed is False
+    player = world.player(pid)
+    assert player.team_id is None
+    assert pid in world.free_agents
+    assert is_reserved_prospect(player, world.season_year)
+    assert (pid, dc.picks_made[1][1]) in dc.picks_made
 
 
 def test_drafted_player_gets_entry_level_rookie_scale_contract():
@@ -231,6 +283,7 @@ def test_drafted_player_gets_entry_level_rookie_scale_contract():
     ds.setup_draft(world, rounds=1, pool_size=20)
 
     pid = ds.best_available(world)
+    _make_nhl_ready(world.player(pid))
     ds.make_pick(world, pid)
     player = world.player(pid)
 
