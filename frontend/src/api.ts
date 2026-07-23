@@ -378,6 +378,8 @@ export interface PlayerDetailDTO {
   draft: Record<string, unknown> | null;
   development: Record<string, unknown> | null;   // prospect tier/status, null if not developing
   can_send_down: boolean;                        // may the user demote this rostered player now?
+  two_way: boolean;                              // contract structure
+  bury_cap_hit: number;                          // cap still charged if sent down (0 if two-way)
   season_stats: Record<string, unknown>;
   playoff_stats: Record<string, unknown> | null;
   rating_groups: Record<string, Array<{ key: string; label: string; value: number }>>;

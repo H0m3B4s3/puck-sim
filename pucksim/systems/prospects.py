@@ -546,7 +546,7 @@ def sign_elc(world: World, tid: int, pid: int) -> Tuple[bool, str]:
 
     player.contract = flat_contract(
         cap.rookie_salary(world.salary_cap), years,
-        is_rookie_scale=True, signed_year=world.season_year,
+        is_rookie_scale=True, signed_year=world.season_year, two_way=True,
     )
     return True, f"Signed to a {years}-year entry-level contract."
 

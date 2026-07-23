@@ -347,3 +347,88 @@ def test_can_sign_hard_cap_no_exception_over_the_line():
 
     ok, _ = cap.can_sign(world, team, config.MINIMUM_SALARY)
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# Two-way contracts and the buried cap hit (docs/PROSPECT_DEV_PLAN.md follow-up)
+# ---------------------------------------------------------------------------
+def _demote_world():
+    """A real league with a spare roster spot and a helper to plant a signed player on it."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.models import attributes as attr
+    from pucksim.models.player import Player
+
+    world = build_world(11)
+    tid = world.team_list()[0].tid
+    while len(world.teams[tid].roster) >= config.ROSTER_MAX - 2:
+        world.release_player(world.teams[tid].roster[-1])
+
+    def plant(salary, two_way):
+        p = Player(pid=world.new_pid(), name="Demote Me", age=21, position="C",
+                   ratings={n: 70 for n in attr.ALL_RATINGS})
+        p.league_origin = "europe"
+        p.contract = flat_contract(salary, 3, two_way=two_way)
+        world.add_player(p)
+        world.sign_player(p.pid, tid)
+        return p
+
+    return world, tid, plant
+
+
+def test_a_buried_two_way_contract_frees_the_whole_cap_hit():
+    from pucksim.systems import prospects
+
+    world, tid, plant = _demote_world()
+    player = plant(3_000_000, two_way=True)
+    before = cap.payroll(world, world.teams[tid])
+    prospects.demote_player(world, tid, player.pid)
+    after = cap.payroll(world, world.teams[tid])
+    assert after == before - 3_000_000
+    assert cap.buried_cap_hit(world, world.teams[tid]) == 0
+
+
+def test_a_buried_one_way_contract_leaves_a_sheltered_remainder_on_the_cap():
+    """The whole point of the mechanic: burying an expensive one-way deal is only partial
+    relief, which is what makes it a cap anchor."""
+    from pucksim.systems import prospects
+
+    world, tid, plant = _demote_world()
+    player = plant(5_000_000, two_way=False)
+    before = cap.payroll(world, world.teams[tid])
+    prospects.demote_player(world, tid, player.pid)
+    after = cap.payroll(world, world.teams[tid])
+
+    expected_buried = 5_000_000 - config.BURY_CAP_SHELTER
+    assert after == before - 5_000_000 + expected_buried
+    assert cap.buried_cap_hit(world, world.teams[tid]) == expected_buried
+
+
+def test_a_cheap_one_way_contract_buries_fully():
+    """A one-way salary below the shelter threshold escapes the cap entirely when buried."""
+    from pucksim.systems import prospects
+
+    world, tid, plant = _demote_world()
+    player = plant(config.MINIMUM_SALARY, two_way=False)
+    assert config.MINIMUM_SALARY < config.BURY_CAP_SHELTER
+    prospects.demote_player(world, tid, player.pid)
+    assert cap.buried_cap_hit(world, world.teams[tid]) == 0
+
+
+def test_entry_level_contracts_are_two_way():
+    """ELCs are two-way by rule, so a prospect never leaves a buried hit behind."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import prospects
+
+    world = build_world(11)
+    tid = world.team_list()[0].tid
+    from pucksim.models import attributes as attr
+    from pucksim.models.player import Player
+    p = Player(pid=world.new_pid(), name="Prospect", age=19, position="C",
+               ratings={n: 60 for n in attr.ALL_RATINGS})
+    p.league_origin = "ncaa"
+    world.add_player(p)
+    prospects.enter_development(p, "ncaa", world.season_year, rights_tid=tid)
+    ok, _ = prospects.sign_elc(world, tid, p.pid)
+    assert ok
+    assert p.contract.two_way is True
+    assert cap.buried_cap_hit(world, world.teams[tid]) == 0

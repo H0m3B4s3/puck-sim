@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from pucksim.config import BURY_CAP_SHELTER
 from pucksim.models.attributes import RATING_GROUPS, GOALIE_RATING_GROUPS
 from pucksim.models.player import Player
 from pucksim.models.world import World
@@ -81,6 +82,13 @@ class PlayerDetailDTO(BaseModel):
     # take him. Drives the modal's "Send to Minors" action so it only appears when the move
     # would actually be legal, rather than offering it and failing on a veteran.
     can_send_down: bool = False
+
+    # Contract structure (models/contract.py::two_way). ``bury_cap_hit`` is what THIS player's
+    # salary would still cost against the cap if he were sent to the minors -- 0 for a two-way
+    # deal, and the sheltered remainder for a one-way one. Surfaced so a manager weighing a
+    # send-down sees whether he'd get full cap relief or is stuck with a buried anchor.
+    two_way: bool = False
+    bury_cap_hit: int = 0
 
     # Stats
     season_stats: dict
@@ -278,6 +286,9 @@ def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDeta
         draft=dict(player.draft) if player.draft else None,
         development=_build_development_dto(world, player),
         can_send_down=_can_send_down(world, player),
+        two_way=player.contract.two_way,
+        bury_cap_hit=(0 if player.contract.two_way
+                      else max(0, player.contract.current_salary - BURY_CAP_SHELTER)),
         season_stats=_build_season_stats_dto(player),
         playoff_stats=_build_playoff_stats_dto(player),
         rating_groups=_build_rating_groups_dto(player),

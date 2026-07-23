@@ -239,7 +239,7 @@ def _give_user_a_signed_ready_prospect(client, tier="ahl"):
                     ratings={n: 90 for n in attr.ALL_RATINGS})
     player.league_origin = "europe"
     player.potential = 92
-    player.contract = flat_contract(900_000, 3, is_rookie_scale=True)
+    player.contract = flat_contract(900_000, 3, is_rookie_scale=True, two_way=True)
     world.add_player(player)
     prospects.enter_development(player, tier, world.season_year, rights_tid=tid)
     session_store.save(sid, world)
@@ -291,3 +291,21 @@ def test_player_detail_flags_send_down_only_for_eligible_own_players(client, car
     # An old veteran on the user's roster is too experienced -> not send-down-able.
     detail = client.get(f"/players/{world_roster[0]['pid']}").json()
     assert isinstance(detail["can_send_down"], bool)
+
+
+def test_player_detail_reports_contract_structure_and_bury_hit(client, career):
+    """The Send to Minors affordance needs to know whether a demotion frees the full cap
+    hit (two-way) or leaves a buried anchor (one-way)."""
+    pid = _give_user_a_signed_ready_prospect(client)      # ELC -> two-way
+    client.post(f"/roster/prospects/{pid}/call-up")
+    detail = client.get(f"/players/{pid}").json()
+    assert detail["two_way"] is True
+    assert detail["bury_cap_hit"] == 0
+
+    # A market-contract veteran on the roster is one-way; his buried hit is >= 0.
+    roster = client.get("/roster").json()["players"]
+    vet = next((p for p in roster if p["contract"]["years_remaining"] > 0), None)
+    if vet is not None:
+        vd = client.get(f"/players/{vet['pid']}").json()
+        assert isinstance(vd["two_way"], bool)
+        assert vd["bury_cap_hit"] >= 0
