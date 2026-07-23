@@ -328,12 +328,34 @@ and that left the suite green while it did.
 - **Simulate the feeder leagues for real.** The abstract-tier decision was deliberate and
   nothing built here forecloses it: schedules, standings and box scores for the CHL/NCAA/AHL
   would replace `development_season_line`'s synthetic numbers without changing a single
-  eligibility rule.
-- **A deeper undrafted market**, if it's worth 25% more world — one constant, measured both
-  ways at `PROSPECT_POOL_SIZE`.
-- **Two-way contracts.** `contract.py` still defers the one-way/two-way salary split, and it's
-  now the last piece of the real ELC that's missing. It only becomes meaningful once minor-league
-  salaries exist to split, which is to say once the leagues above are simulated.
-- **User control over promotion.** The web offseason promotes NHL-ready prospects for all 32
-  teams including the user's, because leaving a ready prospect stranded with no UI to call him up
-  would be worse. Now that the Prospects screen exists, a "call up" action there could take over.
+  eligibility rule. Still open.
+
+---
+
+# Follow-up round (2026-07-23)
+
+Three of the four open items above, taken on directly (the feeder-league sim was deferred).
+User picked them together; merge-as-you-go.
+
+## Phase 1 — user control over promotion (done)
+
+Auto-promotion still runs for the AI, but the user's team is now excluded (`promote_ready_
+prospects(world, exclude_tid=world.user_team_id)` in the web offseason handler), and the
+manager makes his own moves:
+
+- `prospects.promote_prospect(world, tid, pid)` — call one signed prospect up. Same three
+  gates as the automatic path (rights, contract, roster+cap room), but **no readiness gate** —
+  a manager may call up a raw prospect, exactly as a real team can. `promote_ready_prospects`
+  now delegates to it, so the automatic and manual paths can't diverge.
+- `prospects.demote_player(world, tid, pid)` — send a rostered player down. He keeps his
+  contract and costs no cap while off the roster. Gated on still being tier-eligible by age;
+  no waiver system yet (deferred to Step 3.1 with the rest of the CBA).
+- Endpoints: `POST /roster/prospects/{pid}/call-up`, `POST /roster/{pid}/send-down`. UI: a
+  Call Up button on the Prospects screen (gold-bordered when NHL-ready), and a "Send to
+  Minors" action in the player modal, shown only when the DTO's `can_send_down` says it's
+  legal so it never appears on a veteran.
+
+This is also the phase that gives Phase 2 the send-up/down primitives to attach cap stakes to.
+
+## Phase 2 — two-way contracts (pending)
+## Phase 3 — deeper undrafted market (pending)

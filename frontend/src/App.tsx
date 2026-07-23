@@ -365,7 +365,7 @@ export default function App() {
         <main className="app-main">{renderScreen()}</main>
       </div>
       {openPid != null && (
-        <PlayerModal pid={openPid} onClose={() => setOpenPid(null)} />
+        <PlayerModal pid={openPid} onClose={() => setOpenPid(null)} toast={toast} />
       )}
       {toastNode}
     </div>

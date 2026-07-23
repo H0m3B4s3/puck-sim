@@ -98,16 +98,27 @@ export function ProspectsScreen({
     queryFn: api.getProspects,
   });
 
+  const afterMove = (result: { ok: boolean; message: string }) => {
+    toast?.(result.message);
+    if (result.ok) {
+      queryClient.invalidateQueries({ queryKey: ["prospects"] });
+      queryClient.invalidateQueries({ queryKey: ["cap"] });
+      queryClient.invalidateQueries({ queryKey: ["roster"] });
+      queryClient.invalidateQueries({ queryKey: ["rosterLines"] });
+    }
+  };
+
   const signMutation = useMutation({
     mutationFn: (pid: number) => api.signProspect(pid),
     onSettled: () => setPendingPid(null),
-    onSuccess: (result) => {
-      toast?.(result.message);
-      if (result.ok) {
-        queryClient.invalidateQueries({ queryKey: ["prospects"] });
-        queryClient.invalidateQueries({ queryKey: ["cap"] });
-      }
-    },
+    onSuccess: afterMove,
+    onError: (e: Error) => toast?.(e.message),
+  });
+
+  const callUpMutation = useMutation({
+    mutationFn: (pid: number) => api.callUpProspect(pid),
+    onSettled: () => setPendingPid(null),
+    onSuccess: afterMove,
     onError: (e: Error) => toast?.(e.message),
   });
 
@@ -271,7 +282,31 @@ export function ProspectsScreen({
                           >
                             {pendingPid === p.pid ? "Signing…" : "Sign ELC"}
                           </button>
-                        ) : null}
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setPendingPid(p.pid);
+                              callUpMutation.mutate(p.pid);
+                            }}
+                            disabled={pendingPid !== null}
+                            title={
+                              p.nhl_ready
+                                ? "Add to the NHL roster"
+                                : "He can be called up, but he isn't NHL-ready yet"
+                            }
+                            style={{
+                              padding: "0.35rem 0.7rem",
+                              fontSize: "0.8rem",
+                              cursor: pendingPid !== null ? "wait" : "pointer",
+                              fontWeight: p.nhl_ready ? 600 : 400,
+                              borderColor: p.nhl_ready
+                                ? "var(--color-accent-gold)"
+                                : undefined,
+                            }}
+                          >
+                            {pendingPid === p.pid ? "Calling up…" : "Call Up"}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

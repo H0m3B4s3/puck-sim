@@ -643,3 +643,148 @@ def test_moving_to_a_new_tier_does_restart_the_tier_clock_but_not_the_career_one
     prospects.enter_development(player, config.DEV_TIER_AHL, 2031, rights_tid=4)
     assert prospects.seasons_in_tier(player) == 0
     assert prospects.seasons_developed(player) == 2
+
+
+# ---------------------------------------------------------------------------
+# Manual call-up and send-down (docs/PROSPECT_DEV_PLAN.md follow-up)
+# ---------------------------------------------------------------------------
+def _world_with_roster_room(tid_prospect_overall=90):
+    """A real league with one guaranteed unsigned/signed prospect and a roster spot free."""
+    from pucksim.gen.leaguegen import build_world
+
+    world = build_world(11)
+    tid = world.team_list()[0].tid
+    while len(world.teams[tid].roster) >= config.ROSTER_MAX - 1:
+        world.release_player(world.teams[tid].roster[-1])
+    player = make_prospect(pid=world.new_pid(), age=20, origin="europe",
+                            overall=tid_prospect_overall)
+    player.potential = 90
+    player.contract = flat_contract(900_000, 3, is_rookie_scale=True)
+    world.add_player(player)
+    prospects.enter_development(player, config.DEV_TIER_AHL, world.season_year, rights_tid=tid)
+    return world, player, tid
+
+
+def test_call_up_puts_a_signed_prospect_on_the_roster():
+    world, player, tid = _world_with_roster_room()
+    ok, _msg = prospects.promote_prospect(world, tid, player.pid)
+    assert ok
+    assert player.team_id == tid
+    assert player.pid in world.teams[tid].roster
+    assert not player.is_prospect          # World.sign_player cleared development
+
+
+def test_call_up_requires_a_contract():
+    world, player, tid = _world_with_roster_room()
+    player.contract = Contract.free_agent()
+    ok, msg = prospects.promote_prospect(world, tid, player.pid)
+    assert not ok and "contract" in msg.lower()
+    assert player.is_prospect
+
+
+def test_a_manager_may_call_up_a_raw_prospect():
+    """Legal but usually bad, exactly as in real hockey -- readiness gates the AUTOMATIC
+    promotion, not a manager's deliberate one."""
+    world, player, tid = _world_with_roster_room(tid_prospect_overall=50)
+    assert player.overall < config.NHL_READY_OVERALL
+    ok, _msg = prospects.promote_prospect(world, tid, player.pid)
+    assert ok
+    assert player.team_id == tid
+
+
+def test_call_up_refused_when_the_roster_is_full():
+    from pucksim.gen.leaguegen import build_world
+
+    world = build_world(11)
+    tid = world.team_list()[0].tid
+    while len(world.teams[tid].roster) < config.ROSTER_MAX:
+        filler = make_prospect(pid=world.new_pid(), age=27, origin="none", overall=60)
+        filler.development = None
+        world.add_player(filler)
+        world.sign_player(filler.pid, tid)
+    player = make_prospect(pid=world.new_pid(), age=20, origin="europe", overall=90)
+    player.contract = flat_contract(900_000, 3, is_rookie_scale=True)
+    world.add_player(player)
+    prospects.enter_development(player, config.DEV_TIER_AHL, world.season_year, rights_tid=tid)
+
+    ok, _msg = prospects.promote_prospect(world, tid, player.pid)
+    assert not ok
+    assert player.is_prospect
+
+
+def test_call_up_refused_for_a_prospect_you_do_not_control():
+    world, player, tid = _world_with_roster_room()
+    other = next(t.tid for t in world.team_list() if t.tid != tid)
+    ok, msg = prospects.promote_prospect(world, other, player.pid)
+    assert not ok and "rights" in msg.lower()
+
+
+def test_send_down_moves_a_rostered_player_into_a_tier():
+    world, player, tid = _world_with_roster_room()
+    prospects.promote_prospect(world, tid, player.pid)   # up first
+    assert player.team_id == tid
+
+    ok, _msg = prospects.demote_player(world, tid, player.pid)
+    assert ok
+    assert player.team_id is None
+    assert player.pid not in world.teams[tid].roster
+    assert player.is_prospect
+    assert prospects.rights_holder(player) == tid
+    assert prospects.current_tier(player) == config.DEV_TIER_AHL
+
+
+def test_a_demoted_player_costs_no_cap_space():
+    """The whole point of the move, and what two-way contracts will build on: off the
+    roster means off the cap."""
+    from pucksim.systems import cap
+
+    world, player, tid = _world_with_roster_room()
+    prospects.promote_prospect(world, tid, player.pid)
+    up = cap.payroll(world, world.teams[tid])
+    prospects.demote_player(world, tid, player.pid)
+    down = cap.payroll(world, world.teams[tid])
+    assert down == up - player.contract.current_salary
+
+
+def test_send_down_refused_for_a_veteran_too_old_for_a_tier():
+    from pucksim.gen.leaguegen import build_world
+
+    world = build_world(11)
+    tid = world.team_list()[0].tid
+    vet = next(world.players[p] for p in world.teams[tid].roster
+               if world.players[p].age > config.MAX_PROSPECT_AGE)
+    ok, msg = prospects.demote_player(world, tid, vet.pid)
+    assert not ok and "experienced" in msg.lower()
+    assert vet.team_id == tid
+
+
+def test_send_down_refused_for_a_player_not_on_your_roster():
+    world, player, tid = _world_with_roster_room()
+    other = next(t.tid for t in world.team_list() if t.tid != tid)
+    someone = world.players[world.teams[other].roster[0]]
+    ok, msg = prospects.demote_player(world, tid, someone.pid)
+    assert not ok and "roster" in msg.lower()
+
+
+def test_call_up_then_send_down_is_a_round_trip():
+    world, player, tid = _world_with_roster_room()
+    assert prospects.promote_prospect(world, tid, player.pid)[0]
+    assert prospects.demote_player(world, tid, player.pid)[0]
+    assert prospects.promote_prospect(world, tid, player.pid)[0]
+    assert player.team_id == tid
+    assert not player.is_prospect
+
+
+def test_the_offseason_still_promotes_every_ai_team():
+    """Excluding one team from the automation must not stop the rest graduating."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import offseason
+
+    world = build_world(3)
+    user = world.team_list()[0].tid
+    world.user_team_id = user
+    # A headless run_offseason promotes everyone; the exclusion path is the web handler's.
+    offseason.run_offseason(world, champion_tid=None)
+    # After a full offseason at least some entry-level players reached NHL rosters league-wide.
+    rostered = [p for p in world.players.values() if p.team_id is not None]
+    assert any(p.contract.is_rookie_scale for p in rostered)

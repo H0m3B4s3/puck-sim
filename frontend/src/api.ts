@@ -183,6 +183,11 @@ export interface SignProspectResult {
   prospect: Prospect | null;
 }
 
+export interface RosterMoveResult {
+  ok: boolean;
+  message: string;
+}
+
 export interface RosterResponse {
   players: PlayerSummary[];
 }
@@ -372,6 +377,7 @@ export interface PlayerDetailDTO {
   injury_games: number;
   draft: Record<string, unknown> | null;
   development: Record<string, unknown> | null;   // prospect tier/status, null if not developing
+  can_send_down: boolean;                        // may the user demote this rostered player now?
   season_stats: Record<string, unknown>;
   playoff_stats: Record<string, unknown> | null;
   rating_groups: Record<string, Array<{ key: string; label: string; value: number }>>;
@@ -690,6 +696,12 @@ export const api = {
 
   signProspect: (pid: number) =>
     post<SignProspectResult>(`/roster/prospects/${pid}/sign`),
+
+  callUpProspect: (pid: number) =>
+    post<RosterMoveResult>(`/roster/prospects/${pid}/call-up`),
+
+  sendDownPlayer: (pid: number) =>
+    post<RosterMoveResult>(`/roster/${pid}/send-down`),
 
   getRosterLines: () => get<RosterLinesResponse>("/roster/lines"),
 

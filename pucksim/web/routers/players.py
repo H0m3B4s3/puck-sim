@@ -76,6 +76,12 @@ class PlayerDetailDTO(BaseModel):
     # represents, not just his ratings. See docs/PROSPECT_DEV_PLAN.md.
     development: Optional[dict] = None
 
+    # Whether the user could send THIS player down to the minors right now: he's on the
+    # user's own roster, under contract, and still young enough for a development tier to
+    # take him. Drives the modal's "Send to Minors" action so it only appears when the move
+    # would actually be legal, rather than offering it and failing on a veteran.
+    can_send_down: bool = False
+
     # Stats
     season_stats: dict
     playoff_stats: Optional[dict] = None
@@ -205,6 +211,16 @@ def _build_development_dto(world: World, player: Player) -> Optional[dict]:
     }
 
 
+def _can_send_down(world: World, player: Player) -> bool:
+    """Could the user demote this rostered player to the minors right now?"""
+    from pucksim.systems import prospects
+
+    return (player.team_id is not None
+            and player.team_id == world.user_team_id
+            and player.contract.years_remaining > 0
+            and prospects.best_tier(player) is not None)
+
+
 @router.get("/{pid}", response_model=PlayerDetailDTO)
 def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDetailDTO:
     """Return detailed information for a single player.
@@ -261,6 +277,7 @@ def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDeta
         injury_games=injury_games,
         draft=dict(player.draft) if player.draft else None,
         development=_build_development_dto(world, player),
+        can_send_down=_can_send_down(world, player),
         season_stats=_build_season_stats_dto(player),
         playoff_stats=_build_playoff_stats_dto(player),
         rating_groups=_build_rating_groups_dto(player),

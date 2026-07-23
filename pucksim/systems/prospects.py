@@ -661,40 +661,99 @@ def sign_eligible_prospects(world: World, exclude_tid: Optional[int] = None) -> 
     return signed
 
 
-def promote_ready_prospects(world: World, exclude_tid: Optional[int] = None) -> List[int]:
-    """Graduate every prospect whose rating says he belongs in the NHL. Returns their pids.
+def promote_prospect(world: World, tid: int, pid: int) -> Tuple[bool, str]:
+    """Call one signed prospect up onto ``tid``'s NHL roster. Returns ``(ok, reason)``.
 
-    A prospect is promoted when three things line up: he's cleared
-    ``config.NHL_READY_OVERALL``, he's under contract (nobody joins an NHL roster without
-    one), and his team has the roster spot and cap room to take him. Best first, so the
-    scarce roster spots go to the best players.
+    The user-facing half of graduation: what ``promote_ready_prospects`` does automatically
+    for the AI, a manager does deliberately for one player through here. Three gates, the
+    same three the automatic path checks -- the team holds his rights, he's under contract
+    (nobody joins an NHL roster without one, and being under contract is also what makes his
+    cap hit real), and the team has the roster spot and cap room. Nothing about being
+    NHL-*ready* is enforced: a manager may call up a raw prospect if he wants to, exactly as
+    a real team can, and eat the roster spot and the bad hockey that follows.
 
-    Falling short of any of those is not a failure -- he simply develops another season.
-    That is the pressure valve that keeps this from re-creating the problem the whole
-    system exists to prevent: promotion is gated on being GOOD, not on having waited long
-    enough, so a flood of cheap sub-replacement teenagers can never reach NHL rosters
-    however many of them a team drafts.
+    ``World.sign_player`` clears the development record (its documented single choke point
+    for "reaching an NHL roster ends development"), so a promoted player is a player, not a
+    prospect, the instant this returns True.
     """
     from pucksim.models.team import auto_build_lines
     from pucksim.systems import cap
 
+    player = world.players.get(pid)
+    if player is None or not player.is_prospect:
+        return False, "Player is not a developing prospect."
+    if rights_holder(player) != tid:
+        return False, "Your team does not hold this player's rights."
+    if player.contract.years_remaining <= 0:
+        return False, "Sign him to an entry-level contract before calling him up."
+    team = world.teams[tid]
+    ok, reason = cap.can_sign(world, team, player.contract.current_salary)
+    if not ok:
+        return False, reason
+    world.sign_player(pid, tid)
+    auto_build_lines(team, world.players)
+    return True, f"{player.name} called up to the NHL roster."
+
+
+def demote_player(world: World, tid: int, pid: int) -> Tuple[bool, str]:
+    """Send one rostered player down to the minors. Returns ``(ok, reason)``.
+
+    The reverse of ``promote_prospect``, and the move two-way contracts will eventually give
+    a cap consequence (docs/PROSPECT_DEV_PLAN.md). He comes off the active roster and back
+    into a development tier with his team holding the rights, so he keeps his contract and
+    costs no cap space while he's down (``cap.payroll`` sums over ``Team.roster``, which he's
+    no longer on) -- the same reason a prospect's entry-level deal is free.
+
+    Gated on still being development-eligible: ``best_tier`` has to place him somewhere,
+    which for a signed player means the AHL up to its age ceiling. A veteran past that age
+    has nowhere to be sent and stays on the roster. NOTE this v1 has no waiver system (a real
+    NHL send-down of a non-exempt player must clear waivers first -- deferred with the rest
+    of the CBA to DEVPLAN Step 3.1), so any eligible player can be sent down freely here.
+    """
+    from pucksim.models.team import auto_build_lines
+
+    player = world.players.get(pid)
+    if player is None or player.team_id != tid:
+        return False, "Player is not on your roster."
+    if player.contract.years_remaining <= 0:
+        return False, "Player has no contract to carry to the minors."
+    tier = best_tier(player)
+    if tier is None:
+        return False, f"{player.name} is too experienced for the minors."
+    team = world.teams[tid]
+    world.release_player(pid)          # off the roster, team_id=None, into free_agents
+    enter_development(player, tier, world.season_year, rights_tid=tid)
+    auto_build_lines(team, world.players)
+    return True, f"{player.name} sent down to the {tier.upper()}."
+
+
+def promote_ready_prospects(world: World, exclude_tid: Optional[int] = None) -> List[int]:
+    """Graduate every prospect whose rating says he belongs in the NHL. Returns their pids.
+
+    The automatic, all-teams counterpart to ``promote_prospect`` -- run once per offseason so
+    the AI fills its own holes from its own system before shopping the market. A prospect is
+    promoted when three things line up: he's cleared ``config.NHL_READY_OVERALL``, he's under
+    contract, and his team has the roster spot and cap room. Best first, so the scarce roster
+    spots go to the best players.
+
+    Falling short of any of those is not a failure -- he simply develops another season.
+    That is the pressure valve that keeps this from re-creating the problem the whole system
+    exists to prevent: promotion is gated on being GOOD, not on having waited long enough, so
+    a flood of cheap sub-replacement teenagers can never reach NHL rosters however many of
+    them a team drafts.
+
+    ``exclude_tid`` keeps a team out of the automation -- passed the user's team by the web
+    offseason so a manager makes his own call-ups (via ``promote_prospect``) rather than
+    having the engine reach onto his roster for him.
+    """
     promoted: List[int] = []
     for team in world.team_list():
         if team.tid == exclude_tid:
             continue
-        changed = False
         for player in team_prospects(world, team.tid):
             if player.overall < NHL_READY_OVERALL:
                 continue
-            if player.contract.years_remaining <= 0:
-                continue
-            ok, _reason = cap.can_sign(world, team, player.contract.current_salary)
-            if not ok:
-                continue
-            leave_development(player)
-            world.sign_player(player.pid, team.tid)
-            promoted.append(player.pid)
-            changed = True
-        if changed:
-            auto_build_lines(team, world.players)
+            ok, _reason = promote_prospect(world, team.tid, player.pid)
+            if ok:
+                promoted.append(player.pid)
     return promoted
