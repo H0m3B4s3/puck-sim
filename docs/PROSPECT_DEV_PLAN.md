@@ -1,0 +1,155 @@
+# Prospect development round — plan
+
+**Started 2026-07-23.** Delivers DEVPLAN.md Step 3.2 ("NCAA + CHL feeder leagues") in its
+*abstract-tier* form, plus the ELC/slide rules and the undrafted/international pathways that
+step never scoped.
+
+## What exists today, and why it isn't enough
+
+`pucksim/systems/prospects.py` (88 lines, shipped in PR #61) is a deliberate stand-in. A drafted
+player who isn't NHL-ready is *reserved*: unsignable until a development window elapses, staggered
+purely by **draft position** (1st overall: 0 seasons, top ten: 1, rest of round one: 2, later
+rounds: 3). It is a status, not a place. It has no tiers, no ages, no contracts, no way for a
+prospect to develop faster or slower than the schedule his draft slot handed him, and no path into
+the league for anyone who wasn't drafted.
+
+Its own module docstring names the gaps: *"no distinction between a prospect in junior vs. the AHL
+vs. the NCAA vs. Europe."* That's what this round closes.
+
+The reason it exists at all is economic, and that constraint still binds. Before it shipped, every
+draft signed ~150 prospects (median overall 52 against a league median of 67) straight onto NHL
+rosters at entry-level prices; within three offseasons 41% of the league was on ELCs and payroll
+had fallen from ~94% of the cap to ~65%. **Every change in this round has to leave that guardrail
+standing.** Phase 7 re-runs the diagnostic that proved it.
+
+## Scope decision (user, 2026-07-23): abstract tiers, not simulated leagues
+
+CHL / NCAA / AHL / Europe are development **tiers** a prospect occupies. They drive age curves,
+growth rate, ELC eligibility, the slide rule, and who may be signed — but there is no schedule, no
+game simulation, no standings, and no junior/AHL box score. A prospect gets a synthetic season
+stat line each year for flavor, generated from ratings the same way `prospectgen._pre_draft_bio`
+already does.
+
+This is not a compromise shape; it's the shape that makes the asks cheap. Everything the user
+asked for — somewhere to develop, age curves, CHL-vs-NCAA assignment, ELC years not burning, the
+AHL for older prospects, a UDFA/international path — is a function of *which tier and how old*,
+not of *what happened in Tuesday's game in Moose Jaw*. Simulating those leagues can be layered on
+later (DEVPLAN Step 3.2's original framing) without changing any interface built here.
+
+## Where the state lives
+
+**`Player.development: Optional[Dict]`** — one JSON-native dict, `None` for anyone not in the
+development system. Follows the codebase's own established idiom for this exact situation
+(`Player.draft`, `Player.pre_draft`, `World.bracket`, `World.history` are all plain dicts owned by
+a single module, precisely so they round-trip through `to_dict`/`from_dict` with zero extra
+serialization code). `systems/prospects.py` is its sole owner.
+
+```python
+{
+  "tier": "chl",          # config.DEV_TIERS
+  "seasons": 2,           # total seasons developing, all tiers
+  "tier_seasons": 2,      # seasons in the CURRENT tier (drives NCAA's 4-year eligibility)
+  "rights_tid": 4,        # team holding this player's rights; None = undrafted/open (UDFA track)
+  "rights_expire": 2034,  # season year the rights lapse
+  "line": {...},          # synthetic season stat line, flavor only
+}
+```
+
+**No `Team.prospects` list.** Unlike `Team.roster` — which is dual-written with `Player.team_id`
+because lineups, chemistry, and per-shift lookups all iterate it — a reserve list has no ordering
+or lineup semantics and is never touched inside a game. `prospects.team_prospects(world, tid)`
+derives it from `development["rights_tid"]` in one pass over a few hundred players. One source of
+truth, no second sync invariant to keep.
+
+**`Contract.slide_years: int = 0`** — how many times this ELC has slid. Additive, defaults to 0 on
+old saves.
+
+A prospect keeps `team_id = None` (they are not on the NHL active roster, and `cap.payroll` sums
+over `Team.roster`, so a signed prospect's ELC correctly costs no cap space — matching the real
+rule that junior/AHL contracts don't count against the NHL cap). They stay in `world.free_agents`
+and continue to be filtered out at the five existing consumer sites via `is_reserved_prospect()`,
+which is preserved as the seam it already is.
+
+## The tiers
+
+| Tier | Ages | Requires | Notes |
+|---|---|---|---|
+| `chl` | 16–19 | `league_origin == "chl"` | Hard age-out at 20. **Permanently forfeits NCAA eligibility** (DESIGN.md point 11's mutual-exclusivity fork — the one real structural difference from basketball's overlapping college/G-League routes). |
+| `ncaa` | 18–23 | origin not `chl`; max 4 seasons in tier | Slower, steadier growth; four years of eligibility, then a college free agent. |
+| `ahl` | 20+ (18+ if not CHL-origin) | **a signed contract** | The pro-development tier, and the answer to "AHL for older prospects." A CHL-origin 18/19-year-old is barred — the real CHL–NHL transfer agreement sends him back to junior or keeps him in the NHL, nothing in between. |
+| `europe` | 18+ | `league_origin == "europe"` | Unsigned European draftees develop at home. |
+
+Age-out at `MAX_PROSPECT_AGE`: a player past it leaves the development system entirely and becomes
+an ordinary free agent, where `offseason.cull_free_agents` washes him out if he never became an NHL
+player. Most late-round picks never play a game; that's correct.
+
+## ELC rules (the "don't burn years" ask)
+
+Modeled on the real CBA, simplified only where the sim has no equivalent concept.
+
+- **Length by signing age**: 18–21 → 3 years, 22–23 → 2, 24 → 1, 25+ → not entry-level at all
+  (a normal market contract). Replaces today's flat `config.ROOKIE_CONTRACT_YEARS = 3`.
+- **The slide**: a player who is 18 or 19 at the start of a season and plays fewer than
+  `ELC_SLIDE_GAMES` (10) NHL games has his ELC **slide** — the year is not consumed, the deal
+  extends by a year, `slide_years` ticks. Because age advances one year per offseason, the 18-or-19
+  condition self-limits to **two slides**, exactly as the real rule does: sign at 18, slide twice,
+  the 3-year deal starts at 20.
+- **Where it bites**: `offseason.expire_contracts` today only walks `Team.roster`, so an
+  off-roster prospect's contract never advances at all — an accidental *infinite* slide. This round
+  makes the slide explicit and bounded, and makes a 20-year-old sitting in the AHL burn a year the
+  way he should.
+
+## Pathways in
+
+1. **Drafted** — `make_pick` assigns a tier from age + `league_origin` instead of handing out a
+   pick-number window. Rights expire (`PROSPECT_RIGHTS_YEARS`), so sitting on a prospect forever
+   isn't free.
+2. **Undrafted (UDFA)** — an undrafted prospect no longer just waits to be culled: he gets a tier
+   with `rights_tid = None`, keeps developing on his own, and **re-enters the next draft** if still
+   age-eligible. Develop past the NHL-ready bar while unclaimed and he's an open free agent any
+   team can sign. This is the "undrafted stud" story, and it's the main reason to give prospects
+   real age curves rather than a schedule.
+3. **International** — each offseason generates a small pool of age 22–27 European pros
+   (`league_origin = "europe"`) at real NHL-caliber ability, entering free agency directly. The
+   KHL/SHL import path.
+
+## Age curves
+
+`development._overall_delta` currently reads ice time from `Player.season` — a prospect has
+`gp == 0`, so **every prospect in the league develops at the same flat 0.6× rate** regardless of
+age, tier, or anything else. Tier becomes the ice-time/competition proxy instead:
+
+- Junior at 17–19 is productive; junior at 20 is stagnation (nothing left to learn there).
+- NCAA is steady but slower — fewer games, more strength work.
+- The AHL at 20–23 is the strongest pro development available.
+- Past a tier's age band, growth collapses. Prospects who stall lose potential earlier than the
+  current `PEAK_AGE_LOW + 1` convergence allows, so busts actually bust.
+
+All of it stays inside the existing conservation rule (`development.py`: growth's only source is an
+unmet gap to potential) and the project's `[[feedback_no_upweighting]]` principle — these are
+*rates of approach to an existing ceiling*, never a bonus above a rating.
+
+## Phases
+
+| # | Branch | Contents |
+|---|---|---|
+| 0 | `prospect-dev-plan` | This document. |
+| 1 | `prospect-model-layer` | `Player.development`, `Contract.slide_years`, `config` tier constants, serialization + old-save defaults. |
+| 2 | `prospect-tiers-elc` | `systems/prospects.py` rewritten: tier eligibility/assignment, ELC length + slide, rights expiry. `is_reserved_prospect` seam preserved. |
+| 3 | `prospect-dev-curves` | Tier- and age-aware development in `systems/development.py`. |
+| 4 | `prospect-draft-offseason` | `make_pick` assigns tiers; offseason signs ELCs, promotes the ready, ages out the rest. |
+| 5 | `prospect-udfa-intl` | Undrafted pathway + draft re-entry; international FA pool generator. |
+| 6 | `prospect-web-ui` | `/roster/prospects` + a Prospects screen; tier/ELC/ETA in the player modal. |
+| 7 | `prospect-balance` | 12-season sweep: payroll % of cap, ELC share, per-tier populations, best available FA. |
+
+## Done criteria
+
+- A drafted 18-year-old lands in the CHL or NCAA by origin, develops on a tier-appropriate curve,
+  signs an ELC that slides instead of burning, moves to the AHL at 20, and reaches the NHL when his
+  rating says he's ready — not when a lookup table says so.
+- An undrafted player can develop his way into the league.
+- Old saves load with `development = None` / `slide_years = 0` and behave exactly as before.
+- Phase 7's 12-season sweep holds payroll at 91–95% of the cap with no ELC-share blowup, i.e. PR
+  #61's economy survives intact.
+- Full pytest suite green (~783 tests before this round; the suite takes ~10 minutes — it is not
+  hung).
