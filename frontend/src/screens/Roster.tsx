@@ -3,7 +3,7 @@
 // Displays the user's team roster, allows editing of forward lines/D-pairs/goalies,
 // and provides controls for auto-building and tactics adjustment.
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import {
   useQuery,
   useMutation,
@@ -218,7 +218,12 @@ function RosterTable({
             {table.getRowModel().rows.map((row) => (
               <tr
                 key={row.id}
-                className={selectedPlayers.has(row.original.pid) ? "selected" : ""}
+                className={`roster-row--draggable${selectedPlayers.has(row.original.pid) ? " selected" : ""}`}
+                draggable
+                onDragStart={(e) =>
+                  setDragPayload(e, { pid: row.original.pid, from: null })
+                }
+                title="Drag onto a line or pair slot below to place this player"
               >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} style={{ width: `${cell.column.getSize()}px` }}>
@@ -256,113 +261,162 @@ function RosterTable({
 // backend would always reject with a 400 -- fixed during review, not a design choice worth
 // re-deriving.
 
+// --- Drag-and-drop plumbing ------------------------------------------------------------------
+//
+// Native HTML5 drag-and-drop (no new dependency). A drag carries the dragged player's pid plus
+// where he came FROM: a lineup slot, or null when dragged off the roster table (an unassigned
+// bench player). The drop handler needs the origin because, per the exact-size invariant above,
+// a drop can never leave a hole -- so a drag out of an occupied slot must SWAP with whatever is
+// in the target slot rather than simply moving.
+//
+// dataTransfer payloads are only readable in the `drop` handler (browsers blank getData() during
+// dragover for security), so dragover decides droppability from `types` alone.
+
+type SlotGroup = "lines" | "pairs";
+type SlotRef = { group: SlotGroup; row: number; slot: number };
+type DragPayload = { pid: number; from: SlotRef | null };
+
+const DRAG_MIME = "application/x-pucksim-player";
+
+function setDragPayload(e: React.DragEvent, payload: DragPayload) {
+  e.dataTransfer.setData(DRAG_MIME, JSON.stringify(payload));
+  e.dataTransfer.effectAllowed = "move";
+}
+
+function readDragPayload(e: React.DragEvent): DragPayload | null {
+  const raw = e.dataTransfer.getData(DRAG_MIME);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as DragPayload;
+  } catch {
+    return null;
+  }
+}
+
 function LineSlot({
-  label,
   player,
+  target,
   canPlace,
   onClick,
+  onDropPlayer,
 }: {
-  label: string;
   player: PlayerSummary | null;
+  target: SlotRef;
   canPlace: boolean;
   onClick: () => void;
+  onDropPlayer: (payload: DragPayload, target: SlotRef) => void;
 }) {
+  const [dragOver, setDragOver] = useState(false);
+  const classes = [
+    "line-slot",
+    canPlace ? "line-slot--placeable" : "",
+    player ? "line-slot--filled" : "",
+    dragOver ? "line-slot--dragover" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <button
-      type="button"
-      className={`line-slot${canPlace ? " line-slot--placeable" : ""}`}
+    <div
+      className={classes}
+      role="button"
+      tabIndex={0}
+      draggable={!!player}
+      onDragStart={(e) => {
+        if (player) setDragPayload(e, { pid: player.pid, from: target });
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const payload = readDragPayload(e);
+        if (payload) onDropPlayer(payload, target);
+      }}
       onClick={onClick}
-      disabled={!canPlace}
-      title={canPlace ? "Click to place the selected roster player here" : "Select a player in the roster table above to reassign this slot"}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      title={
+        player
+          ? `${player.name} -- drag onto another slot to swap, or select a roster player and click here to replace`
+          : "Drag a player here, or select one in the roster table and click"
+      }
     >
-      <div className="line-slot__label">{label}</div>
       {player ? (
         <div className="line-slot__player">
           <span className="line-slot__name">{player.name}</span>
           {player.role_label && (
-            <span
-              style={{
-                display: "block",
-                fontSize: "0.7rem",
-                color: "var(--color-muted)",
-                marginTop: "0.1rem",
-              }}
-            >
-              {player.role_label}
-            </span>
+            <span className="line-slot__role">{player.role_label}</span>
           )}
         </div>
       ) : (
         <div className="line-slot__empty">Empty</div>
       )}
-    </button>
-  );
-}
-
-function ForwardLine({
-  lineIndex,
-  players,
-  synergy,
-  canPlace,
-  onSlotClick,
-}: {
-  lineIndex: number;
-  players: PlayerSummary[];
-  synergy: LineSynergy | null;
-  canPlace: boolean;
-  onSlotClick: (slotIndex: number) => void;
-}) {
-  const positionLabels = ["LW", "C", "RW"];
-  return (
-    <div className="line-group">
-      <h4
-        className="line-group__title"
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}
-      >
-        <span>Line {lineIndex + 1}</span>
-        <SynergyBadge synergy={synergy} />
-      </h4>
-      <div className="line-slots">
-        {positionLabels.map((pos, i) => (
-          <LineSlot
-            key={i}
-            label={pos}
-            player={players[i] || null}
-            canPlace={canPlace}
-            onClick={() => onSlotClick(i)}
-          />
-        ))}
-      </div>
     </div>
   );
 }
 
-function DefensePair({
-  pairIndex,
-  players,
+// Position-across-the-top / units-down-the-side lineup grid: column headers are the positions
+// (LW/C/RW for forwards, LD/RD for defense) and each row is one line or pair. Note the LD/RD
+// labels are a display convention only -- the sim models D as one blended position and only cares
+// that a pair is opposite-handed (models/team.py d_pair_fit_bonus), not which side each plays.
+function LineupGrid({
+  group,
+  columnLabels,
+  rows,
+  rowLabel,
+  rowBadge,
   canPlace,
   onSlotClick,
+  onDropPlayer,
 }: {
-  pairIndex: number;
-  players: PlayerSummary[];
+  group: SlotGroup;
+  columnLabels: string[];
+  rows: PlayerSummary[][];
+  rowLabel: (index: number) => string;
+  rowBadge?: (index: number) => React.ReactNode;
   canPlace: boolean;
-  onSlotClick: (slotIndex: number) => void;
+  onSlotClick: (row: number, slot: number) => void;
+  onDropPlayer: (payload: DragPayload, target: SlotRef) => void;
 }) {
-  const positionLabels = ["D1", "D2"];
   return (
-    <div className="line-group">
-      <h4 className="line-group__title">Pair {pairIndex + 1}</h4>
-      <div className="line-slots">
-        {positionLabels.map((pos, i) => (
-          <LineSlot
-            key={i}
-            label={pos}
-            player={players[i] || null}
-            canPlace={canPlace}
-            onClick={() => onSlotClick(i)}
-          />
-        ))}
-      </div>
+    <div
+      className="lineup-grid"
+      style={{ ["--lineup-cols" as string]: columnLabels.length }}
+    >
+      <div className="lineup-grid__corner" aria-hidden="true" />
+      {columnLabels.map((label) => (
+        <div key={label} className="lineup-grid__colhead">
+          {label}
+        </div>
+      ))}
+      {rows.map((rowPlayers, r) => (
+        <Fragment key={`${group}-${r}`}>
+          <div className="lineup-grid__rowhead">
+            <span className="lineup-grid__rowname">{rowLabel(r)}</span>
+            {rowBadge?.(r)}
+          </div>
+          {columnLabels.map((_, c) => (
+            <LineSlot
+              key={c}
+              player={rowPlayers[c] || null}
+              target={{ group, row: r, slot: c }}
+              canPlace={canPlace}
+              onClick={() => onSlotClick(r, c)}
+              onDropPlayer={onDropPlayer}
+            />
+          ))}
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -437,6 +491,7 @@ function LinesEditor({
   onPlaceInLine,
   onPlaceInPair,
   onSetGoalie,
+  onDropPlayer,
 }: {
   lines: PlayerSummary[][];
   lineSynergies: (LineSynergy | null)[];
@@ -447,6 +502,7 @@ function LinesEditor({
   onPlaceInLine: (lineIndex: number, slotIndex: number) => void;
   onPlaceInPair: (pairIndex: number, slotIndex: number) => void;
   onSetGoalie: (which: "starter" | "backup") => void;
+  onDropPlayer: (payload: DragPayload, target: SlotRef) => void;
 }) {
   const canPlace = selectedPlayer !== null;
   return (
@@ -457,33 +513,33 @@ function LinesEditor({
       <p className="text-muted" style={{ marginBottom: "1.5rem", fontSize: "0.875rem" }}>
         {selectedPlayer
           ? `Selected: ${selectedPlayer.name} -- click a slot below to place them there.`
-          : "Select a player in the roster table above, then click a slot to place them."}
+          : "Drag players between slots to swap them, or drag one in from the roster table above. (You can also select a player above, then click a slot.)"}
       </p>
 
-      <div className="lines-grid">
-        {lines.map((line, i) => (
-          <ForwardLine
-            key={`line-${i}`}
-            lineIndex={i}
-            players={line}
-            synergy={lineSynergies[i] ?? null}
-            canPlace={canPlace}
-            onSlotClick={(slotIndex) => onPlaceInLine(i, slotIndex)}
-          />
-        ))}
-      </div>
+      <h4 className="lineup-section__title">Forwards</h4>
+      <LineupGrid
+        group="lines"
+        columnLabels={["LW", "C", "RW"]}
+        rows={lines}
+        rowLabel={(i) => `Line ${i + 1}`}
+        rowBadge={(i) => <SynergyBadge synergy={lineSynergies[i] ?? null} />}
+        canPlace={canPlace}
+        onSlotClick={(row, slot) => onPlaceInLine(row, slot)}
+        onDropPlayer={onDropPlayer}
+      />
 
-      <div className="lines-grid" style={{ marginTop: "2rem" }}>
-        {pairs.map((pair, i) => (
-          <DefensePair
-            key={`pair-${i}`}
-            pairIndex={i}
-            players={pair}
-            canPlace={canPlace}
-            onSlotClick={(slotIndex) => onPlaceInPair(i, slotIndex)}
-          />
-        ))}
-      </div>
+      <h4 className="lineup-section__title" style={{ marginTop: "2rem" }}>
+        Defense
+      </h4>
+      <LineupGrid
+        group="pairs"
+        columnLabels={["LD", "RD"]}
+        rows={pairs}
+        rowLabel={(i) => `Pair ${i + 1}`}
+        canPlace={canPlace}
+        onSlotClick={(row, slot) => onPlaceInPair(row, slot)}
+        onDropPlayer={onDropPlayer}
+      />
 
       <div className="goalies-section" style={{ marginTop: "2rem", paddingTop: "1.5rem", borderTop: "1px solid var(--color-border)" }}>
         <h4 className="text-display" style={{ fontSize: "1.25rem", marginBottom: "1rem" }}>
@@ -731,6 +787,64 @@ export function RosterScreen({
     setSelectedPlayer(null);
   };
 
+  // Drag-and-drop placement. The backend requires every line to be exactly 3 and every pair
+  // exactly 2, and rejects a duplicate player within either group -- so a drop can never leave a
+  // hole and can never clone anyone. That makes the rule simple:
+  //   * dragged player already in a lineup slot -> SWAP him with the target's occupant
+  //   * dragged player from the bench/roster table -> REPLACE the occupant (who becomes bench)
+  // A bench player who is nonetheless already assigned somewhere is resolved to his real slot
+  // first (findSlot below), so dragging a roster row onto a slot can't duplicate him either.
+  const handleDropPlayer = (payload: DragPayload, target: SlotRef) => {
+    const dragged = rosterData.players.find((p) => p.pid === payload.pid);
+    if (!dragged) return;
+
+    const newLines = currentLines.map((line) => [...line]);
+    const newPairs = currentPairs.map((pair) => [...pair]);
+    const gridFor = (group: SlotGroup) => (group === "lines" ? newLines : newPairs);
+
+    const findSlot = (pid: number): SlotRef | null => {
+      for (const group of ["lines", "pairs"] as SlotGroup[]) {
+        const grid = gridFor(group);
+        for (let r = 0; r < grid.length; r++) {
+          for (let s = 0; s < grid[r].length; s++) {
+            if (grid[r][s]?.pid === pid) return { group, row: r, slot: s };
+          }
+        }
+      }
+      return null;
+    };
+
+    const origin = payload.from ?? findSlot(dragged.pid);
+    if (
+      origin &&
+      origin.group === target.group &&
+      origin.row === target.row &&
+      origin.slot === target.slot
+    ) {
+      return; // dropped on itself
+    }
+
+    const occupant = gridFor(target.group)[target.row]?.[target.slot] ?? null;
+    // Moving OUT of a slot into an empty one would shrink the origin line below its required
+    // size, which the backend always rejects -- there is nothing to swap back. Refuse instead of
+    // firing a request that is guaranteed to 400.
+    if (origin && !occupant) return;
+
+    gridFor(target.group)[target.row][target.slot] = dragged;
+    if (origin && occupant) {
+      gridFor(origin.group)[origin.row][origin.slot] = occupant;
+    }
+
+    const touched = new Set<SlotGroup>([target.group]);
+    if (origin) touched.add(origin.group);
+
+    const body: ManualLinesEditRequest = {};
+    if (touched.has("lines")) body.lines = newLines.map((l) => l.map((p) => p.pid));
+    if (touched.has("pairs")) body.pairs = newPairs.map((p) => p.map((x) => x.pid));
+    updateLinesMutation.mutate(body);
+    setSelectedPlayer(null);
+  };
+
   const setGoalie = (which: "starter" | "backup") => {
     if (!selectedPlayerObj) return;
     if (which === "starter") {
@@ -779,6 +893,7 @@ export function RosterScreen({
           selectedPlayer={selectedPlayerObj}
           onPlaceInLine={placeInLine}
           onPlaceInPair={placeInPair}
+          onDropPlayer={handleDropPlayer}
           onSetGoalie={setGoalie}
         />
         <div style={{ marginTop: "1.5rem", display: "flex", gap: "1rem" }}>
