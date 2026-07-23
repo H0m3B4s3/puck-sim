@@ -570,3 +570,35 @@ def test_prospect_age_weights_cover_the_eligible_band():
     weights = [w for _, w in prospectgen._PROSPECT_AGE_WEIGHTS]
     assert weights == sorted(weights, reverse=True)      # younger is always likelier
     assert abs(sum(weights) - 1.0) < 1e-9
+
+
+def test_a_weak_prospect_still_produces_something():
+    """A junior forward who finishes a 58-game season with literally 0 G and 0 A reads as
+    broken data rather than as a weak prospect. The linear production formula goes negative
+    for a low-rated player, so the per-game rates are floored above zero."""
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=80)
+    skaters = [p for p in pool if not p.is_goalie]
+    for p in skaters:
+        for tier in config.DEV_TIERS:
+            line = prospectgen.development_season_line(rng, p, tier)
+            assert line["pts"] > 0, (p.position, p.overall, tier, line)
+
+
+def test_defencemen_score_less_than_forwards():
+    """A 62-overall college defenceman posting 14 goals in 25 games is a Hobey Baker
+    season, not a depth prospect's."""
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=200)
+
+    def goals_per_game(position):
+        players = [p for p in pool if p.position == position]
+        rates = []
+        for p in players:
+            line = prospectgen.development_season_line(rng, p, config.DEV_TIER_CHL)
+            rates.append(line["g"] / line["gp"])
+        return sum(rates) / len(rates)
+
+    assert goals_per_game("D") < goals_per_game("C")

@@ -16,15 +16,20 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from pucksim.config import MAX_CONTRACTS
 from pucksim.models.tactics import Tactics, SETTINGS as TACTICS_SETTINGS
 from pucksim.models.team import auto_build_lines, auto_build_special_teams_units, Team
+from pucksim.systems import prospects
 from pucksim.web.serializers import (
     PlayerSummaryDTO,
+    ProspectDTO,
+    ProspectPoolDTO,
     RosterDTO,
     RosterLinesDTO,
     RosterTacticsDTO,
     TacticsDTO,
     player_summary,
+    prospect_dto,
     roster_lines_response,
     roster_tactics_response,
 )
@@ -297,6 +302,74 @@ def put_roster_tactics(
     session_store.save(sid, world)
 
     return roster_tactics_response(team)
+
+
+# ---------------------------------------------------------------------------
+# GET /roster/prospects -- the user's development system
+# ---------------------------------------------------------------------------
+# Placed BEFORE the /{tid} route below for the same reason /lines and /tactics are: a
+# parameterized route would otherwise swallow the literal one.
+@router.get("/prospects", response_model=ProspectPoolDTO)
+def get_prospects(world: World = Depends(get_world)) -> ProspectPoolDTO:
+    """The user team's reserve list: everyone developing in junior, college, the AHL or
+    Europe whose rights it holds.
+
+    Derived rather than stored -- see ``systems/prospects.team_prospects`` for why there is
+    no ``Team.prospects`` list to keep in sync. Also reports the team's professional
+    contract count against ``config.MAX_CONTRACTS``, since entry-level deals cost no cap
+    space and the contract limit is the only thing that pushes back on signing everyone.
+    """
+    team = world.user_team
+    if team is None:
+        raise HTTPException(status_code=404, detail="no user team found")
+
+    pool = prospects.team_prospects(world, team.tid)
+    return ProspectPoolDTO(
+        prospects=[prospect_dto(world, p) for p in pool],
+        contracts_used=prospects.contracts_held(world, team.tid),
+        contracts_max=MAX_CONTRACTS,
+    )
+
+
+class SignProspectResponse(BaseModel):
+    """Result of an entry-level signing attempt."""
+    ok: bool
+    message: str
+    prospect: Optional[ProspectDTO] = None
+
+
+@router.post("/prospects/{pid}/sign", response_model=SignProspectResponse)
+def sign_prospect(
+    pid: int,
+    world: World = Depends(get_world),
+    sid: str = Depends(get_session_id),
+) -> SignProspectResponse:
+    """Sign one of the user team's prospects to an entry-level contract.
+
+    He does NOT join the NHL roster -- he stays where he is developing, now under
+    contract. That is the real mechanic: sign your 18-year-old first-rounder, send him back
+    to junior, and the deal slides instead of burning (``systems/prospects.tick_contract``).
+    Signing is also what unlocks the AHL, since a professional league needs a professional
+    contract, so an unsigned junior graduate has nowhere left to go.
+
+    Failures (wrong team, already signed, too old for entry level, at the 50-contract limit)
+    come back as ``ok: false`` with the reason rather than as an HTTP error -- they're
+    ordinary game states a manager needs to read, not exceptional conditions.
+    """
+    team = world.user_team
+    if team is None:
+        raise HTTPException(status_code=404, detail="no user team found")
+
+    ok, message = prospects.sign_elc(world, team.tid, pid)
+    if ok:
+        session_store.save(sid, world)
+    player = world.players.get(pid)
+    return SignProspectResponse(
+        ok=ok,
+        message=message,
+        prospect=prospect_dto(world, player) if player is not None and player.is_prospect
+        else None,
+    )
 
 
 # ---------------------------------------------------------------------------

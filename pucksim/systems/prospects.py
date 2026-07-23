@@ -90,6 +90,7 @@ from pucksim.config import (
     DEV_TIER_EUROPE,
     DEV_TIER_NCAA,
     DEV_TIERS,
+    ELC_DEADLINE_GRACE,
     ELC_MAX_AGE,
     ELC_SIGN_READINESS_GAP,
     ELC_SLIDE_GAMES,
@@ -626,11 +627,16 @@ def should_sign(world: World, player: Player) -> bool:
     Real teams sign a pick when he's ready to turn pro or when the deadline forces it, and
     let the rest develop unsigned.
     """
-    if player.scouted_potential() < NHL_READY_OVERALL:
-        return False
     if player.overall >= NHL_READY_OVERALL - ELC_SIGN_READINESS_GAP:
-        return True
-    return sign_or_lose_him(player)
+        return player.scouted_potential() >= NHL_READY_OVERALL
+    # At the deadline the alternative is losing him for nothing, so the bar to spend a slot
+    # drops (``config.ELC_DEADLINE_GRACE``). Real teams take that flyer, and it is what
+    # fills an AHL roster: most of the players on one are not going to be NHL regulars.
+    # Without the lower bar the AHL was the SMALLEST tier in the league, because every
+    # junior graduate his team merely liked walked away at 20.
+    if not sign_or_lose_him(player):
+        return False
+    return player.scouted_potential() >= NHL_READY_OVERALL - ELC_DEADLINE_GRACE
 
 
 def sign_eligible_prospects(world: World, exclude_tid: Optional[int] = None) -> int:

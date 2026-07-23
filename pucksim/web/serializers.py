@@ -24,6 +24,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
+from pucksim.config import MAX_CONTRACTS, NHL_READY_OVERALL
 from pucksim.models.league import points_for_game, standings
 from pucksim.models.player import Player
 from pucksim.models.team import Team
@@ -699,4 +700,118 @@ def boxscore_response(skater_box, goalie_box) -> tuple:
     return (
         {pid: SkaterBoxScoreDTO(**line) for pid, line in skater_box.items()},
         {pid: GoalieBoxScoreDTO(**line) for pid, line in goalie_box.items()},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prospects (docs/PROSPECT_DEV_PLAN.md)
+# ---------------------------------------------------------------------------
+# Display labels for the development tiers. Presentation only -- systems/prospects.py owns
+# the slugs; this is the one place they become words a person reads.
+TIER_LABELS = {
+    "chl": "Junior (CHL)",
+    "ncaa": "College (NCAA)",
+    "ahl": "AHL",
+    "europe": "Europe",
+}
+
+
+def tier_label(tier: Optional[str]) -> Optional[str]:
+    if not tier:
+        return None
+    return TIER_LABELS.get(tier, tier.upper())
+
+
+class ProspectDTO(BaseModel):
+    """One player in the development system, for a team's prospect pool screen."""
+    pid: int
+    name: str
+    position: str
+    age: int
+    overall: int
+    potential: int                       # scouted (fogged), never the true value
+    shoots: str
+
+    tier: str
+    tier_label: str
+    seasons: int                         # seasons developing, all tiers
+    tier_seasons: int                    # seasons in the current tier
+
+    # Contract / entry-level state. `signed` is what unlocks the AHL and what stops the
+    # rights clock mattering; `slide_years` is the headline ELC mechanic made visible.
+    signed: bool
+    salary: int
+    years_remaining: int
+    slide_years: int
+    slides_this_year: bool               # will his deal slide again rather than burn?
+
+    # Rights. None/0 for an undrafted prospect developing on his own.
+    rights_expire: Optional[int] = None
+    years_of_control: Optional[int] = None
+    undrafted: bool
+
+    nhl_ready: bool
+    line: dict                           # synthetic season stat line, flavor
+    status: str                          # one-line human summary of where he stands
+
+
+class ProspectPoolDTO(BaseModel):
+    """A team's whole reserve list, plus the contract-limit context it's spent against."""
+    prospects: List[ProspectDTO]
+    contracts_used: int
+    contracts_max: int
+
+
+def _prospect_status(player: Player, season_year: int) -> str:
+    """A one-line read on where this player stands, in the order a manager cares about.
+
+    Deliberately a single string rather than a pile of flags: the prospect list is scanned,
+    not studied, and "Ready for the NHL" or "Sign him or lose him" is what a manager
+    actually needs off a row.
+    """
+    from pucksim.systems import prospects as P
+
+    if player.overall >= NHL_READY_OVERALL:
+        if player.contract.years_remaining <= 0:
+            return "NHL-ready -- needs a contract"
+        return "Ready for the NHL"
+    if player.contract.years_remaining <= 0 and P.sign_or_lose_him(player):
+        return "Sign him or lose him"
+    if P.is_open_to_all(player, season_year):
+        return "Open to the league"
+    if P.can_slide(player):
+        return "Developing (contract slides)"
+    return "Developing"
+
+
+def prospect_dto(world: World, player: Player) -> ProspectDTO:
+    """Build a :class:`ProspectDTO`. ``player`` must be in the development system."""
+    from pucksim.systems import prospects as P
+
+    record = player.development or {}
+    tier = record.get("tier", "")
+    expire = record.get("rights_expire")
+    return ProspectDTO(
+        pid=player.pid,
+        name=player.name,
+        position=player.position,
+        age=player.age,
+        overall=player.overall,
+        potential=player.scouted_potential(),
+        shoots=player.shoots,
+        tier=tier,
+        tier_label=tier_label(tier) or "",
+        seasons=record.get("seasons", 0),
+        tier_seasons=record.get("tier_seasons", 0),
+        signed=player.contract.years_remaining > 0,
+        salary=player.contract.current_salary,
+        years_remaining=player.contract.years_remaining,
+        slide_years=player.contract.slide_years,
+        slides_this_year=P.can_slide(player),
+        rights_expire=expire,
+        years_of_control=(max(0, expire - world.season_year) if expire is not None else None),
+        undrafted=record.get("rights_tid") is None,
+        nhl_ready=player.overall >= NHL_READY_OVERALL,
+        line=dict(record.get("line") or {}),
+        status=_prospect_status(player, world.season_year),
     )

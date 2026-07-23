@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from pucksim.models.attributes import RATING_GROUPS, GOALIE_RATING_GROUPS
+from pucksim.models.player import Player
 from pucksim.models.world import World
 from pucksim.systems.legacy import resume as compute_resume
 from pucksim.web.serializers import role_label
@@ -68,6 +69,12 @@ class PlayerDetailDTO(BaseModel):
 
     # Draft history
     draft: Optional[dict] = None
+
+    # Development record, or None for anyone not in a feeder tier. Carries the same shape
+    # the Prospects screen uses (tier label, one-line status, entry-level slide state) so a
+    # manager opening a prospect from any screen sees where he is and what decision he
+    # represents, not just his ratings. See docs/PROSPECT_DEV_PLAN.md.
+    development: Optional[dict] = None
 
     # Stats
     season_stats: dict
@@ -177,6 +184,27 @@ def _build_playoff_stats_dto(player) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 # GET /players/{pid} -- player detail
 # ---------------------------------------------------------------------------
+def _build_development_dto(world: World, player: Player) -> Optional[dict]:
+    """Prospect status for the player modal, or None if he isn't developing."""
+    if not player.is_prospect:
+        return None
+    from pucksim.web.serializers import prospect_dto
+
+    dto = prospect_dto(world, player)
+    return {
+        "tier": dto.tier,
+        "tier_label": dto.tier_label,
+        "status": dto.status,
+        "seasons": dto.seasons,
+        "signed": dto.signed,
+        "slide_years": dto.slide_years,
+        "slides_this_year": dto.slides_this_year,
+        "years_of_control": dto.years_of_control,
+        "undrafted": dto.undrafted,
+        "line": dto.line,
+    }
+
+
 @router.get("/{pid}", response_model=PlayerDetailDTO)
 def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDetailDTO:
     """Return detailed information for a single player.
@@ -232,6 +260,7 @@ def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDeta
         injury=injury_description,
         injury_games=injury_games,
         draft=dict(player.draft) if player.draft else None,
+        development=_build_development_dto(world, player),
         season_stats=_build_season_stats_dto(player),
         playoff_stats=_build_playoff_stats_dto(player),
         rating_groups=_build_rating_groups_dto(player),
