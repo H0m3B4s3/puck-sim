@@ -277,6 +277,28 @@ teams — a league-wide spread that falls out of overall-weighted selection with
 **Goalies deliberately untouched:** elite goaltending is "reliably good year after year", which the
 existing `gk_consistency` rarity gate already encodes.
 
+### Follow-on UI: lineup grid + drag-and-drop (#60)
+
+Running the app after the round made the lineup editor the bottleneck for actually *using* the new
+archetypes, so the roster screen's line editor was reworked:
+
+- **Layout** — positions across the top, units down the side: LW/C/RW × Lines 1–4, LD/RD × Pairs
+  1–3, replacing the side-by-side line cards. Both grids share a fixed-width row-label column so
+  they align with each other.
+- **Drag-and-drop** — native HTML5 DnD, no new dependency. Slot→slot swaps (within a group or
+  across lines↔pairs), and roster-row→slot placement. The backend's exact-size + no-duplicate
+  invariants drive the rule: a player already in a slot **swaps** with the target's occupant, one
+  dragged from the bench **replaces** it, and a drop that would leave a hole is refused rather than
+  sent as a guaranteed 400. Click-to-place is retained as a keyboard/pointer-free fallback.
+- **Position display** — each slot shows the player's roster position beside his role, so a player
+  lined up away from his natural position is visible at a glance (flagged in the informational blue,
+  not the red reserved for genuinely bad; a listed secondary position counts as natural).
+
+Note the LD/RD headers are a **display convention only** — the sim models D as one blended position
+and only cares that a pair is opposite-handed (`models/team.py` `d_pair_fit_bonus`), not which side
+each plays. Splitting D into real LD/RD positions stays deliberately out of scope (see
+`models/attributes.py`'s POSITIONS comment).
+
 ## Explicitly out of scope (backlog — see `[[project_feature_backlog]]`)
 
 Farm system, pick-trading, RFA/negotiation, staff, finances, news, directed training, and the

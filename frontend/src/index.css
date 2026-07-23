@@ -851,25 +851,84 @@ button:disabled {
   gap: var(--space-sm);
 }
 
+/* Lineup grid: positions across the top (LW/C/RW, LD/RD), lines/pairs down the side.
+   --lineup-cols is set inline per grid (3 for forwards, 2 for defense). */
+.lineup-section__title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 var(--space-sm);
+}
+
+/* Fixed (not fractional) row-label column so the forwards grid and the defense grid line up with
+   each other -- a fr-based label column resolves to different widths at 3 vs 2 position columns. */
+.lineup-grid {
+  display: grid;
+  grid-template-columns: 132px repeat(var(--lineup-cols, 3), minmax(0, 1fr));
+  gap: var(--space-sm);
+  align-items: stretch;
+}
+
+.lineup-grid__colhead {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  text-align: center;
+  padding-bottom: 0.15rem;
+}
+
+.lineup-grid__rowhead {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.lineup-grid__rowname {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
 .line-slot {
   width: 100%;
   padding: var(--space-sm);
   background-color: var(--color-surface-card);
   border-radius: var(--radius-sm);
   border: 1px solid var(--color-border);
-  min-height: 40px;
+  min-height: 46px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: flex-start;
   text-align: left;
   font-family: inherit;
-  cursor: not-allowed;
+  cursor: pointer;
+  min-width: 0;
 }
 
-.line-slot--placeable {
-  cursor: pointer;
+.line-slot--filled {
+  cursor: grab;
+}
+
+.line-slot--filled:active {
+  cursor: grabbing;
+}
+
+.line-slot:hover {
   border-color: var(--color-accent-blue);
+}
+
+/* Active drop target: a dashed accent outline reads as "release here" without the solid fill
+   swallowing the player's name mid-drag. */
+.line-slot--dragover {
+  border: 1px dashed var(--color-accent-blue);
+  background-color: color-mix(in srgb, var(--color-accent-blue) 14%, var(--color-surface-card));
 }
 
 .line-slot--placeable:hover {
@@ -879,8 +938,56 @@ button:disabled {
 
 .line-slot--placeable:hover .line-slot__name,
 .line-slot--placeable:hover .line-slot__empty,
+.line-slot--placeable:hover .line-slot__role,
 .line-slot--placeable:hover .line-slot__label {
   color: var(--color-surface);
+}
+
+.line-slot__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.1rem;
+  min-width: 0;
+}
+
+.line-slot__pos {
+  font-family: var(--font-display);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-muted);
+  flex-shrink: 0;
+}
+
+/* Player lined up somewhere other than his natural (or secondary) position. Informational, not an
+   error -- the line builder legitimately does this all the time -- so it uses the same blue as the
+   notable-but-fine synergy pills rather than the red reserved for genuinely bad. */
+.line-slot__pos--off {
+  color: var(--color-accent-blue);
+}
+
+.line-slot__role {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.roster-row--draggable {
+  cursor: grab;
+}
+
+.roster-row--draggable:active {
+  cursor: grabbing;
+}
+
+@media (max-width: 640px) {
+  .lineup-grid {
+    grid-template-columns: 74px repeat(var(--lineup-cols, 3), minmax(0, 1fr));
+    gap: 0.4rem;
+  }
 }
 
 .line-slot__label {
@@ -894,14 +1001,16 @@ button:disabled {
 
 .line-slot__player {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-sm);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
   font-size: 0.9rem;
+  width: 100%;
+  min-width: 0;
 }
 
 .line-slot__name {
-  flex: 1;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
