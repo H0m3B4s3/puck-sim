@@ -129,11 +129,17 @@ _RARE_ARCHETYPE_CHANCE = 0.025
 # blowing a single rating far off the target overall before skewing.
 _BASELINE_SPREAD = 6.0
 
-# Calibration pass: how many uniform-nudge iterations to run trying to bring
-# the post-skew overall back near the target, and how close is "close enough"
-# to stop early. Deliberately coarse -- not an exact solver, per DEVPLAN.md.
-_CALIBRATION_ITERATIONS = 2
+# Calibration pass: how many nudge iterations to run trying to bring the post-skew overall back
+# near the target, and how close is "close enough" to stop early. Deliberately coarse -- not an
+# exact solver, per DEVPLAN.md.
+_CALIBRATION_ITERATIONS = 3
 _CALIBRATION_TOLERANCE = 1
+
+# Fraction of the residual gap applied to the archetype's SKEWED ratings in the calibration
+# fallback (see _build_calibrated_ratings). Only used, and only in each skew's own direction, when
+# the neutral ratings have saturated against the clamp and the overall is still off-target -- a
+# reduced, direction-limited nudge so identity is never reversed. Provisional/tunable.
+_CALIBRATION_SKEWED_FRACTION = 0.5
 
 # Handedness split (DEVPLAN.md: "roughly real-NHL-plausible weighting is
 # fine"). Provisional/illustrative default, not sourced from real handedness
@@ -333,16 +339,37 @@ def _build_calibrated_ratings(rng: Rng, position: str, target_overall: int,
         if key in ratings:
             ratings[key] = clamp_rating(ratings[key] + delta)
 
-    # 3. Calibrate: a couple of coarse uniform-nudge passes toward the target
-    # overall. Not an exact solver -- just enough that the final overall lands
-    # reasonably close, while archetype skews still leave a genuine signature.
+    # 3. Skew-preserving calibration. Nudge the archetype's NON-skewed ("neutral") ratings toward
+    # the target overall and leave the skewed ratings frozen, so signature peaks stay peaks and
+    # holes stay holes -- rather than a uniform shift that (because peaks saturate at the 99 clamp
+    # and only the holes have headroom) systematically fills in an elite player's intended
+    # weaknesses. That old washout made a 93-overall "Grinder" come out with real offense.
+    #
+    # Fallback: if the neutral ratings saturate against the clamp and the overall is still off, apply
+    # a REDUCED nudge to the skewed ratings too -- but only in each skew's OWN direction (deepen a
+    # hole, sharpen a peak), never the reverse, so identity is preserved monotonically. A heavily
+    # negative-skew archetype (e.g. a grinder) may therefore land BELOW a very high target: its
+    # offensive holes cap the achievable overall, which is correct (a true grinder is not a 93) and
+    # Phase D re-centers league rates for the resulting distribution.
+    skewed_keys = {k for k in archetype.skews if k in ratings}
+    neutral = [r for r in all_ratings if r not in skewed_keys]
     for _ in range(_CALIBRATION_ITERATIONS):
-        current = overall(position, ratings)
-        gap = target_overall - current
+        gap = target_overall - overall(position, ratings)
         if abs(gap) <= _CALIBRATION_TOLERANCE:
             break
-        for r in all_ratings:
+        for r in neutral:
             ratings[r] = clamp_rating(ratings[r] + gap)
+        gap = target_overall - overall(position, ratings)
+        if abs(gap) <= _CALIBRATION_TOLERANCE:
+            break
+        partial = int(round(gap * _CALIBRATION_SKEWED_FRACTION))
+        if partial:
+            for key in skewed_keys:
+                delta = archetype.skews[key]
+                # Skew-consistent only: a positive skew may rise further, a negative skew may drop
+                # further; the opposite move (which would erase the signature) is skipped.
+                if (delta > 0 and partial > 0) or (delta < 0 and partial < 0):
+                    ratings[key] = clamp_rating(ratings[key] + partial)
 
     return ratings
 
