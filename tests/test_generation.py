@@ -326,6 +326,55 @@ def test_every_normal_archetype_has_a_selection_weight():
 
 
 # ---------------------------------------------------------------------------
+# Skew-preserving calibration (archetype-refresh round, Phase C) -- archetype identity must
+# survive at high target overall, where the old uniform-nudge calibration filled in the intended
+# holes (a 93-overall "Grinder" ended up with real offense). Averaged over many samples so the
+# assertions are on the stable mean, not one noisy baseline draw.
+# ---------------------------------------------------------------------------
+def _mean_composites(archetype_name, position, target, n=300):
+    rng = Rng(seed=900)
+    arch = next(a for a in attr.ARCHETYPES if a.name == archetype_name)
+    sums = {c: 0.0 for c in attr.COMPOSITES}
+    ovr = 0.0
+    for _ in range(n):
+        ratings = playergen._build_calibrated_ratings(rng, position, target, attr.ALL_RATINGS, arch)
+        cc = attr.all_composites(ratings)
+        for c in attr.COMPOSITES:
+            sums[c] += cc[c]
+        ovr += attr.overall(position, ratings)
+    return {c: sums[c] / n for c in attr.COMPOSITES}, ovr / n
+
+
+def test_calibration_preserves_grinder_identity_at_high_overall():
+    comps, _ = _mean_composites("Grinder", "C", target=90)
+    offense = max(comps["scoring"], comps["playmaking_c"])
+    # A 90-target grinder must still read as defense/physical-first, not a scoring line -- the
+    # defensive composites clearly outrank the offensive ones (this failed under the old washout).
+    assert comps["defense"] - offense >= 8.0
+    assert comps["physicality"] - offense >= 6.0
+
+
+def test_calibration_preserves_sniper_identity_at_high_overall():
+    comps, _ = _mean_composites("Sniper", "C", target=90)
+    # An elite sniper's shooting stays elite and clearly outranks his (intentionally weak) defense.
+    assert comps["scoring"] >= 93.0
+    assert comps["scoring"] - comps["defense"] >= 8.0
+
+
+def test_calibration_lands_near_target_for_balanced_archetype():
+    # A near-neutral archetype (few, small skews) should still calibrate right onto the target.
+    _, ovr = _mean_composites("Two-Way Forward", "C", target=82)
+    assert abs(ovr - 82) <= 2.0
+
+
+def test_calibration_does_not_inflate_negative_skew_archetype_above_target():
+    # The fix must never fill a grinder's holes to overshoot the target -- its offensive holes cap
+    # the achievable overall, so it lands at or below target, never above.
+    _, ovr = _mean_composites("Grinder", "C", target=88)
+    assert ovr <= 88 + 1.5
+
+
+# ---------------------------------------------------------------------------
 # gk_consistency generation-time rarity gate (DEVPLAN.md Step 2.7, "Generation-time rarity
 # correlation") -- companion mechanism to the rare-archetype gate above, on a DIFFERENT axis
 # (a single rating's resample band, not archetype choice). See
