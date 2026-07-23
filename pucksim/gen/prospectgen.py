@@ -120,29 +120,32 @@ def _random_prospect_target_overall(rng: Rng) -> int:
     return int(round(max(_PROSPECT_OVERALL_FLOOR, min(90, value))))
 
 
-def _pre_draft_bio(rng: Rng, player: Player) -> Dict:
-    """A plausible pre-draft per-game production line, inferred from ratings.
+def production_line(rng: Rng, player: Player, level: str, games: int,
+                     difficulty: float = 1.0) -> Dict:
+    """A plausible season stat line for ``player`` at ``level``, inferred from his ratings.
 
-    Flavor only -- like HoopR's equivalent, this is generated *from* the
-    player's already-rolled ratings purely for a scouting-report display; it
-    is never read back into generation or pick-order logic (prospect_rank()
-    below reads overall/scouted_potential directly, the same signal the
-    engine itself trusts).
+    Flavor only -- like HoopR's equivalent, this is generated *from* already-rolled ratings
+    purely for display; nothing reads it back into generation, pick order, or development
+    (``prospect_rank()`` uses overall/scouted_potential directly, the same signal the engine
+    itself trusts). It exists so a prospect's season is something you can look at rather
+    than a rating quietly ticking up in the dark.
+
+    ``difficulty`` scales production down for tougher competition: the formulas below are
+    calibrated to major junior at 1.0, so the AHL (where a junior star's point totals fall
+    off a cliff) passes something much lower. See ``TIER_STAT_LINE``.
     """
     r = player.ratings
-    is_goalie = player.is_goalie
-    games = rng.randint(28, 68)
-    level = rng.weighted_one([lv for lv, _ in _PRE_DRAFT_LEVELS],
-                              [w for _, w in _PRE_DRAFT_LEVELS])
-    if is_goalie:
-        # Goalie bio: save pct/GAA inferred from goalie ratings, on a
-        # junior/college-hockey-plausible scale (a bit softer competition
-        # than the NHL, so save pct runs a little higher / GAA a little
-        # lower than typical NHL numbers for an equivalently-rated goalie).
+    if player.is_goalie:
+        # Save pct/GAA inferred from goalie ratings on a junior-hockey-plausible scale (a
+        # bit softer competition than the NHL, so save pct runs a little higher / GAA a
+        # little lower than typical NHL numbers for an equivalently-rated goalie). Harder
+        # competition cuts both ways here, unlike a skater's counting stats: it pushes save
+        # percentage down and goals-against up.
         reflexes = r.get("reflexes", 60)
         positioning = r.get("positioning", 60)
-        save_pct = 0.895 + (reflexes + positioning - 120) * 0.0009 + rng.gauss(0, 0.006)
-        gaa = 3.4 - (reflexes + positioning - 120) * 0.012 + rng.gauss(0, 0.25)
+        edge = (reflexes + positioning - 120) * difficulty
+        save_pct = 0.895 + edge * 0.0009 + rng.gauss(0, 0.006)
+        gaa = 3.4 - edge * 0.012 + rng.gauss(0, 0.25)
         return {
             "level": level,
             "gp": games,
@@ -154,10 +157,10 @@ def _pre_draft_bio(rng: Rng, player: Player) -> Dict:
     playmaking = r.get("playmaking", 60)
     puck_handling = r.get("puck_handling", 60)
     scoring = 0.55 * shot_accuracy + 0.45 * puck_handling
-    ppg = 0.35 + (scoring - 55) * 0.018 + rng.gauss(0, 0.10)
-    apg = 0.30 + (playmaking - 55) * 0.020 + rng.gauss(0, 0.10)
-    goals = max(0, ppg) * games
-    assists = max(0, apg) * games
+    ppg = (0.35 + (scoring - 55) * 0.018 + rng.gauss(0, 0.10)) * difficulty
+    apg = (0.30 + (playmaking - 55) * 0.020 + rng.gauss(0, 0.10)) * difficulty
+    goals = max(0.0, ppg) * games
+    assists = max(0.0, apg) * games
     return {
         "level": level,
         "gp": games,
@@ -165,6 +168,38 @@ def _pre_draft_bio(rng: Rng, player: Player) -> Dict:
         "a": round(assists, 1),
         "pts": round(goals + assists, 1),
     }
+
+
+# Per-tier season shape for a developing prospect: (display label, games, difficulty).
+# Games are real season lengths -- college's ~36 against junior's ~68 is a genuine
+# difference and part of why college develops more slowly. Difficulty is relative to major
+# junior at 1.0: an AHL season is where a junior scoring star's point totals collapse,
+# which is the single most recognizable fact about the step up to pro. PROVISIONAL.
+TIER_STAT_LINE = {
+    "chl": ("CHL", 68, 1.00),
+    "ncaa": ("NCAA", 36, 0.85),
+    "ahl": ("AHL", 72, 0.62),
+    "europe": ("Europe", 52, 0.78),
+}
+
+
+def development_season_line(rng: Rng, player: Player, tier: str) -> Dict:
+    """One season's synthetic stat line for a prospect developing in ``tier``.
+
+    Called once per prospect per offseason by ``systems/prospects.py`` and stored on his
+    development record, so the UI can show what he actually did this year instead of only
+    that his overall moved.
+    """
+    level, games, difficulty = TIER_STAT_LINE.get(tier, ("Junior", 60, 0.9))
+    played = max(1, int(round(games * rng.uniform(0.55, 1.0))))   # injuries, healthy scratches
+    return production_line(rng, player, level, played, difficulty)
+
+
+def _pre_draft_bio(rng: Rng, player: Player) -> Dict:
+    """The pre-draft scouting line: one season's production at the level he came up in."""
+    level = rng.weighted_one([lv for lv, _ in _PRE_DRAFT_LEVELS],
+                              [w for _, w in _PRE_DRAFT_LEVELS])
+    return production_line(rng, player, level, rng.randint(28, 68))
 
 
 def generate_prospect(pid: int, rng: Rng, position: str = None) -> Player:

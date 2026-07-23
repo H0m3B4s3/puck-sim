@@ -347,7 +347,11 @@ def enter_development(player: Player, tier: str, season_year: int,
         "rights_tid": rights_tid,
         "rights_expire": (season_year + rights_years_for(tier)
                           if rights_tid is not None else None),
-        "line": {},
+        # Seed the season line from his scouting report. ``line`` means "his most recent
+        # completed season", and for a player entering the system on draft day that IS his
+        # pre-draft year -- so the record is never blank while a team looks at a pick it
+        # just made. ``advance_prospects`` overwrites it every offseason after that.
+        "line": dict(player.pre_draft) if player.pre_draft else {},
     }
     return player.development
 
@@ -548,12 +552,21 @@ def advance_prospects(world: World) -> dict:
     Runs AFTER ``offseason.age_and_retire`` -- the opposite of
     ``tick_prospect_contracts`` above, and for the mirror-image reason: where a player goes
     next is decided by how old he is NOW, not by how old he was last season.
+
+    Also refreshes each surviving prospect's synthetic season line, so a team can look at
+    what its 19-year-old actually did in junior this year rather than only that his overall
+    moved. Flavor, never read back into any rule.
     """
+    from pucksim.gen.prospectgen import development_season_line
+
     counts = {outcome: 0 for outcome in ADVANCE_OUTCOMES}
     for player in list(world.players.values()):
         if not player.is_prospect:
             continue
         counts[advance_development(player, world.season_year)] += 1
+        if player.development is not None:
+            player.development["line"] = development_season_line(
+                world.rng, player, player.development["tier"])
     return counts
 
 

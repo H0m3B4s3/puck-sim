@@ -480,3 +480,67 @@ def test_same_seed_produces_identical_draft_outcome():
                 for pid, tid in world.draft_class.picks_made]
 
     assert _run() == _run()
+
+
+# ---------------------------------------------------------------------------
+# Synthetic development stat lines (docs/PROSPECT_DEV_PLAN.md Phase 3)
+# ---------------------------------------------------------------------------
+def test_development_season_line_is_shaped_by_the_tier():
+    """A prospect's season should be something you can look at, not just a rating ticking
+    up in the dark."""
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    player = prospectgen.generate_prospect(next(counter), rng)
+    line = prospectgen.development_season_line(rng, player, config.DEV_TIER_CHL)
+    assert line["level"] == "CHL"
+    assert 0 < line["gp"] <= prospectgen.TIER_STAT_LINE["chl"][1]
+    assert ("pts" in line) or ("save_pct" in line)
+
+
+def test_the_ahl_is_a_harder_league_to_score_in_than_junior():
+    """The single most recognizable fact about the step up to pro: a junior scoring star's
+    point totals collapse in the AHL."""
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    skater = next(p for p in prospectgen.generate_prospect_pool(
+        rng, lambda: next(counter), size=40) if not p.is_goalie)
+
+    def per_game(tier):
+        totals = []
+        for _ in range(30):
+            line = prospectgen.development_season_line(rng, skater, tier)
+            totals.append(line["pts"] / line["gp"])
+        return sum(totals) / len(totals)
+
+    assert per_game(config.DEV_TIER_AHL) < per_game(config.DEV_TIER_CHL)
+
+
+def test_every_tier_has_a_stat_line_shape():
+    """development_season_line falls back silently on an unknown tier, so a tier added
+    without a shape would produce plausible-looking nonsense rather than an error."""
+    assert set(prospectgen.TIER_STAT_LINE) == set(config.DEV_TIERS)
+    for _label, games, difficulty in prospectgen.TIER_STAT_LINE.values():
+        assert games > 0
+        assert 0 < difficulty <= 1.0
+
+
+def test_a_goalie_line_gets_goalie_stats_at_every_tier():
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    goalie = prospectgen.generate_prospect(next(counter), rng, position="G")
+    for tier in config.DEV_TIERS:
+        line = prospectgen.development_season_line(rng, goalie, tier)
+        assert "save_pct" in line and "gaa" in line
+        assert 0.87 <= line["save_pct"] <= 0.945
+
+
+def test_prospects_carry_a_season_line_after_an_offseason():
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import offseason, prospects
+
+    world = build_world(3)
+    offseason.run_offseason(world, champion_tid=None)
+    offseason.run_offseason(world, champion_tid=None)
+
+    lines = [p.development["line"] for p in prospects.developing_players(world)]
+    assert lines and all(line.get("gp", 0) > 0 for line in lines)
