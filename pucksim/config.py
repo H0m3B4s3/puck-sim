@@ -259,11 +259,15 @@ REBOUND_QUALITY_BONUS = 0.32
 # constant-pivot, tune-against-the-sweep approach as BLOCK_RATING_PIVOT / HIT_SEPARATION_PIVOT
 # above. Symmetric clamp so an extreme group can't invert or trivialize a chance. PROVISIONAL/
 # TUNABLE (verify goals/game against a multi-seed season sweep in Phase 5).
-DEF_SUPPRESSION_PIVOT = 70.0     # measured shot-weighted mean of the defending on-ice group's
-                                  # def_value in-sim (~70.1), so an average defense is a no-op and
-                                  # league goals/game is conserved. NOT the raw all-skater rating
-                                  # mean (~67): shots cluster toward certain defensive alignments,
-                                  # which pulls the shot-weighted mean up -- measure, don't assume.
+DEF_SUPPRESSION_PIVOT = 69.3     # measured shot-weighted mean of the defending on-ice group's
+                                  # def_value in-sim, so an average defense is a no-op and league
+                                  # goals/game is conserved. NOT the raw all-skater rating mean
+                                  # (~67): shots cluster toward certain defensive alignments, which
+                                  # pulls the shot-weighted mean up -- measure, don't assume.
+                                  # RE-MEASURED for the archetype-refresh round (was 70.0): the new
+                                  # archetype distribution + skew-preserving calibration moved the
+                                  # shot-weighted mean to ~69.27, and leaving the pivot above the
+                                  # true mean handed every average shot a small free quality bonus.
 DEF_SUPPRESSION_SLOPE = 0.004    # shot-quality points removed per defensive-value point above pivot
 DEF_SUPPRESSION_MAX = 0.12       # symmetric clamp on the total quality delta (either direction)
 
@@ -276,7 +280,11 @@ DEF_SUPPRESSION_MAX = 0.12       # symmetric clamp on the total quality delta (e
 # play changes chance quality without upweighting anyone). Centered on SYNERGY_PIVOT_SCORE (the
 # measured shot-weighted mean synergy of real auto-built lines in-sim) so an average line is a
 # no-op and league goals/game is conserved. PROVISIONAL/TUNABLE (verify against the Phase 5 sweep).
-SYNERGY_PIVOT_SCORE = 0.69       # measured shot-weighted mean forward-line synergy in-sim
+SYNERGY_PIVOT_SCORE = 0.70       # measured shot-weighted mean forward-line synergy in-sim.
+                                  # RE-MEASURED for the archetype-refresh round (was 0.69): putting
+                                  # real finishers/playmakers in the top-six raised the mean to
+                                  # ~0.700, so the old pivot was crediting the average line for
+                                  # synergy it now has by default.
 SYNERGY_QUALITY_SLOPE = 0.22     # shot-quality points added per synergy-score point above pivot
 SYNERGY_QUALITY_MAX = 0.09       # symmetric clamp on the total quality delta (either direction)
 
