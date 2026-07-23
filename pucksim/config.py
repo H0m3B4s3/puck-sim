@@ -498,6 +498,14 @@ SALARY_CAP_BASE = 82_500_000
 # placeholder in the same ballpark, not the exact CBA figure.
 MINIMUM_SALARY = 800_000
 
+# How much of a buried ONE-WAY contract's salary escapes the cap when its player is sent to
+# the minors (`systems/cap.py`, `models/contract.py::two_way`). Real NHL shelters roughly a
+# minimum-salary-plus-$1.15M slice, so burying a cheap one-way deal is full relief and
+# burying an expensive one still leaves most of it on the books. A two-way deal shelters the
+# whole thing (it pays a minor-league salary down there), so this only ever applies to
+# one-way contracts. PROVISIONAL, in the real rule's ballpark.
+BURY_CAP_SHELTER = 1_950_000
+
 # Cap ceiling for a single contract's annual salary, expressed as a fraction of
 # the league cap (real NHL's "20% max AAV" rule of thumb -- no player may sign
 # for more than 20% of the cap in a single season). Applied in

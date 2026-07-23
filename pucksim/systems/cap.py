@@ -41,10 +41,11 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from pucksim.config import (CAP_GROWTH_RATE, MAX_CONTRACT_YEARS, MAX_SALARY_CAP_FRACTION,
-                             MINIMUM_SALARY, ROSTER_MAX, ROSTER_MIN, ROOKIE_SALARY_CAP_FRACTION,
-                             SALARY_CURVE, SALARY_CURVE_REFERENCE_CAP, TRADE_MATCH_BUFFER,
-                             VETERAN_DISCOUNT, VETERAN_DISCOUNT_AGE, YOUNG_UPSIDE_PREMIUM)
+from pucksim.config import (BURY_CAP_SHELTER, CAP_GROWTH_RATE, MAX_CONTRACT_YEARS,
+                             MAX_SALARY_CAP_FRACTION, MINIMUM_SALARY, ROSTER_MAX, ROSTER_MIN,
+                             ROOKIE_SALARY_CAP_FRACTION, SALARY_CURVE, SALARY_CURVE_REFERENCE_CAP,
+                             TRADE_MATCH_BUFFER, VETERAN_DISCOUNT, VETERAN_DISCOUNT_AGE,
+                             YOUNG_UPSIDE_PREMIUM)
 from pucksim.models.player import Player
 from pucksim.models.team import Team, team_salary
 from pucksim.models.world import World
@@ -53,9 +54,41 @@ from pucksim.models.world import World
 # ---------------------------------------------------------------------------
 # Payroll / cap space
 # ---------------------------------------------------------------------------
+def buried_cap_hit(world: World, team: Team) -> int:
+    """Cap charged by ``team``'s ONE-WAY contracts buried in the minors.
+
+    A player a team sent down (``systems/prospects.demote_player``) is off the active roster,
+    so ``team_salary`` no longer counts him. For a two-way contract that's the end of it -- it
+    pays a minor-league salary down there and shelters the whole cap hit. A one-way contract
+    is different: it pays the same salary in the minors, so the real cap only shelters a fixed
+    slice of it (``config.BURY_CAP_SHELTER``) and the rest stays on the team's books. That is
+    exactly why a bad long-term one-way deal is a cap anchor a team can't just demote away --
+    and, now that the user can demote players, the reason signing depth to two-way deals is a
+    real choice.
+
+    Sums ``max(0, salary - BURY_CAP_SHELTER)`` over every off-roster, under-contract,
+    one-way player whose rights this team holds. Cheap one-way deals bury fully (they fall
+    below the shelter); expensive ones leave most of their salary charged.
+    """
+    from pucksim.systems.prospects import team_prospects
+
+    total = 0
+    for player in team_prospects(world, team.tid):
+        contract = player.contract
+        if contract.years_remaining <= 0 or contract.two_way:
+            continue
+        total += max(0, contract.current_salary - BURY_CAP_SHELTER)
+    return total
+
+
 def payroll(world: World, team: Team) -> int:
-    """Team's current total salary counting toward the cap."""
-    return team_salary(team, world.players)
+    """Team's current total salary counting toward the cap.
+
+    The active roster (``team_salary``) plus any buried one-way contracts the team has in the
+    minors (``buried_cap_hit``) -- see that function for why a demoted one-way player still
+    costs cap space while a two-way one doesn't.
+    """
+    return team_salary(team, world.players) + buried_cap_hit(world, team)
 
 
 def cap_space(world: World, team: Team) -> int:

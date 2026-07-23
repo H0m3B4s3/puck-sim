@@ -98,6 +98,7 @@ export function PlayerModal({
         {/* Bio line: age, shoots, salary, team, injury */}
         <div style={{ fontSize: "0.9rem", color: "var(--color-muted)", marginBottom: "0.5rem" }}>
           Age {player.age} · {player.shoots} · {formatSalary(player.salary)} × {player.years_remaining}y
+          {player.years_remaining > 0 && ` · ${player.two_way ? "two-way" : "one-way"}`}
           {player.team_abbrev && ` · ${player.team_abbrev}`}
           {player.team_name && ` (${player.team_name})`}
         </div>
@@ -179,6 +180,11 @@ export function PlayerModal({
             >
               {sendDownMutation.isPending ? "Sending down…" : "Send to Minors"}
             </button>
+            <span style={{ marginLeft: "0.6rem", fontSize: "0.8rem", color: "var(--color-muted)" }}>
+              {player.bury_cap_hit > 0
+                ? `one-way — ${formatSalary(player.bury_cap_hit)} stays on the cap`
+                : "frees his full cap hit"}
+            </span>
           </div>
         ) : null}
 

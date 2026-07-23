@@ -357,5 +357,25 @@ manager makes his own moves:
 
 This is also the phase that gives Phase 2 the send-up/down primitives to attach cap stakes to.
 
-## Phase 2 — two-way contracts (pending)
+## Phase 2 — two-way contracts (done)
+
+The one-way/two-way split `contract.py` had deferred. The insight that made it meaningful in
+an abstract-tier world without simulated minor-league salaries: a player off the NHL roster
+already costs $0 cap (he's not on `Team.roster`), so what was *missing* wasn't the two-way
+case — it was the one-way **penalty**.
+
+- `Contract.two_way` (defaults to one-way, the norm for a rostered NHL player). ELCs are set
+  two-way by rule in `sign_elc` and `freeagency.sign_rookie`.
+- `cap.buried_cap_hit(world, team)` sums, over the team's off-roster under-contract **one-way**
+  players, `max(0, salary - config.BURY_CAP_SHELTER)`. `cap.payroll` now adds it. So a two-way
+  deal buried in the minors frees the whole hit; a one-way deal frees only the sheltered slice,
+  which is what makes a bad long-term one-way contract a cap anchor a team can't simply demote
+  away.
+- The aggregate economy is untouched — the buried hit only bites on a *demotion*, and only the
+  user demotes (the headless offseason and the AI never do), so the sweep is unchanged
+  (verified: 0 buried hits league-wide after 6 headless seasons, payroll still ~94%).
+- UI: the player modal shows one-way/two-way on the bio line, and the Send to Minors affordance
+  says whether the move "frees his full cap hit" or leaves `$Xm … on the cap`. Verified live: a
+  two-way ELC prospect frees his full hit; a one-way $5.2M veteran would leave $3.25M buried.
+
 ## Phase 3 — deeper undrafted market (pending)

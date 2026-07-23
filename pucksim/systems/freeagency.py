@@ -221,7 +221,7 @@ def sign_rookie(world: World, team: Team, pid: int, years: int = None) -> Tuple[
     if not ok:
         return False, reason
     player.contract = flat_contract(salary, years, is_rookie_scale=True,
-                                     signed_year=world.season_year)
+                                     signed_year=world.season_year, two_way=True)
     world.sign_player(pid, team.tid)
     auto_build_lines(team, world.players)
     return True, "Signed to an entry-level contract."

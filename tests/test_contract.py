@@ -161,3 +161,17 @@ def test_flat_contract_factory_non_guaranteed_and_rookie_scale():
     assert c.guaranteed == [False, False, False]
     assert c.is_rookie_scale is True
     assert c.signed_year == 2026
+
+
+def test_two_way_flag_round_trips_and_defaults_to_one_way():
+    """Two-way contracts (docs/PROSPECT_DEV_PLAN.md follow-up). Default is one-way, the norm
+    for a rostered NHL player and the safe default for a save written before the field."""
+    one_way = flat_contract(4_000_000, 3)
+    assert one_way.two_way is False
+    two_way = flat_contract(900_000, 3, is_rookie_scale=True, two_way=True)
+    assert two_way.two_way is True
+
+    assert Contract.from_dict(two_way.to_dict()).two_way is True
+    legacy = flat_contract(4_000_000, 3).to_dict()
+    del legacy["two_way"]
+    assert Contract.from_dict(legacy).two_way is False

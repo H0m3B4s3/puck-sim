@@ -50,6 +50,15 @@ class Contract:
     # this counter (see config's ELC_SLIDE_MAX_AGE comment). Meaningless on a non-rookie-
     # scale deal, and defaults to 0 on saves written before the rule existed.
     slide_years: int = 0
+    # One-way vs. two-way, which only matters once a player is OFF the NHL roster (sent to
+    # the minors -- see systems/prospects.demote_player). A two-way deal pays a minor-league
+    # salary down there and costs the NHL cap nothing; a one-way deal pays the same either
+    # way, so burying it in the minors gives only partial cap relief (systems/cap.py's
+    # buried-hit math). Entry-level contracts are two-way by rule; established NHL players
+    # sign one-way, which is why a bad long-term one-way deal is a real cap anchor a team
+    # can't simply demote away. Defaults to one-way (False) -- the norm for a rostered NHL
+    # player, and the safe default for saves written before the field existed.
+    two_way: bool = False
 
     # -- queries ------------------------------------------------------------
     @property
@@ -92,6 +101,7 @@ class Contract:
             "years_with_team": self.years_with_team,
             "is_rookie_scale": self.is_rookie_scale,
             "slide_years": self.slide_years,
+            "two_way": self.two_way,
         }
 
     @classmethod
@@ -105,6 +115,7 @@ class Contract:
             years_with_team=d.get("years_with_team", 0),
             is_rookie_scale=d.get("is_rookie_scale", False),
             slide_years=d.get("slide_years", 0),
+            two_way=d.get("two_way", False),
         )
 
     @classmethod
@@ -114,12 +125,13 @@ class Contract:
 
 def flat_contract(salary: int, years: int, guaranteed: bool = True, *,
                    is_rookie_scale: bool = False, signed_year: int = 0,
-                   years_with_team: int = 0) -> Contract:
+                   years_with_team: int = 0, two_way: bool = False) -> Contract:
     """Build a simple, fully-guaranteed-by-default flat-salary contract.
 
     Used for quick test fixtures and simple draftee/UFA signings. ``is_rookie_scale``
     is a generic flag (not full NHL ELC rules) that can later drive simplified
-    entry-level pay for draftees.
+    entry-level pay for draftees. ``two_way`` defaults to one-way (see ``Contract.two_way``);
+    ``systems/prospects.sign_elc`` passes ``two_way=True`` since entry-level deals are.
     """
     return Contract(
         salaries=[salary] * years,
@@ -127,4 +139,5 @@ def flat_contract(salary: int, years: int, guaranteed: bool = True, *,
         signed_year=signed_year,
         is_rookie_scale=is_rookie_scale,
         years_with_team=years_with_team,
+        two_way=two_way,
     )
