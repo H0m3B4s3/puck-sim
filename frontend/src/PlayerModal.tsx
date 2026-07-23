@@ -103,6 +103,41 @@ export function PlayerModal({ pid, onClose }: { pid: number; onClose: () => void
           </div>
         )}
 
+        {/* Development record -- where a prospect is, and what decision he represents. */}
+        {player.development ? (
+          <div
+            style={{
+              fontSize: "0.85rem",
+              marginBottom: "1rem",
+              padding: "0.6rem 0.75rem",
+              border: "1px solid var(--color-border)",
+              borderRadius: "6px",
+            }}
+          >
+            <strong>{(player.development as any).tier_label}</strong>
+            <span className="text-muted">
+              {" "}
+              · season {(player.development as any).seasons + 1}
+              {(player.development as any).undrafted ? " · undrafted" : ""}
+            </span>
+            <div style={{ marginTop: "0.25rem" }}>
+              {(player.development as any).status}
+              {(player.development as any).slides_this_year ? (
+                <span style={{ color: "var(--color-accent-blue)" }}>
+                  {" "}
+                  — entry-level year does not burn
+                </span>
+              ) : null}
+              {(player.development as any).slide_years > 0 ? (
+                <span className="text-muted">
+                  {" "}
+                  (slid {(player.development as any).slide_years}x)
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         {/* Season stat tiles (skater vs goalie) */}
         {player.season_stats && (
           <div className="statRow">

@@ -249,6 +249,25 @@ Phase 5 added two more, both found by measuring rather than by testing:
    excludes the amateur tiers, so he reaches the market at 22–23 when his eligibility ends,
    which is exactly when real college free agents become worth something.
 
+Phase 6 (the UI) then found a sixth, and it was the most consequential of the round:
+
+6. **Prospects arrived from the generator already under contract.** `playergen` prices a
+   contract onto every player it makes, because its main caller (`leaguegen`) is building an
+   already-running league where everyone is signed. `prospectgen`'s docstring had claimed
+   since Step 2.5 that a prospect has "no team/contract assigned yet" — it just wasn't true.
+   The effect was to silently disable the entire entry-level system: `is_elc_eligible`
+   refuses a player who is already signed, so **no prospect could ever be given a real ELC,
+   nothing ever slid**, and the AHL's "you must be under professional contract to turn pro"
+   gate opened for free on an $800k deal nobody agreed to. Measured after one offseason: 77
+   teenaged prospects holding one- and two-year minimum contracts with a `signed_year` of 0.
+   Only visible because the Prospects screen puts contract state in a column.
+
+Fixing it dropped signed prospects from ~400 to ~85 and made the AHL the smallest tier,
+since teams now let most junior graduates walk. `ELC_DEADLINE_GRACE` restores the real
+behaviour: at the sign-or-lose-him deadline the bar to spend a contract slot drops, because
+the alternative is losing him for nothing. That's what fills an AHL roster — most of whose
+players are never going to be NHL regulars.
+
 ## The one trade-off left open
 
 The undrafted-domestic (UDFA) route is structurally complete — undrafted players develop,

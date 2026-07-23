@@ -140,6 +140,49 @@ export interface LineSynergy {
   label: string;
 }
 
+// --- prospects (docs/PROSPECT_DEV_PLAN.md) --------------------------------
+
+export interface Prospect {
+  pid: number;
+  name: string;
+  position: string;
+  age: number;
+  overall: number;
+  potential: number;          // scouted, fogged -- never the true ceiling
+  shoots: string;
+
+  tier: string;               // chl | ncaa | ahl | europe
+  tier_label: string;
+  seasons: number;
+  tier_seasons: number;
+
+  signed: boolean;
+  salary: number;
+  years_remaining: number;
+  slide_years: number;
+  slides_this_year: boolean;
+
+  rights_expire: number | null;
+  years_of_control: number | null;
+  undrafted: boolean;
+
+  nhl_ready: boolean;
+  line: Record<string, number | string>;
+  status: string;
+}
+
+export interface ProspectPool {
+  prospects: Prospect[];
+  contracts_used: number;
+  contracts_max: number;
+}
+
+export interface SignProspectResult {
+  ok: boolean;
+  message: string;
+  prospect: Prospect | null;
+}
+
 export interface RosterResponse {
   players: PlayerSummary[];
 }
@@ -328,6 +371,7 @@ export interface PlayerDetailDTO {
   injury: string | null;
   injury_games: number;
   draft: Record<string, unknown> | null;
+  development: Record<string, unknown> | null;   // prospect tier/status, null if not developing
   season_stats: Record<string, unknown>;
   playoff_stats: Record<string, unknown> | null;
   rating_groups: Record<string, Array<{ key: string; label: string; value: number }>>;
@@ -642,6 +686,11 @@ export const api = {
   getRoster: () => get<RosterResponse>("/roster"),
 
   /** GET /roster/lines -- current lines, pairs, and special-teams units. */
+  getProspects: () => get<ProspectPool>("/roster/prospects"),
+
+  signProspect: (pid: number) =>
+    post<SignProspectResult>(`/roster/prospects/${pid}/sign`),
+
   getRosterLines: () => get<RosterLinesResponse>("/roster/lines"),
 
   /** POST /roster/lines/auto -- auto-build lines and optional special teams. */

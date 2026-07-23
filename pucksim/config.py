@@ -650,6 +650,15 @@ ELC_SLIDE_GAMES = 10
 # forces the decision.
 ELC_SIGN_READINESS_GAP = 8
 
+# How much the "do we believe in him?" bar drops at the sign-or-lose-him deadline. Spending
+# a contract slot on a maybe is a much easier call when the alternative is losing him for
+# nothing, and real teams take that flyer routinely -- it is what fills an AHL roster, most
+# of whose players are never going to be NHL regulars.
+#
+# Without it the AHL was the smallest of the four tiers, because every junior graduate his
+# team merely liked walked away at 20 rather than turning pro.
+ELC_DEADLINE_GRACE = 6
+
 # ---------------------------------------------------------------------------
 # How fast a prospect develops, by tier (`systems/development.py`)
 # ---------------------------------------------------------------------------

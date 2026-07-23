@@ -37,6 +37,7 @@ from typing import Dict, List
 
 from pucksim.config import DEFAULT_LEAGUE_ORIGIN, ROOKIE_AGE_RANGE
 from pucksim.gen.playergen import generate_goalie, generate_skater
+from pucksim.models.contract import Contract
 from pucksim.models.attributes import SKATER_POSITIONS
 from pucksim.models.player import Player
 from pucksim.rng import Rng
@@ -160,6 +161,12 @@ def _random_prospect_target_overall(rng: Rng) -> int:
     return int(round(max(_PROSPECT_OVERALL_FLOOR, min(90, value))))
 
 
+# Production floors and the defenceman adjustment for `production_line` below.
+_MIN_PER_GAME = 0.04          # ~2-3 points over a full junior season, not zero
+_D_GOAL_SHARE = 0.30
+_D_ASSIST_SHARE = 0.75
+
+
 def production_line(rng: Rng, player: Player, level: str, games: int,
                      difficulty: float = 1.0) -> Dict:
     """A plausible season stat line for ``player`` at ``level``, inferred from his ratings.
@@ -197,10 +204,18 @@ def production_line(rng: Rng, player: Player, level: str, games: int,
     playmaking = r.get("playmaking", 60)
     puck_handling = r.get("puck_handling", 60)
     scoring = 0.55 * shot_accuracy + 0.45 * puck_handling
-    ppg = (0.35 + (scoring - 55) * 0.018 + rng.gauss(0, 0.10)) * difficulty
-    apg = (0.30 + (playmaking - 55) * 0.020 + rng.gauss(0, 0.10)) * difficulty
-    goals = max(0.0, ppg) * games
-    assists = max(0.0, apg) * games
+    # Defencemen score far less than forwards at every level, and get proportionally more of
+    # what they do produce from assists. Without this a 62-overall college defenceman was
+    # posting 14 goals in 25 games, which is a Hobey Baker season, not a depth prospect's.
+    goal_share, assist_share = (_D_GOAL_SHARE, _D_ASSIST_SHARE) if player.position == "D" else (1.0, 1.0)
+    ppg = (0.35 + (scoring - 55) * 0.018 + rng.gauss(0, 0.10)) * difficulty * goal_share
+    apg = (0.30 + (playmaking - 55) * 0.020 + rng.gauss(0, 0.10)) * difficulty * assist_share
+    # Floored at a small positive rate rather than zero. The linear formula goes negative
+    # for a low-rated player, and a junior forward who finishes a 58-game season with
+    # literally 0 goals and 0 assists reads as broken data rather than as a weak prospect --
+    # even the last man on a junior roster scores a few.
+    goals = max(_MIN_PER_GAME, ppg) * games
+    assists = max(_MIN_PER_GAME, apg) * games
     return {
         "level": level,
         "gp": games,
@@ -263,6 +278,18 @@ def generate_prospect(pid: int, rng: Rng, position: str = None) -> Player:
     else:
         player = generate_skater(pid, rng, age, target_overall, position=position)
 
+    # playergen prices a contract onto every player it makes, because its main caller
+    # (leaguegen) is building an already-running league where everyone is signed. A draft
+    # prospect is the exception: he is unsigned by definition, and this function's contract
+    # has always said so ("no team/contract assigned yet") without it actually being true.
+    #
+    # Not cosmetic -- it silently disabled the entry-level system. Arriving under contract
+    # meant `prospects.is_elc_eligible` refused him (you can't sign a player who's already
+    # signed), so no prospect could ever be given a real ELC, nothing ever slid, and the
+    # AHL's "you must be under professional contract to turn pro" gate opened for free on a
+    # $800k deal nobody agreed to. Measured after one offseason: 77 teenaged prospects
+    # holding one- and two-year minimum contracts with a signed_year of 0.
+    player.contract = Contract.free_agent()
     player.pre_draft = _pre_draft_bio(rng, player)
     # Origin follows the level the bio just rolled, so the two can never disagree --
     # a prospect whose scouting report reads "CHL" is a major-junior player for
