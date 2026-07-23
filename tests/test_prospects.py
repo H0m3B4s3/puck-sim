@@ -170,16 +170,29 @@ def test_college_rights_run_longer_than_junior_rights():
             > junior.development["rights_expire"])
 
 
-def test_an_undrafted_prospect_is_reserved_until_he_reaches_free_agency_age():
-    """The undrafted pathway: he keeps developing while too young to be signed, then hits
-    the open market -- which is the entire point of giving prospects real age curves."""
-    player = make_prospect(age=18, origin="ncaa")
+def test_an_undrafted_player_in_school_is_not_on_the_market_however_old_he_is():
+    """A college player isn't a free agent while he's enrolled. Leaving this clause out was
+    a real leak: being open to the market also means being exposed to cull_free_agents,
+    which keeps only the top ~80 free agents by CURRENT overall -- so a promising
+    21-year-old was deleted from the league in the middle of his junior year, for not yet
+    being finished."""
+    player = make_prospect(age=config.UDFA_FREE_AGENT_AGE + 1, origin="ncaa")
     prospects.enter_development(player, config.DEV_TIER_NCAA, 2030, rights_tid=None)
+    assert not prospects.is_open_to_all(player, 2030)
     assert prospects.is_reserved_prospect(player, 2030)
 
-    player.age = config.UDFA_FREE_AGENT_AGE
+
+def test_an_undrafted_player_out_of_school_reaches_the_open_market():
+    """The undrafted pathway's payoff, and the entire point of giving prospects real age
+    curves: an unclaimed player who develops into somebody becomes a genuine prize."""
+    player = make_prospect(age=config.UDFA_FREE_AGENT_AGE, origin="europe")
+    prospects.enter_development(player, config.DEV_TIER_EUROPE, 2030, rights_tid=None)
     assert prospects.is_open_to_all(player, 2030)
     assert not prospects.is_reserved_prospect(player, 2030)
+
+    younger = make_prospect(age=config.UDFA_FREE_AGENT_AGE - 1, origin="europe")
+    prospects.enter_development(younger, config.DEV_TIER_EUROPE, 2030, rights_tid=None)
+    assert prospects.is_reserved_prospect(younger, 2030)
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +476,8 @@ def test_a_full_offseason_puts_a_draft_class_into_the_tiers():
     assert tiers <= set(config.DEV_TIERS)
     assert len(tiers) >= 2, f"every prospect landed in the same tier: {tiers}"
     assert summary["development"]
-    assert all(prospects.rights_holder(p) is not None for p in placed)
+    # Drafted players belong to somebody; undrafted ones develop unowned (the UDFA track).
+    assert any(prospects.rights_holder(p) is not None for p in placed)
 
 
 def test_prospects_survive_several_offseasons_and_reach_the_nhl():
@@ -481,3 +495,151 @@ def test_prospects_survive_several_offseasons_and_reach_the_nhl():
     on_elc = [p for p in rostered if p.contract.is_rookie_scale]
     assert on_elc, "no entry-level player reached an NHL roster in five seasons"
     assert prospects.developing_players(world), "the development tiers emptied out"
+
+
+# ---------------------------------------------------------------------------
+# The undrafted (UDFA) pathway
+# ---------------------------------------------------------------------------
+def test_an_undrafted_prospect_keeps_developing_with_nobody_owning_him():
+    """Going unpicked is not a dead end. Before this, an undrafted player sat in the
+    free-agent pool until cull_free_agents deleted him for being raw."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import draft_system
+
+    world = build_world(5)
+    draft_system.setup_draft(world, rounds=1, pool_size=60)
+    draft_system.auto_complete_draft(world)
+    draft_system.undrafted_to_free_agency(world)
+
+    unowned = [p for p in prospects.developing_players(world)
+               if prospects.rights_holder(p) is None]
+    assert unowned, "nobody went undrafted into development"
+    for p in unowned:
+        assert p.development["rights_expire"] is None    # nobody's clock is running
+        assert p.team_id is None
+
+
+def test_an_undrafted_teenager_goes_back_on_the_board_next_year():
+    """Real NHL re-entry: passed over at 18, eligible again at 19."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import draft_system
+
+    world = build_world(5)
+    draft_system.setup_draft(world, rounds=1, pool_size=60)
+    draft_system.auto_complete_draft(world)
+    draft_system.undrafted_to_free_agency(world)
+
+    young = [p for p in prospects.developing_players(world)
+             if prospects.rights_holder(p) is None and p.age < config.UDFA_FREE_AGENT_AGE]
+    assert young
+    candidates = draft_system.reentry_candidates(world)
+    assert {p.pid for p in young} == set(candidates)
+
+
+def test_an_unclaimed_player_who_ages_out_reaches_the_open_market_instead():
+    """The two rules are one rule seen from opposite sides: below UDFA_FREE_AGENT_AGE he
+    is re-drafted, at it he is signable by anyone, and there's no gap where he's neither."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import draft_system
+
+    world = build_world(5)
+    player = make_prospect(pid=world.new_pid(), age=config.UDFA_FREE_AGENT_AGE,
+                            origin="europe")
+    world.add_player(player)
+    prospects.enter_development(player, config.DEV_TIER_EUROPE, world.season_year,
+                                 rights_tid=None)
+
+    assert player.pid not in draft_system.reentry_candidates(world)
+    assert prospects.is_open_to_all(player, world.season_year)
+    assert not prospects.is_reserved_prospect(player, world.season_year)
+
+
+def test_reaching_an_nhl_roster_ends_development_by_any_route():
+    """"On an NHL roster" and "still developing in the minors" must never both be true.
+    Enforced at World.sign_player, the documented roster-membership seam, so every signing
+    path gets it -- graduating, being signed as an undrafted free agent, emergency recall."""
+    from pucksim.gen.leaguegen import build_world
+
+    world = build_world(5)
+    tid = world.team_list()[0].tid
+    player = make_prospect(pid=world.new_pid(), age=20, origin="europe")
+    world.add_player(player)
+    prospects.enter_development(player, config.DEV_TIER_EUROPE, world.season_year,
+                                 rights_tid=None)
+    assert player.is_prospect
+
+    world.sign_player(player.pid, tid)
+    assert not player.is_prospect
+    assert player.development is None
+
+
+# ---------------------------------------------------------------------------
+# The international pathway
+# ---------------------------------------------------------------------------
+def test_international_free_agents_arrive_finished_not_as_prospects():
+    """A 22-27-year-old European pro is past the development system entirely -- he skips
+    it and goes straight onto the market, which is what makes him a different kind of
+    acquisition from a prospect."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import freeagency
+
+    world = build_world(5)
+    pids = freeagency.open_international_market(world)
+    assert pids
+    for pid in pids:
+        player = world.players[pid]
+        assert not player.is_prospect
+        assert player.league_origin == "europe"
+        assert player.age > config.MAX_PROSPECT_AGE - 4
+        assert player.team_id is None
+        assert pid in world.free_agents
+        assert not prospects.is_reserved_prospect(player, world.season_year)
+
+
+def test_imports_are_signable_at_market_rate_not_entry_level():
+    """No draft rights, no rookie scale -- a good one costs what he's worth."""
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import cap, freeagency
+
+    world = build_world(5)
+    pids = freeagency.open_international_market(world)
+    best = max(pids, key=lambda pid: world.players[pid].overall)
+    player = world.players[best]
+    assert cap.market_salary(player, world.salary_cap) > cap.rookie_salary(world.salary_cap)
+    assert player in freeagency.fa_wave_pool(world) or freeagency.natural_wave(player) >= 0
+
+
+def test_the_import_market_reopens_every_offseason():
+    from pucksim.gen.leaguegen import build_world
+    from pucksim.systems import offseason
+
+    world = build_world(5)
+    first = offseason.run_offseason(world, champion_tid=None)["imports"]
+    second = offseason.run_offseason(world, champion_tid=None)["imports"]
+    assert first > 0 and second > 0
+
+
+def test_re_entering_the_draft_does_not_restart_a_college_eligibility_clock():
+    """A player can pass through enter_development more than once -- undrafted at 18, in
+    college on his own, drafted at 19. Resetting his counters there would hand him a fresh
+    four-year clock every time somebody drafted him."""
+    player = make_prospect(age=18, origin="ncaa")
+    prospects.enter_development(player, config.DEV_TIER_NCAA, 2030, rights_tid=None)
+    player.development["seasons"] = 1
+    player.development["tier_seasons"] = 1
+
+    prospects.enter_development(player, config.DEV_TIER_NCAA, 2031, rights_tid=4)
+    assert prospects.seasons_in_tier(player) == 1
+    assert prospects.seasons_developed(player) == 1
+    assert prospects.rights_holder(player) == 4
+
+
+def test_moving_to_a_new_tier_does_restart_the_tier_clock_but_not_the_career_one():
+    player = make_prospect(age=20, origin="chl")
+    prospects.enter_development(player, config.DEV_TIER_CHL, 2030, rights_tid=4)
+    player.development["seasons"] = 2
+    player.development["tier_seasons"] = 2
+
+    prospects.enter_development(player, config.DEV_TIER_AHL, 2031, rights_tid=4)
+    assert prospects.seasons_in_tier(player) == 0
+    assert prospects.seasons_developed(player) == 2

@@ -209,6 +209,14 @@ class World:
             self.free_agents.remove(pid)
         player.team_id = tid
         self.teams[tid].add_player(pid)
+        # Reaching an NHL roster ends development, by whichever route you got here --
+        # graduating out of the tiers, being signed off the open market as an undrafted
+        # player, or an emergency recall. Cleared at this one choke point (rather than in
+        # each of the three signing paths) because this method is already the documented
+        # single source of truth for roster membership, and "on an NHL roster" and "still
+        # developing in the minors" must never both be true of the same player.
+        # systems/prospects.py owns the field otherwise; see Player.development.
+        player.development = None
 
     def release_player(self, pid: int) -> None:
         """Waive a player to free agency: reverse of ``sign_player``."""

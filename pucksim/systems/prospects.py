@@ -108,6 +108,12 @@ from pucksim.models.player import Player
 from pucksim.models.world import World
 
 
+# The tiers a player is IN SCHOOL in, as opposed to playing professionally. The
+# distinction matters exactly once, in ``is_open_to_all``: an undrafted player in junior or
+# college is not on the market no matter how old he is, because he's still enrolled.
+AMATEUR_TIERS = (DEV_TIER_CHL, DEV_TIER_NCAA)
+
+
 # ---------------------------------------------------------------------------
 # Tier eligibility
 # ---------------------------------------------------------------------------
@@ -253,17 +259,27 @@ def rights_lapsed(player: Player, season_year: int) -> bool:
 def is_open_to_all(player: Player, season_year: int) -> bool:
     """May ANY team sign this developing player off the open market?
 
-    Two ways in, both real: the drafting team let its rights lapse, or he was never
-    drafted at all and has reached ``config.UDFA_FREE_AGENT_AGE``. The second is the
-    undrafted pathway's whole point -- an unclaimed player who develops into somebody
-    becomes a genuine prize on the open market rather than quietly disappearing.
+    Two ways in, both real. The drafting team let its rights lapse -- or he was never
+    drafted, has reached ``config.UDFA_FREE_AGENT_AGE``, and is no longer in an amateur
+    tier. That second path is the undrafted pathway's whole point: an unclaimed player who
+    develops into somebody becomes a genuine prize rather than quietly disappearing.
+
+    The amateur clause is what makes it work, and leaving it out was a real leak. Being
+    open to the market also means being exposed to ``offseason.cull_free_agents``, which
+    keeps only the top ~80 free agents by CURRENT overall -- so without it a promising
+    21-year-old was deleted from the league in the middle of his junior year of college,
+    for the crime of not yet being finished. A college player is not a free agent while
+    he's enrolled; he becomes one when his eligibility runs out, at 22 or 23, which is
+    exactly when real college free agents hit the market and exactly the age at which they
+    are worth something.
     """
     if not player.development:
         return False
     if rights_lapsed(player, season_year):
         return True
     return (player.development.get("rights_tid") is None
-            and player.age >= UDFA_FREE_AGENT_AGE)
+            and player.age >= UDFA_FREE_AGENT_AGE
+            and current_tier(player) not in AMATEUR_TIERS)
 
 
 def is_reserved_prospect(player: Player, season_year: int) -> bool:
@@ -339,19 +355,31 @@ def enter_development(player: Player, tier: str, season_year: int,
     and a caller with a specific reason to override shouldn't be second-guessed here.
     ``rights_tid=None`` is the undrafted track: he develops on his own, belonging to
     nobody.
+
+    Seasons already served are CARRIED FORWARD, and only a genuine change of tier restarts
+    the tier clock. This matters because a player can enter development more than once: an
+    undrafted 18-year-old goes to college on his own, gets re-drafted at 19, and passes
+    through here a second time. Resetting his counters there would hand him a fresh
+    four-year college eligibility clock every time somebody drafted him -- which is not how
+    eligibility works, and measurably wasn't working: undrafted players were leaving the
+    system at a median age of 24 having never once exhausted a four-season clock, because
+    it kept starting over.
     """
+    previous = player.development or {}
+    same_tier = previous.get("tier") == tier
     player.development = {
         "tier": tier,
-        "seasons": 0,
-        "tier_seasons": 0,
+        "seasons": previous.get("seasons", 0),
+        "tier_seasons": previous.get("tier_seasons", 0) if same_tier else 0,
         "rights_tid": rights_tid,
         "rights_expire": (season_year + rights_years_for(tier)
                           if rights_tid is not None else None),
         # Seed the season line from his scouting report. ``line`` means "his most recent
         # completed season", and for a player entering the system on draft day that IS his
         # pre-draft year -- so the record is never blank while a team looks at a pick it
-        # just made. ``advance_prospects`` overwrites it every offseason after that.
-        "line": dict(player.pre_draft) if player.pre_draft else {},
+        # just made. ``advance_prospects`` overwrites it every offseason after that; a
+        # re-entrant already has a real one, which is better than his old scouting report.
+        "line": previous.get("line") or (dict(player.pre_draft) if player.pre_draft else {}),
     }
     return player.development
 

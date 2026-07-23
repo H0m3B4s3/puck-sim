@@ -386,7 +386,14 @@ def pre_draft(world: World, champion_tid: Optional[int]) -> dict:
     ``expire_contracts`` above only walks ``Team.roster``, so it never sees a prospect --
     which is precisely why ``tick_prospect_contracts`` has to exist. Before it, an off-roster
     prospect's contract never advanced at all: an unbounded, entirely accidental slide.
+
+    Last, ``open_international_market`` puts this summer's European imports on the board.
+    Here rather than inside free agency itself so that both the headless and the staged web
+    offseason pick them up from the one call, and so they're visible on the free-agent list
+    from the moment the offseason opens rather than appearing partway through it.
     """
+    from pucksim.systems import freeagency
+
     milestones = archive_season(world, champion_tid)
     form_state = _form_state_for(world)
     develop_all(world, form_state=form_state)
@@ -395,8 +402,10 @@ def pre_draft(world: World, champion_tid: Optional[int]) -> dict:
     ar = age_and_retire(world)
     elc["signed"] = prospects.sign_eligible_prospects(world)
     dev = prospects.advance_prospects(world)         # AFTER aging -- see below
+    imports = freeagency.open_international_market(world)
     return {"new_fas": len(new_fas), "retired": len(ar["retired"]), "inducted": ar["inducted"],
-            "milestones": milestones, "elc": elc, "development": dev}
+            "milestones": milestones, "elc": elc, "development": dev,
+            "imports": len(imports)}
 
 
 def post_offseason(world: World) -> None:

@@ -227,6 +227,31 @@ def sign_rookie(world: World, team: Team, pid: int, years: int = None) -> Tuple[
     return True, "Signed to an entry-level contract."
 
 
+def open_international_market(world: World, count: int = None) -> List[int]:
+    """Add this offseason's European imports to the free-agent pool. Returns their pids.
+
+    The second of the two pathways into the league that don't run through the draft
+    (docs/PROSPECT_DEV_PLAN.md; the other is the undrafted/UDFA track in
+    ``systems/prospects.py``). A KHL or SHL player who was never drafted, developed at home
+    instead, and arrives at 22-27 already finished -- so he skips the development system
+    entirely and goes straight onto the market at whatever ``cap.market_salary`` says he's
+    worth. No draft rights, no entry-level scale, no waiting.
+
+    Deliberately a side door and not a parallel draft: ``prospectgen.
+    INTERNATIONAL_FA_PER_SEASON`` is a handful of players a year, priced at market, and
+    ``offseason.cull_free_agents`` washes out any that nobody wanted. What it buys is a
+    reason to look at the free-agent board every summer even in a year when nothing good
+    came off contract.
+    """
+    from pucksim.gen.prospectgen import generate_international_free_agents
+
+    imports = generate_international_free_agents(
+        world.rng, world.new_pid, **({"count": count} if count is not None else {}))
+    for player in imports:
+        world.add_player(player)
+    return [p.pid for p in imports]
+
+
 # ---------------------------------------------------------------------------
 # AI-driven market clearing
 # ---------------------------------------------------------------------------
