@@ -16,7 +16,7 @@ pip install -e ".[dev,web]"
 pytest
 ```
 
-## Status (2026-07-02)
+## Status (2026-07-22)
 
 All of v1's gameplay systems (DEVPLAN.md Steps 2.1–2.8) are implemented and merged: special
 teams/strength states, goalies (hot-hand, rest-based rotation, pull-the-goalie), faceoffs
@@ -28,10 +28,25 @@ goalie season-to-season form variance), and coach line-juggling AI with a PP/PK 
 The FastAPI + React web app (DEVPLAN.md Steps 2.9/2.10) is also implemented and merged: session/
 career management, roster and line/pair/tactics editing, schedule/standings/sim-day controls, box
 scores, and cap/trades/free-agency/draft/awards screens, all wired to a hockey-rink-themed UI
-(light "Ice" / dark "Arena" toggle).
+(light "Ice" / dark "Arena" toggle). Step 2.11's web-parity round (`docs/PARITY_PLAN.md`) closed
+the gaps human testing found — playoffs, offseason, player detail, and a usable trade UI.
 
-654 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
-end-to-end, both headlessly and through the web app. See [DEVPLAN.md](DEVPLAN.md) for the full
+Two sim-depth rounds have landed on top of that, both documented in
+[docs/SIM_SYNERGY_PLAN.md](docs/SIM_SYNERGY_PLAN.md):
+
+- **Roles, line synergy and defender impact** — every player carries a persisted role; a line's
+  role composition (does a creator feed a finisher?) and the on-ice defending group's defensive
+  value both shift shot quality. Both are centered so an average line/defense is a no-op, and
+  both change *chance quality* rather than any player's rating ceiling.
+- **Archetype refresh** — a distinct elite tier modeled on real stars (Crosby/McDavid/Gretzky/
+  Ovechkin/Jagr/Bergeron forwards, Orr/Makar/Leetch-Fox/Lidström defensemen), archetype selection
+  weighted by target overall so scorers concentrate in the top six and checkers in the bottom
+  six, full depth-defenseman vocabulary, and a skew-preserving calibration pass so an archetype's
+  signature survives at elite overall instead of being averaged away.
+
+783 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
+end-to-end, both headlessly and through the web app. Note the suite takes roughly ten minutes —
+several tests sim multiple full seasons back to back. See [DEVPLAN.md](DEVPLAN.md) for the full
 step-by-step plan and status notes, including a handful of known non-blocking loose ends (search
 that file for "Known" and "not yet wired").
 
