@@ -125,6 +125,11 @@ age, tier, or anything else. Tier becomes the ice-time/competition proxy instead
 - Past a tier's age band, growth collapses. Prospects who stall lose potential earlier than the
   current `PEAK_AGE_LOW + 1` convergence allows, so busts actually bust.
 
+Each prospect also gets a synthetic season line per year (`prospectgen.development_season_line`),
+generated from his ratings at his tier's real season length and difficulty, so a team can look
+at what its 19-year-old did in junior rather than only at a rating moving. Flavor; never read
+back into a rule.
+
 All of it stays inside the existing conservation rule (`development.py`: growth's only source is an
 unmet gap to potential) and the project's `[[feedback_no_upweighting]]` principle — these are
 *rates of approach to an existing ceiling*, never a bonus above a rating.
@@ -173,13 +178,27 @@ The pipeline delivers now, and all four tiers stay populated. The AHL holds the 
 share by construction — it spans ages 20–25, against junior's two-year post-draft window and
 college's four — which is what "the AHL is for older prospects" looks like in aggregate.
 
-**Known drift, deferred to Phase 7:** payroll trends 3–5 points lower by season 12 than
-baseline (worst observed seed: 86%). Expected direction — cheap ELC graduates now fill roster
-spots that used to go to market-priced free agents, which is real hockey — but the likely
-mechanical cause is that promotions push teams past `freeagency.TARGET_ROSTER` (21), so they
-stop bidding while still holding cap space. Not tuned here on purpose: Phase 3's development
-curves move the very quantity being measured, and re-centering before that lands would be
-wasted work (the same reasoning PR #59 applied to the archetype round's pivots).
+**Known drift at the end of Phase 2:** payroll trended 3–5 points below baseline by season
+12 (worst observed seed: 86%). Left untuned on purpose — Phase 3's development curves move
+the very quantity being measured, so re-centering first would have been wasted work (the
+reasoning PR #59 applied to the archetype round's pivots).
+
+### After Phase 3 (same seeds)
+
+| | season 1 | season 3 | season 6 | season 12 |
+|---|---|---|---|---|
+| payroll % of cap | 93–96% | 90–96% | 92–97% | 91–97% |
+| share of league on ELCs | 4–5% | 4–5% | 5–6% | 5–7% |
+| prospects (CHL / NCAA / AHL / Europe) | 23/28/63/8 | 42/69/198/21 | 36/97/307/34 | 41/83/292/31 |
+
+The Phase 2 drift closed on its own, without a tuning pass: payroll now holds **89–97%**,
+at or above the pre-round baseline, and the ELC share holds 4–7% instead of collapsing to
+zero. The most likely mechanism is the stagnation rule — prospects who stall now lose
+ceiling, age out, and get culled, so the pipeline carries fewer permanent occupants and the
+free-agent market stays stocked with players teams actually want to buy.
+
+Phase 7 therefore has much less to do than planned. It should confirm these numbers across
+more seeds rather than re-center anything.
 
 ## Two bugs this phase's own tests caught
 

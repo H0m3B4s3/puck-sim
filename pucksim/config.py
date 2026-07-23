@@ -650,6 +650,53 @@ ELC_SLIDE_GAMES = 10
 # forces the decision.
 ELC_SIGN_READINESS_GAP = 8
 
+# ---------------------------------------------------------------------------
+# How fast a prospect develops, by tier (`systems/development.py`)
+# ---------------------------------------------------------------------------
+# `development._overall_delta` scales a young player's growth by his ice time, read off
+# `Player.season`. A prospect never plays an NHL game, so `gp == 0`, and the factor
+# collapsed to a flat 0.6 for EVERY prospect in the league -- age, tier, role and ice time
+# all irrelevant. Tier is the ice-time-and-competition proxy that replaces it, and this is
+# the table that makes the four tiers mechanically real rather than just labels.
+#
+# Occupies the same 0.6-1.4 band the ice-time factor does, so a prospect and a young NHL
+# regular are scored on one scale. Ordering is the substance:
+#   - The AHL develops best. Pro habits, pro schedule, grown men.
+#   - Junior gives a good player enormous minutes against weak competition -- productive,
+#     but not what the AHL is.
+#   - College is the slowest by games played (a ~35-game season against junior's ~68) and
+#     the most weighted toward strength and maturity, which the ratings model doesn't
+#     capture separately.
+#   - Europe spans everything from a strong pro league to a bad one; it lands mid-pack.
+#
+# PROVISIONAL/TUNABLE. Phase 7 of docs/PROSPECT_DEV_PLAN.md re-measures these against
+# league payroll and ELC share, the same way PR #59 re-centered the synergy pivots only
+# after the changes that moved their means had landed.
+TIER_DEVELOPMENT = {
+    DEV_TIER_AHL: 1.00,
+    DEV_TIER_CHL: 0.80,
+    DEV_TIER_EUROPE: 0.80,
+    DEV_TIER_NCAA: 0.75,
+}
+TIER_DEVELOPMENT_DEFAULT = 0.80
+
+# A player's first season at a harder level is an adjustment year -- a 20-year-old fresh
+# out of junior spends it learning how professional hockey is played rather than pulling
+# away from it. Applied only on arrival in the AHL, which is the only step up steep enough
+# to matter.
+TIER_FIRST_SEASON_PENALTY = 0.85
+
+# Busts have to be able to bust. `develop_player` converges potential toward overall only
+# from PEAK_AGE_LOW + 1 (25), which is far too late to mean anything to a prospect: a
+# 19-year-old with 85 potential kept all 85 of it until he was 25, so no prospect ever
+# stopped being a prospect who might still make it.
+#
+# From this age, a player still in the development system and still short of
+# NHL_READY_OVERALL loses potential every offseason. Downward-only, so league-wide
+# conservation is untouched.
+PROSPECT_STAGNATION_AGE = 21
+PROSPECT_STAGNATION_POTENTIAL_LOSS = (1, 3)   # (min, max) points per offseason
+
 # Rookie-scale (entry-level) pay is a small flat fraction of the cap, not a
 # market-rate salary -- this is what keeps drafted stars cheap for their first
 # three years, same shape as the real ELC's flat, modest cap hit regardless of

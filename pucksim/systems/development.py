@@ -30,6 +30,25 @@ source of positive movement is an unmet gap to potential; every other term is sy
 centered at (or below) zero, so the league-wide overall mean doesn't quietly drift upward
 forever as more offseasons run.
 
+WHERE A PLAYER PLAYS, NOT JUST HOW OLD HE IS (docs/PROSPECT_DEV_PLAN.md)
+=======================================================================
+The pre-peak growth rate is scaled by how much developmental opportunity the player
+actually got -- ``_opportunity_factor`` below. For a young NHL regular that's ice time,
+which is HoopR's own rule ported over. For a prospect there is no NHL ice time to read, so
+his development TIER stands in for it (``config.TIER_DEVELOPMENT``): the AHL develops best,
+junior gives big minutes against weak competition, college is slowest by games played,
+Europe lands mid-pack.
+
+That distinction is the whole mechanical content of the tier system, and it was missing
+until the prospect development round: a prospect's ``Player.season`` is empty because he
+never played an NHL game, so the ice-time formula divided into a zero and handed every
+prospect in the league the same flat 0.6. Read ``_opportunity_factor``'s docstring before
+touching it -- the failure mode is silent, and it makes four carefully specified tiers
+behave identically.
+
+Prospects also lose potential when they stall (``_is_stagnating``), which is what lets a
+bust actually bust rather than carrying an unrealized ceiling to age 25.
+
 ===========================================================================================
 GOALIE SEASON-TO-YEAR "FORM" VARIANCE -- READ THIS BEFORE CHANGING ANYTHING GOALIE-RELATED
 ===========================================================================================
@@ -102,7 +121,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict
 
-from pucksim.config import PEAK_AGE_HIGH, PEAK_AGE_LOW, RETIREMENT_AGE
+from pucksim.config import (
+    DEV_TIER_AHL,
+    NHL_READY_OVERALL,
+    PEAK_AGE_HIGH,
+    PEAK_AGE_LOW,
+    PROSPECT_STAGNATION_AGE,
+    PROSPECT_STAGNATION_POTENTIAL_LOSS,
+    RETIREMENT_AGE,
+    TIER_DEVELOPMENT,
+    TIER_DEVELOPMENT_DEFAULT,
+    TIER_FIRST_SEASON_PENALTY,
+)
 from pucksim.models.attributes import ALL_GOALIE_RATINGS, RATING_GROUPS, clamp_rating
 from pucksim.models.player import Player
 from pucksim.models.world import World
@@ -118,6 +148,37 @@ _SKATER_SKILL_RATINGS = [r for group in RATING_GROUPS.values() for r in group]
 # ---------------------------------------------------------------------------
 # Permanent age-based development curve
 # ---------------------------------------------------------------------------
+def _opportunity_factor(player: Player) -> float:
+    """How much developmental opportunity this young player actually got this season.
+
+    Two populations, one scale (roughly 0.6-1.4). A player on an NHL roster is scored on
+    his ice time, which is HoopR's own rule ported: a prospect buried in a limited role
+    develops slower than one getting real minutes. A player in a feeder tier has no NHL ice
+    time to read, so his TIER is the proxy -- see ``config.TIER_DEVELOPMENT`` for the
+    ordering and its reasoning.
+
+    THE BUG THIS FIXES, because it is easy to reintroduce: this function used to be the
+    ice-time branch alone, and a prospect's ``Player.season`` is empty (he never played an
+    NHL game), so ``gp == 0``, ``mpg == 0.0``, and the factor collapsed to a flat 0.6 for
+    EVERY prospect in the league. Age, tier, ice time, role -- none of it mattered. The
+    development tiers can be as carefully specified as you like; this is the line that
+    decides whether they mean anything.
+    """
+    if player.is_prospect:
+        from pucksim.systems.prospects import current_tier, seasons_in_tier
+
+        tier = current_tier(player)
+        factor = TIER_DEVELOPMENT.get(tier, TIER_DEVELOPMENT_DEFAULT)
+        if tier == DEV_TIER_AHL and seasons_in_tier(player) == 0:
+            factor *= TIER_FIRST_SEASON_PENALTY
+        return factor
+
+    gp = player.season.gp if player.season else 0
+    secs = player.season.secs if player.season else 0
+    mpg = (secs / 60.0 / gp) if gp else 0.0
+    return 0.6 + min(1.0, mpg / 16.0) * 0.8
+
+
 def _overall_delta(player: Player, rng) -> float:
     """Expected overall-rating change this offseason, before per-rating distribution.
 
@@ -149,10 +210,7 @@ def _overall_delta(player: Player, rng) -> float:
     # Playing time accelerates growth for young players still climbing (mirrors HoopR:
     # a prospect buried in a limited role develops slower than one getting real minutes).
     if age < PEAK_AGE_LOW and growth > 0:
-        gp = player.season.gp if player.season else 0
-        secs = player.season.secs if player.season else 0
-        mpg = (secs / 60.0 / gp) if gp else 0.0
-        growth *= 0.6 + min(1.0, mpg / 16.0) * 0.8
+        growth *= _opportunity_factor(player)
 
     growth += (player.ratings.get("work_ethic", 70) - 70) * 0.015
     return growth
@@ -193,8 +251,31 @@ def develop_player(player: Player, rng) -> int:
     # "don't let unrealized ceilings linger forever" logic as HoopR's own version.
     if player.age >= PEAK_AGE_LOW + 1 and player.potential > player.overall:
         player.potential = max(player.overall, player.potential - rng.randint(1, 3))
+    elif _is_stagnating(player):
+        lo, hi = PROSPECT_STAGNATION_POTENTIAL_LOSS
+        player.potential = max(player.overall, player.potential - rng.randint(lo, hi))
     player.potential = max(player.potential, player.overall)
     return player.overall - before
+
+
+def _is_stagnating(player: Player) -> bool:
+    """Is this prospect old enough, and far enough behind, that his ceiling should fall?
+
+    Busts have to be able to bust. The convergence rule above only starts at
+    ``PEAK_AGE_LOW + 1`` (25), which is far too late to mean anything to a prospect -- a
+    19-year-old with 85 potential kept every point of it until he was 25, so no prospect
+    ever stopped being a prospect who might still make it, and a team's read on its own
+    system never got worse. From ``config.PROSPECT_STAGNATION_AGE`` a player still in the
+    development system and still short of NHL caliber starts losing ceiling every year.
+
+    Downward-only, so this can't disturb the league-wide conservation ``_overall_delta``
+    depends on (growth's only source is an unmet gap to potential -- this shrinks that gap,
+    it never creates one).
+    """
+    return (player.is_prospect
+            and player.age >= PROSPECT_STAGNATION_AGE
+            and player.overall < NHL_READY_OVERALL
+            and player.potential > player.overall)
 
 
 # ---------------------------------------------------------------------------

@@ -257,3 +257,116 @@ def test_develop_all_without_form_state_is_a_pure_no_op_for_form():
     D.develop_all(world)   # no form_state passed
     after_overalls = {pid: p.overall for pid, p in world.players.items()}
     assert before_overalls != after_overalls   # aging still happened
+
+
+# ---------------------------------------------------------------------------
+# 4. Tier-aware opportunity (docs/PROSPECT_DEV_PLAN.md Phase 3)
+# ---------------------------------------------------------------------------
+def _in_tier(player: Player, tier: str, tier_seasons: int = 1) -> Player:
+    player.development = {"tier": tier, "seasons": tier_seasons,
+                          "tier_seasons": tier_seasons, "rights_tid": 1,
+                          "rights_expire": 9999, "line": {}}
+    return player
+
+
+def test_a_prospects_opportunity_comes_from_his_tier_not_his_empty_stat_line():
+    """THE bug this phase fixes. A prospect never plays an NHL game, so the ice-time
+    formula divides into a zero and hands every prospect in the league the same flat 0.6 --
+    age, tier, role and ice time all irrelevant. Four carefully specified tiers behaving
+    identically is a silent failure, so it's asserted directly."""
+    factors = {tier: D._opportunity_factor(_in_tier(make_skater(age=19), tier))
+               for tier in config.DEV_TIERS}
+    assert len(set(factors.values())) > 1, f"every tier develops identically: {factors}"
+    assert factors[config.DEV_TIER_AHL] > factors[config.DEV_TIER_NCAA]
+    assert factors[config.DEV_TIER_CHL] > factors[config.DEV_TIER_NCAA]
+
+
+def test_the_first_season_in_the_ahl_is_an_adjustment_year():
+    rookie = D._opportunity_factor(_in_tier(make_skater(age=20), config.DEV_TIER_AHL,
+                                             tier_seasons=0))
+    settled = D._opportunity_factor(_in_tier(make_skater(age=21), config.DEV_TIER_AHL,
+                                              tier_seasons=1))
+    assert rookie < settled
+    assert rookie == config.TIER_DEVELOPMENT[config.DEV_TIER_AHL] * config.TIER_FIRST_SEASON_PENALTY
+
+
+def test_a_rostered_player_is_still_scored_on_ice_time():
+    """The NHL branch is HoopR's own rule and must survive untouched: a young player buried
+    in a limited role develops slower than one getting real minutes."""
+    buried = make_skater(age=20)
+    buried.season.gp, buried.season.secs = 20, 20 * 6 * 60      # 6 min/game
+    workhorse = make_skater(age=20)
+    workhorse.season.gp, workhorse.season.secs = 82, 82 * 19 * 60
+    assert D._opportunity_factor(buried) < D._opportunity_factor(workhorse)
+    assert not buried.is_prospect
+
+
+def test_tier_opportunity_shares_the_scale_with_nhl_ice_time():
+    """Prospects and young NHL regulars are scored on one 0.6-1.4 band, so a tier factor
+    can be compared against an ice-time factor without a second calibration."""
+    for tier in config.DEV_TIERS:
+        f = D._opportunity_factor(_in_tier(make_skater(age=19), tier))
+        assert 0.6 <= f <= 1.4, (tier, f)
+
+
+def test_playing_in_a_better_tier_produces_more_growth_over_a_career():
+    """The end-to-end consequence: the same player develops further in the AHL than in
+    college, which is what makes the tier assignment a decision worth caring about."""
+    def grow(tier, seed):
+        rng = Rng(seed=seed)
+        player = _in_tier(make_skater(age=19, overall=55, potential=85), tier)
+        for _ in range(4):
+            D.develop_player(player, rng)
+            player.age += 1
+            player.development["tier_seasons"] += 1
+        return player.overall
+
+    pro = statistics.mean(grow(config.DEV_TIER_AHL, s) for s in range(40))
+    college = statistics.mean(grow(config.DEV_TIER_NCAA, s) for s in range(40))
+    assert pro > college
+
+
+# ---------------------------------------------------------------------------
+# 5. Busts busting (potential erosion)
+# ---------------------------------------------------------------------------
+def test_a_stalled_prospect_loses_potential():
+    """Before this, the convergence rule only started at PEAK_AGE_LOW + 1 (25), so a
+    19-year-old with 85 potential kept every point of it until he was 25 and no prospect
+    ever stopped being one who might still make it."""
+    rng = Rng(seed=4)
+    player = _in_tier(make_skater(age=config.PROSPECT_STAGNATION_AGE, overall=50,
+                                   potential=85), config.DEV_TIER_NCAA)
+    assert D._is_stagnating(player)
+    before = player.potential
+    D.develop_player(player, rng)
+    assert player.potential < before
+
+
+def test_a_prospect_who_reached_nhl_caliber_is_not_stagnating():
+    player = _in_tier(make_skater(age=22, overall=config.NHL_READY_OVERALL, potential=85),
+                       config.DEV_TIER_AHL)
+    assert not D._is_stagnating(player)
+
+
+def test_a_young_prospect_keeps_his_ceiling():
+    """Erosion starts at PROSPECT_STAGNATION_AGE -- an 18-year-old is not a bust yet."""
+    player = _in_tier(make_skater(age=config.PROSPECT_STAGNATION_AGE - 1, overall=50,
+                                   potential=85), config.DEV_TIER_CHL)
+    assert not D._is_stagnating(player)
+
+
+def test_stagnation_never_drops_potential_below_current_overall():
+    """Downward-only, and floored at overall, so it can't disturb the league-wide
+    conservation _overall_delta depends on."""
+    rng = Rng(seed=9)
+    player = _in_tier(make_skater(age=23, overall=60, potential=61), config.DEV_TIER_AHL)
+    for _ in range(10):
+        D.develop_player(player, rng)
+    assert player.potential >= player.overall
+
+
+def test_a_player_outside_the_development_system_never_stagnates():
+    """An undrafted 22-year-old free agent isn't in anyone's system to stall in."""
+    player = make_skater(age=22, overall=50, potential=85)
+    assert not player.is_prospect
+    assert not D._is_stagnating(player)
