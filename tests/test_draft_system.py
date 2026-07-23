@@ -253,6 +253,19 @@ def _make_nhl_ready(player: Player) -> None:
     assert player.overall >= ds.DRAFT_NHL_READY_OVERALL
 
 
+def _make_raw(player: Player) -> None:
+    """Drop a prospect's ratings well below ``DRAFT_NHL_READY_OVERALL``.
+
+    The mirror of ``_make_nhl_ready``, and needed for the same reason: the pool's median
+    overall (~52) is comfortably raw, but individual prospects near the top of a small
+    generated board can land right on the bar, so a test about the not-ready path has to
+    build that player rather than hope for him.
+    """
+    for name in player.ratings:
+        player.ratings[name] = 45
+    assert player.overall < ds.DRAFT_NHL_READY_OVERALL
+
+
 def test_make_pick_records_via_world_and_draft_class():
     """The pick itself is always recorded, whether or not the player signs -- draft rights
     and roster occupancy are separate facts (see make_pick's docstring)."""
@@ -286,12 +299,12 @@ def test_nhl_ready_first_overall_pick_signs_immediately():
     assert pid not in world.free_agents
 
 
-def test_later_picks_are_reserved_rather_than_signed():
-    """Everyone past the immediate-entry window keeps their draft rights but stays off the
-    active roster to develop (systems/prospects.py) -- they cost no cap space and take no
-    roster spot. This is what stops entry-level teenagers from displacing paid NHL
-    players and collapsing league payroll."""
-    from pucksim.systems.prospects import is_reserved_prospect
+def test_a_pick_who_is_not_nhl_ready_goes_to_a_development_tier():
+    """A raw pick keeps his draft rights but stays off the active roster to develop
+    (systems/prospects.py) -- he costs no cap space and takes no roster spot. This is what
+    stops entry-level teenagers from displacing paid NHL players and collapsing league
+    payroll (PR #61)."""
+    from pucksim.systems.prospects import current_tier, is_reserved_prospect
 
     world = build_world_with_teams(n_teams=4, roster_headroom=2)
     _play_fake_season(world)
@@ -299,15 +312,53 @@ def test_later_picks_are_reserved_rather_than_signed():
 
     ds.make_pick(world, ds.best_available(world))       # pick 1
     pid = ds.best_available(world)
-    _make_nhl_ready(world.player(pid))                  # good enough, but picked too late
+    player = world.player(pid)
+    _make_raw(player)                                   # a normal, unfinished prospect
     signed = ds.make_pick(world, pid)                   # pick 2
 
     assert signed is False
-    player = world.player(pid)
     assert player.team_id is None
     assert pid in world.free_agents
     assert is_reserved_prospect(player, world.season_year)
+    assert current_tier(player) in config.DEV_TIERS
     assert (pid, dc.picks_made[1][1]) in dc.picks_made
+
+
+def test_readiness_not_draft_slot_decides_who_reaches_the_nhl():
+    """The rule this round replaced keyed arrival on pick number, so a third-overall bust
+    and a third-overall superstar reached the NHL on the same timetable. Now an NHL-caliber
+    player signs whenever he's taken, and a raw one develops however early he's taken."""
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    ds.setup_draft(world, rounds=2, pool_size=20)
+
+    ds.make_pick(world, ds.best_available(world))       # pick 1, whoever he is
+    late_pid = ds.best_available(world)
+    _make_nhl_ready(world.player(late_pid))             # ready, and taken late
+    assert ds.make_pick(world, late_pid) is True
+    assert world.player(late_pid).team_id is not None
+
+
+def test_a_prospect_placed_in_a_tier_lands_where_his_background_says_he_should():
+    """Origin drives the assignment: junior players go to junior, college recruits to the
+    NCAA, Europeans to Europe -- the CHL/NCAA fork made real (DESIGN.md point 11)."""
+    from pucksim.systems import prospects
+
+    world = build_world_with_teams(n_teams=4, roster_headroom=2)
+    _play_fake_season(world)
+    ds.setup_draft(world, rounds=4, pool_size=60)
+    ds.auto_complete_draft(world)
+
+    placed = [p for p in world.players.values() if p.is_prospect]
+    assert placed, "a whole draft placed nobody into development"
+    for p in placed:
+        tier = prospects.current_tier(p)
+        if tier == config.DEV_TIER_AHL:
+            # The overage path: signed on draft day to unlock the professional tier.
+            assert p.contract.years_remaining > 0
+        else:
+            assert tier == p.league_origin
+        assert prospects.rights_holder(p) is not None
 
 
 def test_drafted_player_gets_entry_level_rookie_scale_contract():

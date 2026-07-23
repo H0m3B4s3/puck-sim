@@ -45,7 +45,7 @@ from pucksim.models.contract import flat_contract
 from pucksim.models.league import Phase, standings
 from pucksim.models.world import World
 from pucksim.sim.season import start_season
-from pucksim.systems import awards, legacy
+from pucksim.systems import awards, legacy, prospects
 from pucksim.systems.development import GoalieFormState, develop_all
 
 # ---------------------------------------------------------------------------
@@ -367,14 +367,36 @@ def pre_draft(world: World, champion_tid: Optional[int]) -> dict:
     ``world.schedule``/``standings()`` directly, so this function doesn't need to hand anything
     off explicitly) and an already-aged/retired player pool so cap space reflects who's actually
     still around.
+
+    The two prospect steps straddle ``age_and_retire``, and the order is load-bearing rather
+    than incidental (docs/PROSPECT_DEV_PLAN.md):
+
+    - ``tick_prospect_contracts`` runs BEFORE aging, because the entry-level slide rule asks
+      how old the player was at the START of the season that just ended. Ticking after aging
+      would read a 19-year-old as 20 and burn a contract year the real rule protects.
+    - ``sign_eligible_prospects`` runs after aging but BEFORE the tier reshuffle, because
+      that is the real decision point: a junior player turning 20 either has a contract, in
+      which case he moves up to the AHL, or he doesn't, in which case he turns pro and the
+      team that drafted him loses him. Signing after the reshuffle would mean teams could
+      never keep their junior graduates at all.
+    - ``advance_prospects`` runs AFTER aging, for the mirror-image reason: which tier he
+      belongs in next is a question about how old he is NOW. A junior player who just turned
+      20 has aged out of junior and, if he's under contract, belongs in the AHL.
+
+    ``expire_contracts`` above only walks ``Team.roster``, so it never sees a prospect --
+    which is precisely why ``tick_prospect_contracts`` has to exist. Before it, an off-roster
+    prospect's contract never advanced at all: an unbounded, entirely accidental slide.
     """
     milestones = archive_season(world, champion_tid)
     form_state = _form_state_for(world)
     develop_all(world, form_state=form_state)
     new_fas = expire_contracts(world)
+    elc = prospects.tick_prospect_contracts(world)   # BEFORE aging -- see below
     ar = age_and_retire(world)
+    elc["signed"] = prospects.sign_eligible_prospects(world)
+    dev = prospects.advance_prospects(world)         # AFTER aging -- see below
     return {"new_fas": len(new_fas), "retired": len(ar["retired"]), "inducted": ar["inducted"],
-            "milestones": milestones}
+            "milestones": milestones, "elc": elc, "development": dev}
 
 
 def post_offseason(world: World) -> None:
@@ -420,9 +442,16 @@ def run_offseason(world: World, champion_tid: Optional[int]) -> dict:
     draft_summary = draft_system.run_draft(world)
     enforce_roster_max(world)
 
+    # Graduate the prospects who are ready before shopping the open market: a team fills
+    # its holes from its own system first, exactly as a real one does, and only then goes
+    # looking for what it still needs. Runs after `enforce_roster_max` so a promotion can't
+    # be immediately waived back off the roster it was just added to.
+    promoted = prospects.promote_ready_prospects(world)
+
     world.phase = Phase.FREE_AGENCY
     fa_summary = freeagency.run_free_agency(world)
 
     post_offseason(world)
-    summary.update({"draft": draft_summary, "free_agency": fa_summary})
+    summary.update({"draft": draft_summary, "free_agency": fa_summary,
+                    "promoted": len(promoted)})
     return summary

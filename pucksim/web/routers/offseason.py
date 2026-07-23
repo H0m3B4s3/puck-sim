@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from pucksim.models.league import Phase
 from pucksim.sim.playoffs import champion
-from pucksim.systems import draft_system, freeagency, offseason
+from pucksim.systems import draft_system, freeagency, offseason, prospects
 from pucksim.web.session import get_session_id, get_world, session_store
 
 router = APIRouter(prefix="/offseason", tags=["offseason"])
@@ -188,6 +188,14 @@ def get_draft_board(
         # Move remaining prospects to free agency, enforce roster max
         draft_system.undrafted_to_free_agency(world)
         offseason.enforce_roster_max(world)
+        # Graduate everyone whose rating says they belong, mirroring headless
+        # `offseason.run_offseason`'s ordering exactly (after the draft and roster-max
+        # enforcement, before free agency) so a team fills holes from its own system first.
+        # Not excluded for the user's team: every other pre-free-agency step here
+        # (aging, contract expiry, entry-level signings) already runs for all 32 teams,
+        # and leaving the user's ready prospects stranded in the minors with no UI to
+        # promote them would be worse than promoting them automatically.
+        prospects.promote_ready_prospects(world)
         world.phase = Phase.FREE_AGENCY
         session_store.save(sid, world)
 

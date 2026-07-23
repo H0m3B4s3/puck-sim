@@ -62,15 +62,15 @@ from __future__ import annotations
 
 from typing import List
 
-from pucksim.config import NHL_READY_OVERALL
+from pucksim.config import DEV_TIER_AHL, NHL_READY_OVERALL
 from pucksim.gen.prospectgen import generate_prospect_pool
 from pucksim.models.draft import DraftClass
 from pucksim.models.league import Game, standings
 from pucksim.models.player import Player
 from pucksim.models.team import auto_build_lines
 from pucksim.models.world import World
+from pucksim.systems import prospects
 from pucksim.systems.freeagency import sign_rookie
-from pucksim.systems.prospects import development_years
 
 # Real NHL drafts run 7 rounds. Nothing in DEVPLAN.md pins an exact round
 # count for v1; 7 is the obvious low-risk default (matches the real league
@@ -81,13 +81,17 @@ from pucksim.systems.prospects import development_years
 # PROVISIONAL/TUNABLE, flagged as a judgment call in this step's report.
 DRAFT_ROUNDS = 7
 
-# Which picks may go straight to the NHL in their draft year is decided by
-# ``prospects.development_years()`` (a zero-season development window means "eligible
-# now"), so the schedule lives in one place -- config.PROSPECT_DEVELOPMENT_YEARS_BY_PICK.
-# In practice that's the first-overall pick. Everyone else is recorded in full (draft
-# rights, provenance bio, ``picks_made``) but stays unsigned as a reserved prospect -- the
-# "drafted but not yet on an NHL roster" state ``make_pick`` has always supported for the
-# roster-full case, now the normal path rather than an edge case.
+# Which picks go straight to the NHL is now decided by the player, not by his draft slot.
+# A pick who is already NHL-caliber (``DRAFT_NHL_READY_OVERALL``) signs an entry-level deal
+# and takes a roster spot; everyone else is recorded in full (draft rights, provenance bio,
+# ``picks_made``) and placed into a development tier by ``systems/prospects.py``, where he
+# stays until his rating says he belongs in the league.
+#
+# This replaced a fixed schedule keyed on pick number (first overall arrived immediately,
+# the top ten a year later, and so on). That schedule was a stand-in for a development
+# system that didn't exist yet, and its cost was that a third-overall bust and a
+# third-overall superstar reached the NHL on exactly the same timetable, with nothing
+# either of them did able to change it.
 
 # Even the first-overall pick has to actually be NHL-caliber to take a roster spot; a weak
 # draft class's top pick doesn't automatically belong in the league.
@@ -237,31 +241,31 @@ def make_pick(world: World, prospect_id: int) -> bool:
     through ``World.sign_player``, never a direct ``Team.roster``/
     ``Player.team_id`` mutation).
 
-    Roster-full is NOT an error here, and this is a real, not hypothetical,
-    case (found while testing this step, see below): PuckSim's v1 data model
-    has no two-way/AHL-affiliate/prospect-reserve list yet (``cap.py``'s
-    module docstring: "no two-way/AHL-affiliate reserve-list split exists yet
-    in v1 -- ``Team.roster`` *is* the active roster"). ``leaguegen.build_world``
-    already fills every team to 22/23 (one spot of headroom) when generating a
-    league, so drafting even a second rookie in the same draft -- completely
-    normal; real NHL teams draft 7+ players a year -- will routinely exceed
-    ``config.ROSTER_MAX`` (23) if every pick tried to sign onto the active
-    roster immediately. Real hockey resolves this by keeping most draftees on
-    their junior/college/AHL team for years before they ever occupy an NHL
-    roster spot; PuckSim v1 has no such reserve list to place them on instead
-    (explicitly deferred to DEVPLAN.md Step 3.1 per cap.py's docstring). The
-    correct v1-scoped behavior is therefore: the PICK itself (draft rights,
+    Two facts are recorded here, and they are separate: the PICK (draft rights,
     ``DraftClass.picks_made``, the player's ``draft`` provenance bio) always
-    succeeds and is always recorded -- that's the actual "did team X draft
-    prospect Y" fact and doesn't depend on roster mechanics at all. The
-    ENTRY-LEVEL SIGNING is attempted but allowed to fail gracefully: if
-    ``sign_rookie`` reports the team can't take the player (full roster or, in
-    principle, a cap-space edge case), the drafted player simply remains a
-    free agent with ``draft`` bio populated (a accurate "drafted but not yet
-    on an NHL roster" state) rather than the whole draft raising and halting.
-    Returns ``True`` if the entry-level signing succeeded, ``False`` if the
-    pick was recorded but the player couldn't be signed onto the active
-    roster right now.
+    succeeds, because "did team X draft prospect Y" doesn't depend on roster
+    mechanics at all. Where the player then GOES is the second, independent
+    question, and there are three answers:
+
+    - Already NHL-caliber (``DRAFT_NHL_READY_OVERALL``) and the team has room:
+      he signs an entry-level deal and takes a roster spot. Returns ``True``.
+    - Anyone else: ``_assign_to_development`` places him in a feeder tier (see
+      ``systems/prospects.py``). He keeps his draft rights, costs no cap space,
+      takes no roster spot, and develops until his rating says he belongs.
+    - Nowhere will take him -- too old for the development system, or an
+      overage junior pick his team couldn't sign: he stays an ordinary free
+      agent with his draft bio recorded.
+
+    Roster-full is therefore not an error and never was, but it is no longer
+    the awkward case it used to be either. ``leaguegen.build_world`` fills every
+    team to 22/23, so a team drafting seven players a year -- completely
+    normal -- would blow past ``config.ROSTER_MAX`` if every pick tried to sign
+    immediately. Real hockey resolves that by keeping draftees in junior,
+    college, or the AHL for years, and as of the prospect development round
+    (docs/PROSPECT_DEV_PLAN.md) so does this. An NHL-ready pick who finds the
+    roster full simply develops for a year instead of being lost.
+
+    Returns ``True`` only when the player landed on the active roster.
     """
     dc = world.draft_class
     if dc is None:
@@ -287,14 +291,45 @@ def make_pick(world: World, prospect_id: int) -> bool:
         "team": team.abbrev,
     }
 
-    # Reserve gate: a pick who owes development seasons, or isn't yet an NHL player, keeps
-    # their draft rights but stays off the active roster (see systems/prospects.py). They
-    # cost no cap space and take no roster spot until they graduate into free agency.
-    if development_years(pick_number) > 0 or player.overall < DRAFT_NHL_READY_OVERALL:
-        return False
+    if player.overall >= DRAFT_NHL_READY_OVERALL:
+        ok, _reason = sign_rookie(world, team, prospect_id)
+        if ok:
+            return True
+        # Roster full or no cap room: he's good enough for the league but there's nowhere
+        # to put him today. Fall through and develop him instead of losing him.
 
-    ok, _reason = sign_rookie(world, team, prospect_id)
-    return ok
+    _assign_to_development(world, player, tid)
+    return False
+
+
+def _assign_to_development(world: World, player: Player, tid: int) -> None:
+    """Place a just-drafted player into whichever development tier will take him.
+
+    Most picks go straight where they came from -- an 18-year-old junior player back to
+    junior, a college recruit to the NCAA. The interesting case is the overage pick: a
+    20-or-21-year-old major-junior player has aged out of junior and, under the CHL-NHL
+    transfer agreement, can only turn pro if he is actually under contract. So if no tier
+    will take him unsigned, the drafting team signs him to an entry-level deal on the spot
+    and stashes him in the AHL -- which is exactly what real teams do with their overage
+    picks, and why the AHL is where older prospects belong.
+
+    A player no tier will take even after that (too old for the system entirely) simply
+    stays an ordinary free agent with his draft rights recorded. The pick still counts;
+    he's just not a prospect.
+    """
+    tier = prospects.best_tier(player)
+    if tier is not None:
+        prospects.enter_development(player, tier, world.season_year, rights_tid=tid)
+        return
+
+    if not prospects.is_elc_eligible(player):
+        return
+    # The overage case. Record the rights first (``sign_elc`` checks them), sign, and keep
+    # him only if the contract actually did unlock the professional tier.
+    prospects.enter_development(player, DEV_TIER_AHL, world.season_year, rights_tid=tid)
+    ok, _reason = prospects.sign_elc(world, tid, player.pid)
+    if not (ok and prospects.eligible_for_tier(player, DEV_TIER_AHL)):
+        prospects.leave_development(player)
 
 
 def _round_for_pick(dc: DraftClass, pick_number_1_based: int) -> int:
