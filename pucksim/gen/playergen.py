@@ -112,16 +112,21 @@ _RARE_ARCHETYPE_MIN_OVERALL = 82
 #     => ~0.066 elite-ceiling-eligible prospects/season, ~0.66 over a decade.
 #   Total elite-ceiling-eligible skaters over a 10-season span:
 #     ~38.8 (one-time roster fill) + ~0.66 (draft classes) =~ 39.4.
-# Target: "once a decade" for a rare/"unicorn" archetype at all (any of the
-# distinct legend styles in RARE_ARCHETYPES -- Crosby/McDavid/Makar-caliber
-# talent should be that rare). chance = 1 / eligible_count =~ 1/39.4 =~ 0.0254;
-# rounded to a clean 0.025 (2.5%) -- roughly HALF of one expected
-# "generational" skater across a decade of both pipelines combined, since a
-# rare archetype assignment alone doesn't guarantee the FINAL calibrated
-# player actually lands at true generational overall after skew+calibration
-# (see _build_calibrated_ratings) -- erring rare rather than exactly-one
-# keeps the "once-a-decade" framing as a ceiling, not a guarantee.
-_RARE_ARCHETYPE_CHANCE = 0.025
+# Target (RETUNED in the archetype-refresh round): the rare pool is no longer two blurry
+# "generational" templates but TEN distinct legend styles (Crosby/McDavid/Gretzky/Ovechkin/Jagr/
+# Bergeron forwards + Orr/Makar/Leetch/Lidstrom defensemen), so the question changed from "how
+# often does a generational player exist" to "does a 32-team league field a handful of recognizable
+# stars." At the old 0.025 a whole league averaged well under one rare skater (measured: ~0.67
+# across six generated leagues), so most leagues had NO marquee player at all -- the expanded elite
+# tier was effectively invisible.
+#   ~39.4 elite-ceiling-eligible skaters per league generation (see the derivation above)
+#   0.06 * 39.4 =~ 2.4 rare-archetype skaters per league
+# ~2-3 marquee players per 32-team league, spread across ten styles so repeats are uncommon and
+# each still feels special -- comfortably inside "only a handful league-wide," and still rare
+# enough that a rare-archetype assignment does not guarantee the FINAL calibrated player lands at
+# true generational overall after skew + skew-preserving calibration (see
+# _build_calibrated_ratings).
+_RARE_ARCHETYPE_CHANCE = 0.06
 
 # Noise (std dev, rating points) applied per-rating when building the baseline
 # ratings dict before archetype skews are applied. Provisional/tunable -- a

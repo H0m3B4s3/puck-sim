@@ -197,6 +197,86 @@ round.
 - **Defender-suppression conservation** measures ~−0.8% league goals at 9.6k games/arm (synergy
   ~−0.1%). Small; a candidate for a minor `DEF_SUPPRESSION_PIVOT` nudge during the Phase-5 sweep.
 
+---
+
+# Follow-on: Archetype-refresh round (PRs #56–#59)
+
+Running the app live after the synergy round surfaced two generation problems, and the elite tier
+was one blurry "Generational Forward". This round fixed all three and absorbed the synergy round's
+outstanding Phase-5 tuning sweep (the archetype distribution moved the very means those pivots were
+centered on, so they had to be re-measured together).
+
+### Phase A — Distinct elite tier + skilled physical forwards (#56)
+
+Replaced `Generational Forward` with ten distinct legend styles. **Key design choice:** elite
+archetypes map to their *natural* role, not all to `generational` — only true do-everything talents
+(Crosby/McDavid) get `ROLE_GENERATIONAL`, so an elite sniper is still a `finisher` who wants a setup
+man. Lineup construction stays meaningful with stars, and the engine needed no changes.
+
+| Elite forwards | Model | Role | Elite D | Model | Role |
+|---|---|---|---|---|---|
+| Two-Way Driver | Crosby | generational | Unicorn Defenseman | Orr | generational |
+| Offensive Juggernaut | McDavid | generational | Puck-Moving Norris | Makar | offensive_d |
+| Playmaking Juggernaut | Gretzky | playmaker | Smooth Two-Way D | Leetch/Fox | two_way_d |
+| Elite Sniper | Ovechkin | finisher | Shutdown Colossus | Lidström | shutdown_d |
+| Elite Power Winger | Jagr | finisher | | | |
+| Defensive Driver | Bergeron | two_way_f | | | |
+
+Also added everyday-tier **Power Winger** (Tkachuk: physical *and* finishes) and **Power Center**
+(Messier), filling the gap between Power Forward (guts offense) and the pure scorers.
+
+### Phase B — Overall-weighted selection + depth-D vocabulary (#57)
+
+Selection was a flat, overall-blind `rng.choice`, so a 90-target winger was as likely to roll
+Grinder as a 60-target one. Now each archetype carries a `(depth_weight, star_weight)` blended by
+target overall, so scorers concentrate in the top-six and checkers in the bottom-six — a *lean*, not
+a hard rule, so a weak team's top-six still gets padded with grinders.
+
+Added the two missing depth-D identities (bottom pairs were filling with Enforcer goons):
+**Stay-at-Home Defenseman** (limited defensive depth, `shutdown_d`) and **Puck-Rushing Defenseman**
+(DeAngelo-style: advances the puck, real defensive liability, `offensive_d`).
+
+### Phase C — Skew-preserving calibration (#58)
+
+Calibration added a uniform gap to *every* rating. Since signature-high ratings saturate at the 99
+clamp and only the holes have headroom, it systematically **filled the holes in** — identity washed
+out exactly where it should be sharpest (a 93-OVR "Grinder" with real offense). Calibration now
+nudges only the *non-skewed* ratings; the fallback may move skewed ones but only in each skew's own
+direction, never reversing it. A heavily negative-skew archetype may land *below* a very high
+target, which is correct: its holes cap the achievable overall.
+
+### Phase D — Conservation sweep + re-centered pivots (#59)
+
+Re-measured the shot-weighted means the synergy pivots must be centered on, at 360 games/arm across
+6 seeds, against the pre-round baseline (`87106bf`).
+
+| Metric | Baseline (pre-round) | After A+B+C | After re-centering |
+|---|---|---|---|
+| goals/game | 5.319 | 5.503 (+3.5%) | **5.397 (+1.5%)** |
+| xG/game | 5.367 | 5.663 | 5.585 |
+| SOG/game | 24.63 | 25.54 | 25.42 |
+| save% | .7904 | .7905 | .7956 |
+| mean `def_value` | 69.85 | 69.27 | 69.20 |
+| mean synergy | 0.685 | 0.700 | 0.704 |
+
+`DEF_SUPPRESSION_PIVOT` 70.0 → **69.3**, `SYNERGY_PIVOT_SCORE` 0.69 → **0.70**. Both now sit within
+0.1 / 0.004 of the measured means (residual quality offset ~0.001, negligible), where before they
+handed every average shot a small free bonus. The remaining **+1.5%** goals/game is *genuine*, not a
+centering artifact: shot volume rose because better shooters now occupy scoring roles.
+
+`_RARE_ARCHETYPE_CHANCE` 0.025 → **0.06**: at the old value a league averaged ~0.67 rare skaters, so
+most leagues had no marquee player and the expanded elite tier was effectively invisible. Now
+**2.75 elite-archetype skaters per league** (measured over 8 leagues, range 1–6), spread across ten
+styles so repeats are uncommon.
+
+**Resulting distribution** (6 leagues): top-6 forwards 56.8% finisher/playmaker vs 17.0%
+grinder/physical; bottom-6 25.5% vs 53.2%. D pairs: 3rd-pair goon share fell 32% → 12%, replaced by
+stay-at-home/puck-rushing depth D. Strong teams field 3.56 scoring top-six forwards vs 3.20 for weak
+teams — a league-wide spread that falls out of overall-weighted selection with no per-team logic.
+
+**Goalies deliberately untouched:** elite goaltending is "reliably good year after year", which the
+existing `gk_consistency` rarity gate already encodes.
+
 ## Explicitly out of scope (backlog — see `[[project_feature_backlog]]`)
 
 Farm system, pick-trading, RFA/negotiation, staff, finances, news, directed training, and the
