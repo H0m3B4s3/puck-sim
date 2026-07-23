@@ -372,6 +372,58 @@ def sign_prospect(
     )
 
 
+class RosterMoveResponse(BaseModel):
+    """Result of a call-up or send-down."""
+    ok: bool
+    message: str
+
+
+@router.post("/prospects/{pid}/call-up", response_model=RosterMoveResponse)
+def call_up_prospect(
+    pid: int,
+    world: World = Depends(get_world),
+    sid: str = Depends(get_session_id),
+) -> RosterMoveResponse:
+    """Call one of the user team's signed prospects up onto the NHL roster.
+
+    The manual counterpart to the offseason's automatic promotion, usable any time roster
+    space and cap allow -- a real mid-season recall, not just an offseason graduation. He
+    stops being a prospect the moment he's called up (``World.sign_player`` clears the
+    development record). Refusals (unsigned, no room, over the cap) come back as
+    ``ok: false`` with the reason, like every other roster decision here.
+    """
+    team = world.user_team
+    if team is None:
+        raise HTTPException(status_code=404, detail="no user team found")
+    ok, message = prospects.promote_prospect(world, team.tid, pid)
+    if ok:
+        session_store.save(sid, world)
+    return RosterMoveResponse(ok=ok, message=message)
+
+
+@router.post("/{pid}/send-down", response_model=RosterMoveResponse)
+def send_down_player(
+    pid: int,
+    world: World = Depends(get_world),
+    sid: str = Depends(get_session_id),
+) -> RosterMoveResponse:
+    """Send one of the user team's rostered players down to the minors.
+
+    He comes off the active roster into a development tier, keeping his contract and costing
+    no cap space while he's down. Gated on still being young enough for a tier to take him --
+    a veteran past the AHL age ceiling has nowhere to go. Placed before ``/{tid}`` (which is
+    a GET, so no real collision) but kept explicit for the same route-ordering reason the
+    prospect routes are.
+    """
+    team = world.user_team
+    if team is None:
+        raise HTTPException(status_code=404, detail="no user team found")
+    ok, message = prospects.demote_player(world, team.tid, pid)
+    if ok:
+        session_store.save(sid, world)
+    return RosterMoveResponse(ok=ok, message=message)
+
+
 # ---------------------------------------------------------------------------
 # GET /roster/{tid} -- any team's roster
 # ---------------------------------------------------------------------------

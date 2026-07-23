@@ -188,14 +188,14 @@ def get_draft_board(
         # Move remaining prospects to free agency, enforce roster max
         draft_system.undrafted_to_free_agency(world)
         offseason.enforce_roster_max(world)
-        # Graduate everyone whose rating says they belong, mirroring headless
-        # `offseason.run_offseason`'s ordering exactly (after the draft and roster-max
-        # enforcement, before free agency) so a team fills holes from its own system first.
-        # Not excluded for the user's team: every other pre-free-agency step here
-        # (aging, contract expiry, entry-level signings) already runs for all 32 teams,
-        # and leaving the user's ready prospects stranded in the minors with no UI to
-        # promote them would be worse than promoting them automatically.
-        prospects.promote_ready_prospects(world)
+        # Graduate every AI team's ready prospects, mirroring headless
+        # `offseason.run_offseason`'s ordering (after the draft and roster-max enforcement,
+        # before free agency) so a team fills holes from its own system first. The USER's
+        # team is excluded: now that the Prospects screen has a Call Up action, a manager
+        # makes his own promotions rather than having the engine reach onto his roster. His
+        # ready prospects simply wait in the minors -- they cost no cap and `fill_rosters`
+        # still guarantees a legal roster -- until he calls them up.
+        prospects.promote_ready_prospects(world, exclude_tid=world.user_team_id)
         world.phase = Phase.FREE_AGENCY
         session_store.save(sid, world)
 

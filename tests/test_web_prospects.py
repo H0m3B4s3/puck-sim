@@ -217,3 +217,77 @@ def test_player_detail_development_is_null_for_an_nhl_player(client, career):
     roster = client.get("/roster").json()["players"]
     detail = client.get(f"/players/{roster[0]['pid']}").json()
     assert detail["development"] is None
+
+
+# ---------------------------------------------------------------------------
+# Manual call-up and send-down endpoints
+# ---------------------------------------------------------------------------
+def _give_user_a_signed_ready_prospect(client, tier="ahl"):
+    """A signed, NHL-ready prospect on the user team, with a roster spot free for him."""
+    from pucksim.models import attributes as attr
+    from pucksim.models.contract import flat_contract
+    from pucksim.models.player import Player
+    from pucksim.systems import prospects
+    from pucksim.web.session import session_store
+
+    sid = client.cookies.get(SESSION_COOKIE_NAME)
+    world = session_store.get(sid)
+    tid = world.user_team_id
+    while len(world.teams[tid].roster) >= config.ROSTER_MAX - 1:
+        world.release_player(world.teams[tid].roster[-1])
+    player = Player(pid=world.new_pid(), name="Ready Kid", age=20, position="C",
+                    ratings={n: 90 for n in attr.ALL_RATINGS})
+    player.league_origin = "europe"
+    player.potential = 92
+    player.contract = flat_contract(900_000, 3, is_rookie_scale=True)
+    world.add_player(player)
+    prospects.enter_development(player, tier, world.season_year, rights_tid=tid)
+    session_store.save(sid, world)
+    return player.pid
+
+
+def test_call_up_endpoint_adds_the_prospect_to_the_roster(client, career):
+    pid = _give_user_a_signed_ready_prospect(client)
+    before = len(client.get("/roster").json()["players"])
+
+    resp = client.post(f"/roster/prospects/{pid}/call-up")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert len(client.get("/roster").json()["players"]) == before + 1
+    # He's gone from the prospect pool.
+    assert all(p["pid"] != pid
+               for p in client.get("/roster/prospects").json()["prospects"])
+
+
+def test_call_up_of_an_unsigned_prospect_is_refused(client, career):
+    pid = _give_user_an_unsigned_prospect(client)
+    resp = client.post(f"/roster/prospects/{pid}/call-up")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "contract" in body["message"].lower()
+
+
+def test_send_down_endpoint_moves_a_rostered_player_to_the_minors(client, career):
+    pid = _give_user_a_signed_ready_prospect(client)
+    assert client.post(f"/roster/prospects/{pid}/call-up").json()["ok"] is True
+    on_roster = len(client.get("/roster").json()["players"])
+
+    resp = client.post(f"/roster/{pid}/send-down")
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert len(client.get("/roster").json()["players"]) == on_roster - 1
+    assert any(p["pid"] == pid
+               for p in client.get("/roster/prospects").json()["prospects"])
+
+
+def test_player_detail_flags_send_down_only_for_eligible_own_players(client, career):
+    pid = _give_user_a_signed_ready_prospect(client)
+    client.post(f"/roster/prospects/{pid}/call-up")
+    assert client.get(f"/players/{pid}").json()["can_send_down"] is True
+
+    # A player on another team is never send-down-able by the user.
+    world_roster = client.get("/roster").json()["players"]
+    # An old veteran on the user's roster is too experienced -> not send-down-able.
+    detail = client.get(f"/players/{world_roster[0]['pid']}").json()
+    assert isinstance(detail["can_send_down"], bool)

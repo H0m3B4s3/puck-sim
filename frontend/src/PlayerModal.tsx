@@ -1,7 +1,7 @@
 // Player detail modal (T7)
 // Full player card with stats, ratings, legacy résumé, and career table.
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./api";
 import { Modal, FaceoffDotSpinner } from "./ui";
 
@@ -23,10 +23,35 @@ function formatSalary(salary: number): string {
   return `$${(salary / 1_000_000).toFixed(1)}M`;
 }
 
-export function PlayerModal({ pid, onClose }: { pid: number; onClose: () => void }) {
+export function PlayerModal({
+  pid,
+  onClose,
+  toast,
+}: {
+  pid: number;
+  onClose: () => void;
+  toast?: (msg: string) => void;
+}) {
+  const queryClient = useQueryClient();
   const { data: player, isLoading } = useQuery({
     queryKey: ["player", pid],
     queryFn: () => api.getPlayer(pid),
+  });
+
+  const sendDownMutation = useMutation({
+    mutationFn: () => api.sendDownPlayer(pid),
+    onSuccess: (result) => {
+      toast?.(result.message);
+      if (result.ok) {
+        queryClient.invalidateQueries({ queryKey: ["player", pid] });
+        queryClient.invalidateQueries({ queryKey: ["prospects"] });
+        queryClient.invalidateQueries({ queryKey: ["roster"] });
+        queryClient.invalidateQueries({ queryKey: ["rosterLines"] });
+        queryClient.invalidateQueries({ queryKey: ["cap"] });
+        onClose();
+      }
+    },
+    onError: (e: Error) => toast?.(e.message),
   });
 
   if (isLoading) {
@@ -135,6 +160,25 @@ export function PlayerModal({ pid, onClose }: { pid: number; onClose: () => void
                 </span>
               ) : null}
             </div>
+          </div>
+        ) : null}
+
+        {/* Roster action: send a rostered player down to the minors. Only shown when the
+            move is legal (own roster, under contract, still tier-eligible) -- see
+            can_send_down on the DTO. */}
+        {player.can_send_down ? (
+          <div style={{ marginBottom: "1rem" }}>
+            <button
+              onClick={() => sendDownMutation.mutate()}
+              disabled={sendDownMutation.isPending}
+              style={{
+                padding: "0.4rem 0.8rem",
+                fontSize: "0.85rem",
+                cursor: sendDownMutation.isPending ? "wait" : "pointer",
+              }}
+            >
+              {sendDownMutation.isPending ? "Sending down…" : "Send to Minors"}
+            </button>
           </div>
         ) : null}
 
