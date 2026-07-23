@@ -178,6 +178,63 @@ def test_round_trip_preserves_pre_draft_and_draft_bio():
     assert restored.draft == {"year": 2024, "round": 1, "pick": 5, "team": 3}
 
 
+def test_round_trip_preserves_development_record():
+    """The development dict is the prospect round's whole state (docs/PROSPECT_DEV_PLAN.md)
+    -- if it doesn't survive a save it takes every prospect in the league with it."""
+    p = make_skater(
+        age=18,
+        development={"tier": "chl", "seasons": 1, "tier_seasons": 1,
+                      "rights_tid": 4, "rights_expire": 2033,
+                      "line": {"gp": 58, "g": 31, "a": 44}},
+    )
+    restored = Player.from_dict(p.to_dict())
+    assert restored.development == p.development
+    assert restored.is_prospect is True
+
+
+def test_players_outside_the_development_system_round_trip_as_none():
+    """Old saves (and every established NHL player) carry no development record."""
+    p = make_skater()
+    assert p.development is None
+    assert p.is_prospect is False
+    restored = Player.from_dict(p.to_dict())
+    assert restored.development is None
+    assert restored.is_prospect is False
+
+
+def test_from_dict_defaults_development_on_a_pre_prospect_round_save():
+    """A save written before Player.development existed has no such key at all."""
+    legacy = make_skater().to_dict()
+    del legacy["development"]
+    restored = Player.from_dict(legacy)
+    assert restored.development is None
+    assert restored.is_prospect is False
+
+
+def test_development_record_is_copied_not_aliased_on_serialization():
+    """to_dict/from_dict must hand back an independent dict, same as draft/pre_draft --
+    a shared reference would let a restored World mutate the one it was loaded from."""
+    p = make_skater(development={"tier": "ncaa", "seasons": 0, "tier_seasons": 0,
+                                  "rights_tid": None, "rights_expire": None, "line": {}})
+    d = p.to_dict()
+    d["development"]["tier"] = "ahl"
+    assert p.development["tier"] == "ncaa"
+
+    restored = Player.from_dict(d)
+    restored.development["tier"] = "europe"
+    assert d["development"]["tier"] == "ahl"
+
+
+def test_a_prospect_is_also_a_free_agent():
+    """Prospects hold no NHL roster spot and deliberately stay in World.free_agents --
+    is_prospect is the data question, not the "may he be signed" rules question."""
+    p = make_skater(team_id=None, development={"tier": "chl", "seasons": 0,
+                                                "tier_seasons": 0, "rights_tid": 2,
+                                                "rights_expire": 2032, "line": {}})
+    assert p.is_prospect is True
+    assert p.is_free_agent is True
+
+
 def test_round_trip_preserves_career_and_accolades():
     p = make_skater()
     p.career.append({"season": 2023, "g": 30, "a": 40})

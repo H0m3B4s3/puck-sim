@@ -100,6 +100,35 @@ def test_to_dict_from_dict_round_trip_with_options_and_mixed_guarantees():
     assert all(isinstance(k, int) for k in restored.options)
 
 
+def test_slide_years_round_trips_and_defaults_to_zero():
+    """ELC slide bookkeeping (docs/PROSPECT_DEV_PLAN.md). systems/prospects.py applies the
+    rule; Contract only has to remember what it did."""
+    fresh = Contract(salaries=[900_000] * 3, guaranteed=[True] * 3, is_rookie_scale=True)
+    assert fresh.slide_years == 0
+
+    slid = Contract.from_dict({**fresh.to_dict(), "slide_years": 2})
+    assert slid.slide_years == 2
+    assert Contract.from_dict(slid.to_dict()).slide_years == 2
+
+
+def test_from_dict_defaults_slide_years_on_a_pre_slide_rule_save():
+    """Saves written before the slide rule existed have no such key."""
+    legacy = flat_contract(900_000, 3, is_rookie_scale=True).to_dict()
+    del legacy["slide_years"]
+    assert Contract.from_dict(legacy).slide_years == 0
+
+
+def test_advance_year_is_independent_of_slide_years():
+    """A slide is the DECISION NOT to call advance_year, taken by systems/prospects.py --
+    Contract itself has no slide behavior baked into it, so a contract that has slid before
+    still burns a normal year whenever it is advanced."""
+    c = flat_contract(900_000, 3, is_rookie_scale=True)
+    c.slide_years = 2
+    c.advance_year()
+    assert c.years_remaining == 2
+    assert c.slide_years == 2
+
+
 def test_to_dict_produces_json_safe_option_keys():
     c = Contract(salaries=[1], guaranteed=[True], options={0: "player"})
     d = c.to_dict()

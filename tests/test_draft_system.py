@@ -121,17 +121,52 @@ def test_generated_prospects_have_pre_draft_bio_populated():
             assert "pts" in p.pre_draft
 
 
-def test_generated_prospects_have_inert_league_origin():
-    """DESIGN.md point 11 / DEVPLAN.md Step 2.5's open item: every v1 prospect
-    is tagged with the generic/inert league_origin, a forward-compat hook for
-    the future CHL/NCAA fork (Step 3.2) -- not a design task now, just a field
-    that must actually be present and set."""
+def test_generated_prospects_have_a_real_league_origin():
+    """DESIGN.md point 11's CHL/NCAA fork, finally live (docs/PROSPECT_DEV_PLAN.md).
+
+    ``league_origin`` was an inert "none" placeholder from Step 1.6 until the prospect
+    development round gave it consumers: it decides which development tiers a drafted
+    player is eligible for. Every prospect must now carry a real one -- an unrecognized
+    or defaulted origin would silently make a player eligible for the wrong tiers.
+    """
     rng = Rng(seed=SEED)
     counter = iter(range(1, 10_000))
-    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=40)
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=120)
     for p in pool:
-        assert p.league_origin == config.DEFAULT_LEAGUE_ORIGIN == "none"
         assert p.league_origin in config.LEAGUE_ORIGIN_CHOICES
+        assert p.league_origin != config.DEFAULT_LEAGUE_ORIGIN, p.pre_draft["level"]
+
+    origins = {p.league_origin for p in pool}
+    # A class of this size should contain all three real routes -- if one is missing the
+    # tier system would never exercise a whole branch of its eligibility rules.
+    assert origins == {"chl", "ncaa", "europe"}
+
+
+def test_league_origin_always_agrees_with_the_scouting_report_level():
+    """A prospect whose bio reads "CHL" has to BE a major-junior player for eligibility
+    purposes, or the UI and the rules engine disagree about the same player."""
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=120)
+    for p in pool:
+        assert p.league_origin == prospectgen._ORIGIN_BY_LEVEL[p.pre_draft["level"]]
+
+
+def test_every_pre_draft_level_maps_to_an_origin():
+    """The lookup has no fallback branch worth relying on -- a level added to the weighted
+    pool without a mapping would quietly fall back to the inert default."""
+    levels = {level for level, _ in prospectgen._PRE_DRAFT_LEVELS}
+    assert levels == set(prospectgen._ORIGIN_BY_LEVEL)
+    for origin in prospectgen._ORIGIN_BY_LEVEL.values():
+        assert origin in config.LEAGUE_ORIGIN_CHOICES
+
+
+def test_us_amateur_routes_all_land_on_the_college_track():
+    """USHL and prep players are college-bound by construction; only the CHL fork is
+    mechanically distinct (it forfeits NCAA eligibility and bars the AHL before 20)."""
+    assert prospectgen._ORIGIN_BY_LEVEL["USHL"] == "ncaa"
+    assert prospectgen._ORIGIN_BY_LEVEL["High School / Prep"] == "ncaa"
+    assert prospectgen._ORIGIN_BY_LEVEL["CHL"] == "chl"
 
 
 def test_prospect_pool_includes_some_goalies():

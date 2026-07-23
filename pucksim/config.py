@@ -528,11 +528,121 @@ PROSPECT_DEVELOPMENT_YEARS_BY_PICK = (
 )
 PROSPECT_DEVELOPMENT_YEARS_DEFAULT = 3   # round two and later
 
+# ---------------------------------------------------------------------------
+# Development tiers (`systems/prospects.py`, docs/PROSPECT_DEV_PLAN.md)
+# ---------------------------------------------------------------------------
+# Where a prospect actually IS while developing, replacing the pick-number window above
+# with a place + an age. These are abstract tiers, not simulated leagues: no schedule, no
+# games, no standings (scope decision recorded in docs/PROSPECT_DEV_PLAN.md). What a tier
+# does is gate eligibility (who may be assigned there) and set a development rate.
+DEV_TIER_CHL = "chl"          # Canadian major junior (OHL/QMJHL/WHL)
+DEV_TIER_NCAA = "ncaa"        # US college hockey
+DEV_TIER_AHL = "ahl"          # the professional development league
+DEV_TIER_EUROPE = "europe"    # European pro/junior
+DEV_TIERS = (DEV_TIER_CHL, DEV_TIER_NCAA, DEV_TIER_AHL, DEV_TIER_EUROPE)
+
+# Age bands per tier, inclusive on both ends: (min_age, max_age).
+#
+# CHL tops out at 19 because a 20-year-old drafted junior player turns pro in reality --
+# the CHL's over-age rules exist mainly for undrafted players and are not worth modeling
+# separately here. NCAA runs to 23 (four years of eligibility starting as late as 20).
+# AHL's floor of 20 is the CHL-origin floor; see DEV_TIER_AHL_MIN_AGE_NON_CHL for why a
+# non-junior player can get there two years earlier.
+DEV_TIER_AGE_BANDS = {
+    DEV_TIER_CHL: (16, 19),
+    DEV_TIER_NCAA: (18, 23),
+    DEV_TIER_AHL: (20, 25),
+    DEV_TIER_EUROPE: (18, 25),
+}
+
+# The real CHL-NHL transfer agreement: a drafted major-junior player under 20 may play in
+# the NHL or go back to junior, but NOT in the AHL. A player who came up any other way
+# (NCAA, Europe, US junior) has no such restriction and can turn pro at 18. This single
+# rule is the main reason `league_origin` has to be populated for real rather than left at
+# the inert "none" default it has carried since Step 1.6.
+DEV_TIER_AHL_MIN_AGE_NON_CHL = 18
+
+# NCAA eligibility is four seasons. A player who exhausts it without being signed becomes
+# a college free agent -- one of this round's two undrafted pathways.
+NCAA_MAX_SEASONS = 4
+
+# Past this age a player leaves the development system entirely and becomes an ordinary
+# free agent, where `offseason.cull_free_agents` washes him out if he never became an NHL
+# player. Most late-round picks never play a game; that is the correct outcome, not a leak.
+MAX_PROSPECT_AGE = 25
+
+# How good a player has to be before an NHL roster spot is the right place for him. The
+# gate exists for economic reasons as much as realism: without it, every draft signed ~150
+# prospects (median overall ~52 against a league median of ~67) straight onto NHL rosters at
+# entry-level prices, displacing market-priced players until 41% of the league was on ELCs
+# and payroll had collapsed from ~94% of the cap to ~65% (PR #61). Set just above the
+# league's median regular.
+#
+# Lives in config rather than in `systems/draft_system.py` (where it started, as
+# DRAFT_NHL_READY_OVERALL) now that promotion out of the development tiers asks the same
+# question the draft does -- a prospect graduates when his rating says he belongs, so both
+# call sites have to be reading the same number.
+NHL_READY_OVERALL = 68
+
+# An undrafted player is nobody's property forever. Real NHL: a North American amateur who
+# goes unpicked keeps re-entering the draft until he ages out, at which point he becomes an
+# unrestricted free agent any team may sign. That age-out is what makes the undrafted
+# pathway a real pathway rather than a dead end -- develop past NHL_READY_OVERALL without
+# being claimed and you hit the open market as a genuine prize.
+UDFA_FREE_AGENT_AGE = 20
+
+# The real CBA's 50-contract limit: a team may have at most this many players under
+# professional contract (NHL roster + signed prospects) at once. Without it, entry-level
+# deals are free -- they cost no cap space while the player is off-roster (see
+# `systems/prospects.py`) -- so a team could sign every prospect it drafted forever and
+# hoard the entire talent pipeline at zero cost.
+MAX_CONTRACTS = 50
+
+# How long a team holds a drafted player's rights before he returns to the pool. Real NHL
+# is two years for major-junior players and four for college players (a team can keep NCAA
+# rights until the August after graduation) -- that asymmetry is real, and it makes drafting
+# a college kid a genuinely different bet from drafting a junior one. Keyed by the tier the
+# player was assigned at the draft; anything unlisted uses the default.
+PROSPECT_RIGHTS_YEARS = {
+    DEV_TIER_CHL: 2,
+    DEV_TIER_NCAA: 4,
+    DEV_TIER_EUROPE: 4,
+    DEV_TIER_AHL: 3,
+}
+PROSPECT_RIGHTS_YEARS_DEFAULT = 3
+
 # Contract length bounds. Real NHL max is 8 years (7 for a sign-and-trade,
 # simplified away here); rookie-scale (entry-level) deals are always 3 years
 # flat, matching the real ELC's fixed 3-year term regardless of signing age.
 MAX_CONTRACT_YEARS = 8
 ROOKIE_CONTRACT_YEARS = 3
+
+# ---------------------------------------------------------------------------
+# Entry-level contracts (`systems/prospects.py`, docs/PROSPECT_DEV_PLAN.md)
+# ---------------------------------------------------------------------------
+# ELC term by the player's age when he signs, read as (max_age, years). The real CBA's
+# schedule exactly: 18-21 gets three years, 22-23 two, 24 one, and 25+ isn't entry-level at
+# all -- that player signs a normal market contract. Anything past the final band means
+# "not ELC-eligible" (see ELC_MAX_AGE).
+ELC_YEARS_BY_AGE = (
+    (21, 3),
+    (23, 2),
+    (24, 1),
+)
+ELC_MAX_AGE = 24        # 25 and older: a market contract, not entry level
+
+# The slide rule, and the whole reason a drafted teenager can be signed early without
+# wasting the deal. A player who is 18 or 19 at the start of a season and plays fewer than
+# ELC_SLIDE_GAMES NHL games that season does not burn a contract year: the deal slides
+# forward intact.
+#
+# ELC_SLIDE_MAX_AGE = 19 is what bounds this at two slides without a separate counter --
+# age advances exactly one year per offseason, so 18 -> 19 -> 20 can slide twice and no
+# more, which is precisely the real rule's outcome (sign at 18, slide twice, the three-year
+# deal starts at 20). `Contract.slide_years` records what happened for display and tests;
+# it is not what enforces the limit.
+ELC_SLIDE_MAX_AGE = 19
+ELC_SLIDE_GAMES = 10
 
 # Rookie-scale (entry-level) pay is a small flat fraction of the cap, not a
 # market-rate salary -- this is what keeps drafted stars cheap for their first

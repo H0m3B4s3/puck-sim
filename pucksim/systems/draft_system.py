@@ -62,6 +62,7 @@ from __future__ import annotations
 
 from typing import List
 
+from pucksim.config import NHL_READY_OVERALL
 from pucksim.gen.prospectgen import generate_prospect_pool
 from pucksim.models.draft import DraftClass
 from pucksim.models.league import Game, standings
@@ -89,14 +90,15 @@ DRAFT_ROUNDS = 7
 # roster-full case, now the normal path rather than an edge case.
 
 # Even the first-overall pick has to actually be NHL-caliber to take a roster spot; a weak
-# draft class's top pick doesn't automatically belong in the league. Set just above the
-# league's median regular (~67).
+# draft class's top pick doesn't automatically belong in the league.
 #
-# The gate exists for economic reasons, not just realism: without it every draft signed
-# ~150 prospects (median overall ~52) straight onto NHL rosters at entry-level prices,
-# displacing real market-priced players until 41% of the league was on entry-level deals
-# and payroll had collapsed from ~94% of the cap to ~65%.
-DRAFT_NHL_READY_OVERALL = 68
+# Now an alias for config.NHL_READY_OVERALL rather than its own number: promotion out of a
+# development tier asks exactly the same question this does ("does his rating say he belongs
+# in the league?"), and the two must never be able to drift apart -- a graduation bar looser
+# than the draft's would let the tiers leak sub-replacement players into the NHL, which is
+# the economic failure this gate exists to prevent. Kept under the old name for this
+# module's existing callers and tests.
+DRAFT_NHL_READY_OVERALL = NHL_READY_OVERALL
 
 
 def _effective_rounds(num_teams: int, pool_size: int, requested_rounds: int) -> int:

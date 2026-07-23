@@ -3,8 +3,17 @@
 Per DESIGN.md's v1 cap/contract fidelity decision, this is a HoopR-style
 simplified model: a single cap number, basic contract terms, and nothing
 more. Real NHL CBA detail (arbitration, offer sheets, LTIR cap relief,
-waivers, one-way/two-way entry-level contracts) is explicitly deferred to
-a later pass (DEVPLAN.md Step 3.1) once the core loop works.
+waivers, one-way/two-way splits) is explicitly deferred to a later pass
+(DEVPLAN.md Step 3.1) once the core loop works.
+
+One piece of that list has since landed early, because the prospect
+development round needed it (docs/PROSPECT_DEV_PLAN.md): entry-level
+contracts now have a real CBA-shaped term (three years at 18-21, two at
+22-23, one at 24) and a real slide rule, both owned by
+``systems/prospects.py``. What this dataclass contributes is the
+``slide_years`` counter below; the one-way/two-way salary split that
+usually accompanies an ELC is still deferred, since with no simulated
+minor league there are no minor-league salaries to split.
 
 This is a near-verbatim structural port of HoopR's ``hoopsim/models/contract.py``:
 a contract is a list of annual salaries (index 0 == the current season).
@@ -34,6 +43,13 @@ class Contract:
     signed_year: int = 0            # season year the deal was signed
     years_with_team: int = 0        # tenure counter (no Bird-rights-style cap exception in v1)
     is_rookie_scale: bool = False
+    # How many times an entry-level deal has SLID (config.ELC_SLIDE_MAX_AGE/ELC_SLIDE_GAMES,
+    # applied by systems/prospects.py). A slid year is one the player did not burn: the
+    # contract keeps all of its remaining years and simply starts later. Recorded here for
+    # display and tests -- the two-slide ceiling is enforced by the age condition, not by
+    # this counter (see config's ELC_SLIDE_MAX_AGE comment). Meaningless on a non-rookie-
+    # scale deal, and defaults to 0 on saves written before the rule existed.
+    slide_years: int = 0
 
     # -- queries ------------------------------------------------------------
     @property
@@ -75,6 +91,7 @@ class Contract:
             "signed_year": self.signed_year,
             "years_with_team": self.years_with_team,
             "is_rookie_scale": self.is_rookie_scale,
+            "slide_years": self.slide_years,
         }
 
     @classmethod
@@ -87,6 +104,7 @@ class Contract:
             signed_year=d.get("signed_year", 0),
             years_with_team=d.get("years_with_team", 0),
             is_rookie_scale=d.get("is_rookie_scale", False),
+            slide_years=d.get("slide_years", 0),
         )
 
     @classmethod
