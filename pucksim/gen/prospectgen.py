@@ -24,9 +24,12 @@ Pre-draft bio shape (loosely ports HoopR's ``scouting.py``-adjacent
 HoopR generates a plausible per-game production line inferred from ratings,
 purely as flavor for the scouting screen, not consumed by engine logic).
 PuckSim's version is a hockey-shaped equivalent (goals/assists/points-per-game
-instead of basketball's ppg/rpg/apg, a QMJHL/OHL/WHL/NCAA/international
-"level" label) with the same "flavor only, inferred from ratings, not fed back
-into generation" property.
+instead of basketball's ppg/rpg/apg, a CHL/NCAA/USHL/international "level"
+label). The production numbers themselves stay flavor-only -- inferred from
+ratings, never fed back into generation or pick order -- but as of the prospect
+development round (docs/PROSPECT_DEV_PLAN.md) the LEVEL is no longer flavor: it
+sets ``Player.league_origin``, which decides which development tiers the player
+is eligible for once he's drafted.
 """
 from __future__ import annotations
 
@@ -79,10 +82,12 @@ _PROSPECT_OVERALL_MU = 52.0
 _PROSPECT_OVERALL_SIGMA = 9.0
 _PROSPECT_OVERALL_FLOOR = 30
 
-# Pre-draft "level" flavor label pool + weights -- illustrative only (no real
-# CHL/NCAA/Europe feeder-league data model exists yet, see league_origin's
-# docstring on Player). Mirrors HoopR's own _PRE_DRAFT_LEVELS pattern (a
-# weighted flavor-text pool, not a consumed game mechanic).
+# Pre-draft "level" flavor label pool + weights. Started life as pure flavor text
+# (HoopR's own _PRE_DRAFT_LEVELS pattern) but is no longer inert: the prospect
+# development round (docs/PROSPECT_DEV_PLAN.md) derives each prospect's
+# ``league_origin`` from the level he was generated at, which then decides which
+# development tiers he is eligible for. Weights are a rough read of a real NHL draft
+# class's composition. PROVISIONAL/TUNABLE.
 _PRE_DRAFT_LEVELS = (
     ("CHL", 0.40),
     ("NCAA", 0.28),
@@ -90,6 +95,19 @@ _PRE_DRAFT_LEVELS = (
     ("International", 0.14),
     ("High School / Prep", 0.06),
 )
+
+# Pre-draft level -> config.LEAGUE_ORIGIN_CHOICES. Only the CHL fork really matters
+# mechanically (major junior permanently forfeits NCAA eligibility, and bars the AHL
+# before 20), so the three US amateur routes all collapse onto the same "ncaa" origin:
+# a USHL or prep player is on the college track by construction -- developing him is
+# the USHL's entire purpose -- and neither is barred from anything the NCAA isn't.
+_ORIGIN_BY_LEVEL = {
+    "CHL": "chl",
+    "NCAA": "ncaa",
+    "USHL": "ncaa",
+    "High School / Prep": "ncaa",
+    "International": "europe",
+}
 
 
 def _random_prospect_age(rng: Rng) -> int:
@@ -157,7 +175,7 @@ def generate_prospect(pid: int, rng: Rng, position: str = None) -> Player:
     see module docstring), then layers on the draft-specific bits: a
     draft-age (``PROSPECT_AGE_RANGE``), a lower-than-veteran target current
     overall (prospects are unfinished products), a populated ``pre_draft`` bio,
-    and ``league_origin`` set to the v1 inert default. Returns with
+    and a ``league_origin`` derived from that bio's level. Returns with
     ``team_id=None`` (undrafted) -- callers must go through
     ``freeagency.sign_rookie``/``World.sign_player`` once a team actually
     drafts this prospect, never assign a team directly.
@@ -170,8 +188,12 @@ def generate_prospect(pid: int, rng: Rng, position: str = None) -> Player:
     else:
         player = generate_skater(pid, rng, age, target_overall, position=position)
 
-    player.league_origin = DEFAULT_LEAGUE_ORIGIN
     player.pre_draft = _pre_draft_bio(rng, player)
+    # Origin follows the level the bio just rolled, so the two can never disagree --
+    # a prospect whose scouting report reads "CHL" is a major-junior player for
+    # eligibility purposes too (see _ORIGIN_BY_LEVEL).
+    player.league_origin = _ORIGIN_BY_LEVEL.get(player.pre_draft["level"],
+                                                 DEFAULT_LEAGUE_ORIGIN)
     return player
 
 
