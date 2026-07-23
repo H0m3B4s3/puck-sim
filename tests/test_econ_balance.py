@@ -292,3 +292,100 @@ def test_curve_prices_a_full_roster_near_the_cap():
     assert 0.85 <= fraction <= 1.15, (
         f"a representative roster prices at {fraction:.0%} of the cap"
     )
+
+
+# ---------------------------------------------------------------------------
+# The development pipeline (docs/PROSPECT_DEV_PLAN.md Phase 7)
+# ---------------------------------------------------------------------------
+# The prospect round rebuilt the draft -> development -> NHL path. These are its aggregate
+# properties, in the same spirit as everything above: bands that catch the pipeline
+# decisively breaking, not a frozen tuning. Each one failed at some point during the round,
+# and every one of those failures was silent -- the suite stayed green while the league
+# quietly stopped working. Measured across 8 seeds x 12 seasons before being written down.
+def test_the_pipeline_actually_delivers_players_to_the_nhl(aged_world):
+    """THE regression this round exists to prevent, and it was real on main.
+
+    Before the development tiers, the share of rostered players on entry-level deals fell
+    to 0% within two simulated offseasons and stayed there: a reserved prospect's window
+    expired straight into ``cull_free_agents``, so the draft fed nothing into the league
+    ever again. Payroll looked healthy the whole time, because the economy had simply
+    stopped having a talent pipeline -- which is exactly why this needs its own assertion
+    rather than being implied by the payroll tests above.
+    """
+    world, _ = aged_world
+    rostered = [p for p in world.players.values() if p.team_id is not None]
+    on_elc = [p for p in rostered if p.contract.is_rookie_scale]
+    share = len(on_elc) / len(rostered)
+    assert share > 0.02, "no meaningful entry-level presence: the draft feeds nothing in"
+    # And not so many that cheap labour is displacing market-priced players (the PR #61
+    # failure, which peaked at 41%).
+    assert share < 0.15, f"{share:.0%} of the league is on entry-level deals"
+
+
+def test_every_development_tier_stays_populated(aged_world):
+    """Four tiers that all funnel into one are four labels, not a system.
+
+    Two separate bugs during the round collapsed them: preferring the closest-to-NHL
+    eligible tier put ~85% of all prospects in the AHL the moment their team signed them,
+    and generating draft classes uniformly across ages 18-21 emptied junior (the CHL tier
+    ends at 19, so nobody drafted at 20 ever saw it).
+    """
+    from pucksim.systems import prospects
+
+    world, _ = aged_world
+    populations = {tier: 0 for tier in config.DEV_TIERS}
+    for player in prospects.developing_players(world):
+        populations[prospects.current_tier(player)] += 1
+
+    empty = [tier for tier, n in populations.items() if n == 0]
+    assert not empty, f"development tiers with nobody in them: {empty} ({populations})"
+    biggest = max(populations.values())
+    assert biggest / sum(populations.values()) < 0.75, (
+        f"one tier holds almost the whole system: {populations}"
+    )
+
+
+def test_entry_level_contracts_actually_slide(aged_world):
+    """The headline mechanic, and it was silently dead for most of the round.
+
+    Prospects arrived from ``playergen`` already under contract, so
+    ``prospects.is_elc_eligible`` refused every one of them -- no prospect could ever be
+    given a real entry-level deal and nothing ever slid. Every rule was correct; none of
+    them could fire. A count of zero here is that bug.
+    """
+    from pucksim.systems import prospects
+
+    world, _ = aged_world
+    slid = [p for p in prospects.developing_players(world)
+            if p.contract.slide_years > 0]
+    assert slid, "no prospect's entry-level contract has ever slid"
+    assert all(p.contract.slide_years <= 2 for p in slid), (
+        "a contract slid more than twice -- the age condition should bound this at two"
+    )
+
+
+def test_prospects_never_cost_cap_space(aged_world):
+    """Junior and minor-league contracts don't count against the NHL cap, which in this
+    model is a consequence of prospects keeping ``team_id = None`` while ``cap.payroll``
+    sums over ``Team.roster``. Asserted directly because it is a structural coincidence
+    that a future change could quietly break."""
+    from pucksim.systems import prospects
+
+    world, _ = aged_world
+    for player in prospects.developing_players(world):
+        assert player.team_id is None
+        for team in world.teams.values():
+            assert player.pid not in team.roster
+
+
+def test_the_prospect_population_does_not_grow_without_bound(aged_world):
+    """Prospects are exempt from the free-agent cull, so if nothing ever removed them the
+    world would grow forever. Aging out and the stagnation rule are what bound it."""
+    from pucksim.systems import prospects
+
+    world, _ = aged_world
+    devs = prospects.developing_players(world)
+    assert devs, "the development system emptied out"
+    # ~15 per team is a full farm system; well past that means nobody is ever leaving.
+    assert len(devs) < 40 * len(world.teams), f"{len(devs)} prospects in the system"
+    assert all(p.age <= config.MAX_PROSPECT_AGE for p in devs)

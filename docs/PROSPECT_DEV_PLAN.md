@@ -288,14 +288,52 @@ Kept at 150: the economy is healthiest there, and the *other* non-draft pathway 
 measured consequences are documented at `PROSPECT_POOL_SIZE` for whoever decides a deep
 undrafted market is worth 25% more world.
 
-## Done criteria
+### Phase 7 — the confirming sweep (8 seeds × 12 seasons)
 
-- A drafted 18-year-old lands in the CHL or NCAA by origin, develops on a tier-appropriate curve,
-  signs an ELC that slides instead of burning, moves to the AHL at 20, and reaches the NHL when his
-  rating says he's ready — not when a lookup table says so.
-- An undrafted player can develop his way into the league.
-- Old saves load with `development = None` / `slide_years = 0` and behave exactly as before.
-- Phase 7's 12-season sweep holds payroll at 91–95% of the cap with no ELC-share blowup, i.e. PR
-  #61's economy survives intact.
-- Full pytest suite green (~783 tests before this round; the suite takes ~10 minutes — it is not
-  hung).
+Phase 3 closed the drift Phase 2 had deferred here, so this phase confirms rather than
+re-centers. Bands are min–max across all 8 seeds at each season:
+
+| season | payroll % of cap | ELC share | best FA | prospects | CHL | NCAA | AHL | Europe |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 93.2–95.8% | 3.2–5.4% | 49–63 | 130–140 | 41–58 | 58–72 | 2–8 | 16–23 |
+| 4 | 90.8–97.4% | 5.3–7.1% | 67 | 432–441 | 65–100 | 201–246 | 45–66 | 62–80 |
+| 8 | 94.7–96.6% | 6.3–8.4% | 67 | 431–475 | 79–98 | 204–229 | 57–79 | 50–82 |
+| 12 | 96.6–97.1% | 6.9–9.8% | 67 | 433–449 | 83–106 | 188–241 | 51–80 | 53–85 |
+
+Every one of PR #61's four diagnostic numbers is healthy and **tighter than the pre-round
+baseline**: payroll converges to 96.6–97.1% (baseline drifted 91–97%), the entry-level share
+holds 3–10% instead of collapsing to zero, the best available free agent never falls below
+66, and world population is stable at 1155–1225. Between 12 and 27 prospects are carrying a
+slid entry-level contract at any moment, so the headline mechanic is demonstrably live.
+
+Nothing was re-centered. The sweep's properties are now regression tests in
+`test_econ_balance.py` — each one guards a failure that actually occurred during this round
+and that left the suite green while it did.
+
+## Done criteria — all met
+
+- ✅ A drafted 18-year-old lands in the CHL or NCAA by origin, develops on a tier-appropriate
+  curve, signs an ELC that slides instead of burning, moves to the AHL at 20, and reaches the NHL
+  when his rating says he's ready — not when a lookup table says so.
+- ✅ An undrafted player can develop his way into the league (thinly by the domestic route at the
+  current pool size — see the trade-off note; the international route carries 20–50 a decade).
+- ✅ Old saves load with `development = None` / `slide_years = 0` and behave exactly as before.
+- ✅ Phase 7's sweep holds payroll at 90.8–97.4% across 8 seeds × 12 seasons with no ELC-share
+  blowup — PR #61's economy is intact and tighter than before.
+- ✅ Full pytest suite green: 919 tests, up from 832 at the start of the round. (~10 minutes —
+  it is not hung.)
+
+## What a future round could pick up
+
+- **Simulate the feeder leagues for real.** The abstract-tier decision was deliberate and
+  nothing built here forecloses it: schedules, standings and box scores for the CHL/NCAA/AHL
+  would replace `development_season_line`'s synthetic numbers without changing a single
+  eligibility rule.
+- **A deeper undrafted market**, if it's worth 25% more world — one constant, measured both
+  ways at `PROSPECT_POOL_SIZE`.
+- **Two-way contracts.** `contract.py` still defers the one-way/two-way salary split, and it's
+  now the last piece of the real ELC that's missing. It only becomes meaningful once minor-league
+  salaries exist to split, which is to say once the leagues above are simulated.
+- **User control over promotion.** The web offseason promotes NHL-ready prospects for all 32
+  teams including the user's, because leaving a ready prospect stranded with no UI to call him up
+  would be worse. Now that the Prospects screen exists, a "call up" action there could take over.

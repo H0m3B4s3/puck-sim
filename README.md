@@ -16,7 +16,7 @@ pip install -e ".[dev,web]"
 pytest
 ```
 
-## Status (2026-07-22)
+## Status (2026-07-23)
 
 All of v1's gameplay systems (DEVPLAN.md Steps 2.1–2.8) are implemented and merged: special
 teams/strength states, goalies (hot-hand, rest-based rotation, pull-the-goalie), faceoffs
@@ -27,7 +27,7 @@ goalie season-to-season form variance), and coach line-juggling AI with a PP/PK 
 
 The FastAPI + React web app (DEVPLAN.md Steps 2.9/2.10) is also implemented and merged: session/
 career management, roster and line/pair/tactics editing, schedule/standings/sim-day controls, box
-scores, and cap/trades/free-agency/draft/awards screens, all wired to a hockey-rink-themed UI
+scores, and cap/trades/free-agency/draft/prospects/awards screens, all wired to a hockey-rink-themed UI
 (light "Ice" / dark "Arena" toggle). Step 2.11's web-parity round (`docs/PARITY_PLAN.md`) closed
 the gaps human testing found — playoffs, offseason, player detail, and a usable trade UI.
 
@@ -49,12 +49,35 @@ roughly $49M under an $82.5M cap because contracts were priced off a formula unr
 system's own market curve. Salaries now follow a curve calibrated against the real generated
 rating distribution, and each generated roster is fitted onto a payroll target — so a league opens
 at ~94% of the cap with most teams pressed to the ceiling, a few rebuilders holding real space,
-and nobody over the hard cap. Sustaining that across seasons meant closing the gap where drafted
-players had nowhere to develop: `systems/prospects.py` keeps a pick who isn't NHL-ready developing
-outside the roster until a window staggered by draft position elapses, rather than handing them an
-NHL job at entry-level money. League payroll now holds 91–95% of the cap across a dozen seasons.
+and nobody over the hard cap.
 
-814 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
+Sustaining that across seasons exposed a bigger gap: drafted players had nowhere to develop, and
+the stand-in built for the economy round turned out to be hiding something worse. The **prospect
+development round** ([docs/PROSPECT_DEV_PLAN.md](docs/PROSPECT_DEV_PLAN.md)) replaced it with a
+real system:
+
+- **Four development tiers** — major junior, NCAA, the AHL and Europe — with the real eligibility
+  rules that make them different from each other. Playing major junior permanently forfeits
+  college eligibility, and the CHL–NHL transfer agreement bars a drafted junior player under 20
+  from the AHL: he goes to the NHL or back to Kitchener, with nothing in between. The AHL is
+  where older prospects go, and it needs an actual contract to enter.
+- **NHL-shaped entry-level contracts.** Three years at 18–21, two at 22–23, one at 24 — and the
+  slide rule, so signing your 18-year-old first-rounder and sending him back to junior doesn't
+  waste the cheap years. It bounds itself at two slides exactly as the real one does.
+- **Age curves that matter.** Where a prospect plays now sets how fast he develops, and a prospect
+  who stalls starts losing ceiling at 21, so busts actually bust.
+- **Two ways into the league besides the draft**: undrafted players keep developing and re-enter
+  the next draft, and a handful of European pros arrive each summer already finished.
+- **A Prospects screen** showing each team's system by tier, with the slide state and the
+  sign-him-or-lose-him deadline called out — the decisions, not just the ratings.
+
+The measurement that mattered: before this round the share of the league on entry-level deals fell
+to **0% within two simulated offseasons**. The draft fed nothing into the NHL, ever, and payroll
+looked healthy the whole time because the economy had quietly stopped having a talent pipeline. It
+now holds 3–10% across 8 seeds × 12 seasons, with payroll at 91–97% of the cap and all four tiers
+populated.
+
+919 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
 end-to-end, both headlessly and through the web app. Note the suite takes roughly ten minutes —
 several tests sim multiple full seasons back to back. See [DEVPLAN.md](DEVPLAN.md) for the full
 step-by-step plan and status notes, including a handful of known non-blocking loose ends (search
