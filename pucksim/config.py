@@ -505,36 +505,19 @@ MINIMUM_SALARY = 800_000
 MAX_SALARY_CAP_FRACTION = 0.20
 
 # ---------------------------------------------------------------------------
-# Prospect development (`systems/prospects.py`)
+# Prospect development tiers (`systems/prospects.py`, docs/PROSPECT_DEV_PLAN.md)
 # ---------------------------------------------------------------------------
-# How many seasons a drafted player spends developing before they may sign an NHL
-# contract, by where they were picked. v1 has no AHL/junior league to place them in, so
-# this is a *status* rather than a place -- see systems/prospects.py's module docstring for
-# why the missing minor leagues were an economic problem and not just a missing feature.
+# These replaced a fixed development schedule keyed on draft position (first overall
+# arrived immediately, the top ten a year later, the rest of round one the year after
+# that, later rounds three-plus). That schedule was a stand-in for a development system
+# that didn't exist yet, and its cost was that a third-overall bust and a third-overall
+# superstar reached the NHL on exactly the same timetable, with nothing either of them did
+# able to change it. Now a prospect goes somewhere, develops at a rate that place and his
+# age imply, and graduates when his rating says he belongs.
 #
-# The staggered shape mirrors how a real draft class actually reaches the NHL: the first
-# overall pick usually plays immediately; the rest of the top ten mostly arrive a year
-# later; the balance of the first round the year after that; and later-round picks spend
-# three-plus years in junior, the AHL, the NCAA, or Europe, with many never arriving at
-# all. Read as (last pick number in the band, seasons of development required); anything
-# past the final band uses PROSPECT_DEVELOPMENT_YEARS_DEFAULT.
-#
-# Economically this is what stops cheap entry-level teenagers from displacing
-# market-priced NHL players, which is what collapsed league payroll before it existed.
-PROSPECT_DEVELOPMENT_YEARS_BY_PICK = (
-    (1, 0),      # first overall: NHL-ready now (still subject to a rating check)
-    (10, 1),     # rest of the top ten: mostly arrive the following season
-    (32, 2),     # remainder of round one
-)
-PROSPECT_DEVELOPMENT_YEARS_DEFAULT = 3   # round two and later
-
-# ---------------------------------------------------------------------------
-# Development tiers (`systems/prospects.py`, docs/PROSPECT_DEV_PLAN.md)
-# ---------------------------------------------------------------------------
-# Where a prospect actually IS while developing, replacing the pick-number window above
-# with a place + an age. These are abstract tiers, not simulated leagues: no schedule, no
-# games, no standings (scope decision recorded in docs/PROSPECT_DEV_PLAN.md). What a tier
-# does is gate eligibility (who may be assigned there) and set a development rate.
+# These are abstract tiers, not simulated leagues: no schedule, no games, no standings
+# (scope decision recorded in docs/PROSPECT_DEV_PLAN.md). What a tier does is gate
+# eligibility (who may be assigned there) and set a development rate.
 DEV_TIER_CHL = "chl"          # Canadian major junior (OHL/QMJHL/WHL)
 DEV_TIER_NCAA = "ncaa"        # US college hockey
 DEV_TIER_AHL = "ahl"          # the professional development league
@@ -561,6 +544,18 @@ DEV_TIER_AGE_BANDS = {
 # rule is the main reason `league_origin` has to be populated for real rather than left at
 # the inert "none" default it has carried since Step 1.6.
 DEV_TIER_AHL_MIN_AGE_NON_CHL = 18
+
+# From this age on, the AHL is the PREFERRED place to develop; below it a player belongs in
+# his amateur tier. Eligibility and preference are deliberately separate knobs: a signed
+# 18-year-old European CAN be in the AHL (per the floor above) but shouldn't be there by
+# default, because an 18-year-old is not helped by being the 11th forward on a bus league's
+# fourth line.
+#
+# Not cosmetic. Preferring the AHL at every age put ~85% of every prospect in the league
+# there the moment his team signed him -- college recruits never saw a campus and the four
+# tiers collapsed into one bucket. This is the constant that makes "the AHL is for older
+# prospects" true.
+AHL_PREFERRED_AGE = 20
 
 # NCAA eligibility is four seasons. A player who exhausts it without being signed becomes
 # a college free agent -- one of this round's two undrafted pathways.
@@ -643,6 +638,17 @@ ELC_MAX_AGE = 24        # 25 and older: a market contract, not entry level
 # it is not what enforces the limit.
 ELC_SLIDE_MAX_AGE = 19
 ELC_SLIDE_GAMES = 10
+
+# How close to NHL-ready a prospect has to be before an AI team spends one of its 50
+# contract slots on him, rather than leaving him in school another year. Outside this band
+# a team only signs when the alternative is losing him outright (see
+# `prospects.sign_or_lose_him`).
+#
+# Without this test teams signed every prospect they drafted immediately -- 90% of a class
+# under contract within a year -- which then made all of them AHL-eligible and emptied the
+# amateur tiers. Real teams sign a pick when he's ready to turn pro or when the deadline
+# forces the decision.
+ELC_SIGN_READINESS_GAP = 8
 
 # Rookie-scale (entry-level) pay is a small flat fraction of the cap, not a
 # market-rate salary -- this is what keeps drafted stars cheap for their first

@@ -142,6 +142,62 @@ unmet gap to potential) and the project's `[[feedback_no_upweighting]]` principl
 | 6 | `prospect-web-ui` | `/roster/prospects` + a Prospects screen; tier/ELC/ETA in the player modal. |
 | 7 | `prospect-balance` | 12-season sweep: payroll % of cap, ELC share, per-tier populations, best available FA. |
 
+## Measurements
+
+Method (from PR #61): `offseason.run_offseason()` forward 12 seasons across several seeds,
+watching payroll as a % of cap, the share of rostered players on entry-level deals, the
+per-tier prospect populations, and the best available free agent.
+
+### Baseline on `main` before Phase 2 (seeds 1 / 7 / 42)
+
+| | season 1 | season 3 | season 6 | season 12 |
+|---|---|---|---|---|
+| payroll % of cap | 93–96% | 92–97% | 94–97% | 94–95% |
+| share of league on ELCs | 3–4% | **0%** | **0%** | **0%** |
+
+The payroll number was healthy and the ELC number was the tell: **the draft fed nothing
+into the league.** A reserved prospect's development window expired straight into
+`cull_free_agents`, so within two simulated offseasons not one entry-level player was on an
+NHL roster, and none ever would be again. The economy looked fine because it had quietly
+stopped having a talent pipeline at all.
+
+### After Phase 2 (same seeds)
+
+| | season 1 | season 3 | season 6 | season 12 |
+|---|---|---|---|---|
+| payroll % of cap | 93–96% | 90–96% | 89–96% | 86–91% |
+| share of league on ELCs | 4–5% | 3–6% | 4–6% | 4–6% |
+| prospects (CHL / NCAA / AHL / Europe) | 26/24/58/12 | 40/71/204/17 | 38/95/347/43 | 41/79/325/25 |
+
+The pipeline delivers now, and all four tiers stay populated. The AHL holds the largest
+share by construction — it spans ages 20–25, against junior's two-year post-draft window and
+college's four — which is what "the AHL is for older prospects" looks like in aggregate.
+
+**Known drift, deferred to Phase 7:** payroll trends 3–5 points lower by season 12 than
+baseline (worst observed seed: 86%). Expected direction — cheap ELC graduates now fill roster
+spots that used to go to market-priced free agents, which is real hockey — but the likely
+mechanical cause is that promotions push teams past `freeagency.TARGET_ROSTER` (21), so they
+stop bidding while still holding cap space. Not tuned here on purpose: Phase 3's development
+curves move the very quantity being measured, and re-centering before that lands would be
+wasted work (the same reasoning PR #59 applied to the archetype round's pivots).
+
+## Two bugs this phase's own tests caught
+
+Recorded because both were silent and neither was hypothetical:
+
+1. **Every European prospect was being sent to a US college.** The NCAA gate only checked
+   "didn't play major junior," so Europeans passed it, and college outranks Europe in the
+   preference order for a teenager. Origin now gates college the same way it gates junior.
+2. **The AHL swallowed the entire system.** Preferring the closest-to-NHL eligible tier put
+   ~85% of all prospects in the AHL the moment their team signed them — college recruits
+   never saw a campus. Eligibility and preference are now separate: the AHL is *eligible*
+   from 18 for non-junior players but only *preferred* from `AHL_PREFERRED_AGE` (20).
+
+A third, found by diagnostic rather than test: teams were signing ~90% of every draft class
+immediately, because "do we believe in him?" was the only test. Signing now also requires a
+reason to spend the slot *now* — he's within `ELC_SIGN_READINESS_GAP` of the NHL, or this is
+the last offseason before he walks.
+
 ## Done criteria
 
 - A drafted 18-year-old lands in the CHL or NCAA by origin, develops on a tier-appropriate curve,
