@@ -62,7 +62,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pucksim.config import DEV_TIER_AHL, NHL_READY_OVERALL
+from pucksim.config import DEV_TIER_AHL, NHL_READY_OVERALL, UDFA_FREE_AGENT_AGE
 from pucksim.gen.prospectgen import generate_prospect_pool
 from pucksim.models.draft import DraftClass
 from pucksim.models.league import Game, standings
@@ -157,22 +157,43 @@ def setup_draft(world: World, rounds: int = DRAFT_ROUNDS,
     """
     num_teams = len(world.teams)
     size = pool_size if pool_size is not None else _default_pool_size()
-    effective_rounds = _effective_rounds(num_teams, size, rounds)
 
-    prospects = generate_prospect_pool(world.rng, world.new_pid, size=size)
-    for p in prospects:
+    pool = generate_prospect_pool(world.rng, world.new_pid, size=size)
+    for p in pool:
         world.add_player(p)
+    pool_ids = [p.pid for p in pool] + reentry_candidates(world)
 
+    effective_rounds = _effective_rounds(num_teams, len(pool_ids), rounds)
     round1_order = compute_draft_order(world)
     order = round1_order * effective_rounds
 
     dc = DraftClass(
         year=world.season_year,
-        prospect_ids=[p.pid for p in prospects],
+        prospect_ids=pool_ids,
         order=order,
     )
     world.draft_class = dc
     return dc
+
+
+def reentry_candidates(world: World) -> List[int]:
+    """Undrafted holdovers who go back on the board this year, best first.
+
+    Real NHL re-entry: an 18-year-old who goes unpicked is eligible again at 19, and again
+    at 20 if he's still around. A player who spent that year developing rather than
+    disappearing can genuinely have played his way onto the board -- which is the point of
+    ``undrafted_to_free_agency`` placing him in a tier instead of leaving him to be culled.
+
+    The cutoff is ``config.UDFA_FREE_AGENT_AGE``, the same constant that decides when an
+    unclaimed player becomes signable by anyone. That's deliberate: the two rules are one
+    rule seen from opposite sides. Below it he's re-drafted, at it he's a free agent, and
+    there is no gap where he is neither.
+    """
+    holdovers = [p for p in world.players.values()
+                 if p.is_prospect
+                 and prospects.rights_holder(p) is None
+                 and p.age < UDFA_FREE_AGENT_AGE]
+    return [p.pid for p in sorted(holdovers, key=prospect_rank, reverse=True)]
 
 
 def _default_pool_size() -> int:
@@ -388,28 +409,43 @@ def auto_complete_draft(world: World) -> dict:
 
 
 def undrafted_to_free_agency(world: World) -> int:
-    """Report how many prospects the draft class didn't use (they stay free agents).
+    """Resolve everyone the draft class didn't use. Returns how many there were.
 
-    Real NHL undrafted players become free agents immediately (eligible to
-    sign an amateur tryout / free-agent deal with any team) -- this mirrors
-    that. ``World.add_player`` already put every prospect into
-    ``world.free_agents`` at generation time (see ``setup_draft``'s
-    docstring); a player who WAS drafted but couldn't be signed onto a full
-    roster (see ``make_pick``'s docstring) is *also* still in
-    ``world.free_agents`` -- correctly so, since they're not on anyone's
-    active roster -- but is no longer in ``dc.remaining_prospects()`` (their
-    pick was recorded), so this function's count reflects only the genuinely
-    unpicked players, not drafted-but-unsigned ones. This function doesn't
-    need to move anything; it exists to (a) rebuild lines for
-    any team whose roster changed this draft (defensive no-op if none did)
-    and (b) give callers an explicit, documented "the draft's aftermath is
-    fully resolved" step with a count to report, rather than relying on
-    ``add_player``'s side effect being self-evidently sufficient.
+    Going unpicked is no longer a dead end. An undrafted player who is still young enough
+    keeps developing -- in junior, in college, wherever his background puts him -- with
+    ``rights_tid=None``, meaning nobody owns him. Two things can happen from there, and
+    both are real:
+
+    - He is still draft-eligible next June, and ``setup_draft`` puts him back on the board
+      (real NHL re-entry: a passed-over 18-year-old gets another chance at 19).
+    - He reaches ``config.UDFA_FREE_AGENT_AGE`` still unclaimed, at which point
+      ``prospects.is_open_to_all`` opens him to the entire league and any team can sign him
+      off the free-agent market.
+
+    That second path is the undrafted-free-agent story, and it is the main reason prospects
+    needed real age curves rather than a fixed schedule: a player nobody wanted at 18 can
+    develop his way into being worth something at 20, and there's now a mechanism for a
+    team to actually get him. Before this, every undrafted player simply sat in the
+    free-agent pool until ``offseason.cull_free_agents`` deleted him for being raw.
+
+    A player too old for any tier stays an ordinary free agent, exactly as before.
+
+    ``World.add_player`` already put every prospect into ``world.free_agents`` at generation
+    time (see ``setup_draft``), and developing prospects deliberately stay there -- so
+    nothing needs moving between pools here. This also rebuilds lines for any team whose
+    roster changed during the draft (a no-op if none did).
     """
     dc = world.draft_class
     if dc is None:
         return 0
     undrafted = dc.remaining_prospects()
+    for pid in undrafted:
+        player = world.players.get(pid)
+        if player is None or player.is_prospect or player.team_id is not None:
+            continue
+        tier = prospects.best_tier(player)
+        if tier is not None:
+            prospects.enter_development(player, tier, world.season_year, rights_tid=None)
     for team in world.team_list():
         auto_build_lines(team, world.players)
     return len(undrafted)

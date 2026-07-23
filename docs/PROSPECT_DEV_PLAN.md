@@ -200,6 +200,23 @@ free-agent market stays stocked with players teams actually want to buy.
 Phase 7 therefore has much less to do than planned. It should confirm these numbers across
 more seeds rather than re-center anything.
 
+### After Phase 5 (same seeds)
+
+| | season 1 | season 3 | season 6 | season 12 |
+|---|---|---|---|---|
+| payroll % of cap | 93–96% | 93–96% | 95–97% | 95–97% |
+| share of league on ELCs | 4–5% | 5% | 6–7% | 7–9% |
+| prospects (CHL / NCAA / AHL / Europe) | 45/49/18/19 | 89/115/122/35 | 97/187/189/40 | 101/176/168/37 |
+
+The best economy of any configuration measured, baseline included, and the first one where
+all four tiers are genuinely populated — junior in particular went from ~35 to ~95, because
+draft classes now arrive at the right age (see below).
+
+Ten-season pathway yield, three seeds: **20–50 undrafted players reach NHL rosters**, almost
+all European imports, including genuine top-six talent (a 79-, 87- and 76-overall forward
+across the three). The undrafted-domestic route delivers 0–1 per decade at the current pool
+size; see the trade-off note below.
+
 ## Two bugs this phase's own tests caught
 
 Recorded because both were silent and neither was hypothetical:
@@ -216,6 +233,41 @@ A third, found by diagnostic rather than test: teams were signing ~90% of every 
 immediately, because "do we believe in him?" was the only test. Signing now also requires a
 reason to spend the slot *now* — he's within `ELC_SIGN_READINESS_GAP` of the NHL, or this is
 the last offseason before he walks.
+
+Phase 5 added two more, both found by measuring rather than by testing:
+
+4. **Draft classes were generated uniformly across ages 18–21.** Real classes are
+   overwhelmingly 18-year-olds, and the uniform draw broke the age curves in two ways at
+   once: a prospect drafted at 20 has almost no runway before `PROSPECT_STAGNATION_AGE`
+   erodes his ceiling, and he skips junior entirely since the CHL tier ends at 19. Measured
+   over ten seasons, undrafted players were leaving the system at a median age of 24 having
+   entered college at 20 with their potential already ground down. Junior held ~35 players
+   league-wide. Weighted toward 18, it holds ~95 and the economy improved on every metric.
+5. **Being open to the market meant being exposed to the cull.** An undrafted 21-year-old
+   in the middle of his junior year of college was deleted from the league for not yet being
+   finished. A college player isn't a free agent while enrolled — `is_open_to_all` now
+   excludes the amateur tiers, so he reaches the market at 22–23 when his eligibility ends,
+   which is exactly when real college free agents become worth something.
+
+## The one trade-off left open
+
+The undrafted-domestic (UDFA) route is structurally complete — undrafted players develop,
+re-enter the draft while they're still teenagers, and become signable when their eligibility
+ends — but at the current `prospectgen.PROSPECT_POOL_SIZE` (150) it delivers only 0–1 NHL
+players per decade, because `_effective_rounds` scales the pick count with the pool, so ~85%
+of every class gets drafted at any size below ~260 and the leftovers are the very bottom.
+
+Measured both ways, 12 seasons, three seeds:
+
+| pool | rounds | undrafted/yr | world pop | offseason runtime | ELC share | UDFA NHLers/decade |
+|---|---|---|---|---|---|---|
+| **150 (kept)** | 4 | ~22 | ~1200 | 1.0x | 5–9% | 0–1 |
+| 260 | 7 | ~36 | ~1500 | ~2.0x | 10–14% | ~4 |
+
+Kept at 150: the economy is healthiest there, and the *other* non-draft pathway already puts
+20–50 players a decade into the league, so the side door isn't shut. The knob and its
+measured consequences are documented at `PROSPECT_POOL_SIZE` for whoever decides a deep
+undrafted market is worth 25% more world.
 
 ## Done criteria
 

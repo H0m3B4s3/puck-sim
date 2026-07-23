@@ -51,6 +51,26 @@ from pucksim.rng import Rng
 # duty instead of inventing a second, narrower one. JUDGMENT CALL, flagged.
 PROSPECT_AGE_RANGE = ROOKIE_AGE_RANGE
 
+# ...but NOT uniformly across it. A real draft class is overwhelmingly 18-year-olds: that's
+# the first year of eligibility, and a player who makes it to a second or third one is by
+# definition somebody the league already passed over. Weights are a rough read of a real
+# class's age composition.
+#
+# This is not cosmetic, and drawing uniformly (as this did originally) quietly broke the
+# development system in two places. A prospect drafted at 20 or 21 has almost no runway --
+# he reaches PROSPECT_STAGNATION_AGE within a season or two and starts losing ceiling
+# before he's had a chance to use it -- and he skips junior entirely, since the CHL tier
+# ends at 19. Measured over ten simulated seasons, undrafted players were exiting the
+# development system at a median age of 24 having entered college at 20, with their
+# potential already ground down. The age curves can't do their job if nobody arrives young
+# enough to ride them.
+_PROSPECT_AGE_WEIGHTS = (
+    (18, 0.72),
+    (19, 0.18),
+    (20, 0.07),
+    (21, 0.03),
+)
+
 # How many prospects a single draft class generates. Real NHL drafts run
 # 7 rounds x 32 teams = 224 selections, but not every draft-eligible player in
 # the world gets simulated -- only the ones who plausibly get picked need to
@@ -59,6 +79,25 @@ PROSPECT_AGE_RANGE = ROOKIE_AGE_RANGE
 # real depth-of-talent falloff, so late picks are still meaningfully weaker
 # than early ones rather than the pool running dry. PROVISIONAL/TUNABLE,
 # flagged as a judgment call in this step's report.
+#
+# THIS IS ALSO THE KNOB THAT SETS HOW BIG THE UNDRAFTED POOL IS, which is worth knowing
+# before changing it. ``_effective_rounds`` clamps the draft to ``pool_size // num_teams``
+# rounds, so the pool and the pick count scale together and roughly 85% of every class gets
+# drafted at any size below ~260. Only a pool well clear of 7 full rounds (224 picks) leaves
+# a large undrafted population for the UDFA pathway to draw from. Measured over 12 seasons
+# on three seeds:
+#
+#   150 (here): 4 rounds, ~22 undrafted/yr, world pop ~1200, ~0-1 undrafted players reach
+#               an NHL roster per decade.
+#   260:        7 rounds, ~36 undrafted/yr, world pop ~1500 (+25%, and ~2x the offseason
+#               runtime), ~4 per decade, and the share of the league on entry-level deals
+#               rises from 5-9% to 10-14% because teams draft and sign 7 players a year
+#               instead of 4.
+#
+# Kept at 150: the economy is healthiest here (payroll 94-97% of cap), and the second
+# pathway into the league -- European imports, see generate_international_free_agents below
+# -- already delivers 20-50 undrafted players to NHL rosters per decade, so the side door
+# is not actually shut. Raise this if a deep undrafted market matters more than world size.
 PROSPECT_POOL_SIZE = 150
 
 # Fraction of the generated pool that are goalies vs. skaters. Real NHL draft
@@ -111,8 +150,9 @@ _ORIGIN_BY_LEVEL = {
 
 
 def _random_prospect_age(rng: Rng) -> int:
-    lo, hi = PROSPECT_AGE_RANGE
-    return rng.randint(lo, hi)
+    """A draft-eligible age, weighted toward 18 (see ``_PROSPECT_AGE_WEIGHTS``)."""
+    return rng.weighted_one([age for age, _ in _PROSPECT_AGE_WEIGHTS],
+                             [w for _, w in _PROSPECT_AGE_WEIGHTS])
 
 
 def _random_prospect_target_overall(rng: Rng) -> int:
@@ -257,3 +297,64 @@ def generate_prospect_pool(rng: Rng, new_pid, size: int = PROSPECT_POOL_SIZE) ->
 
     rng.shuffle(prospects)
     return prospects
+
+
+# ---------------------------------------------------------------------------
+# International free agents (docs/PROSPECT_DEV_PLAN.md -- the second pathway in)
+# ---------------------------------------------------------------------------
+# The KHL/SHL import route: a European pro who was never drafted, developed at home
+# instead, and arrives already grown. Real, and a real transaction type -- teams sign these
+# players outright, with no draft rights and no entry-level scale, which makes them a
+# genuinely different kind of acquisition from a prospect or a domestic free agent.
+#
+# Ages start above PROSPECT_AGE_RANGE deliberately: these are finished products, not
+# prospects. A 22-27-year-old is past the development system entirely (see
+# config.MAX_PROSPECT_AGE), so he goes straight onto the free-agent market.
+INTERNATIONAL_FA_AGE_RANGE = (22, 27)
+
+# Ability distribution. Centered a little BELOW leaguegen's own _OVERALL_MU (66.0) with a
+# wider spread: most imports are useful depth, a few are genuinely good, and the tail is
+# what makes checking the market each summer worth doing. Not a source of free stars --
+# they're priced at market rate by `cap.market_salary` like any other free agent, so a
+# good one costs what he's worth. PROVISIONAL/TUNABLE.
+_IMPORT_OVERALL_MU = 63.0
+_IMPORT_OVERALL_SIGMA = 7.0
+
+# How many arrive each offseason. Small on purpose: this is a side door into the league,
+# not a parallel draft.
+INTERNATIONAL_FA_PER_SEASON = 8
+
+
+def generate_international_free_agent(pid: int, rng: Rng, position: str = None) -> Player:
+    """One European pro entering the league as an unrestricted free agent.
+
+    Same generation pipeline as everyone else (``playergen``), differing only in age band,
+    ability distribution, and ``league_origin``. Returns with ``team_id=None`` and no
+    development record -- he is not a prospect, he is a free agent, and callers register
+    him with ``World.add_player`` like any other.
+    """
+    age = rng.randint(*INTERNATIONAL_FA_AGE_RANGE)
+    target = int(round(max(40, min(90, rng.gauss(_IMPORT_OVERALL_MU, _IMPORT_OVERALL_SIGMA)))))
+
+    if position == "G":
+        player = generate_goalie(pid, rng, age, target)
+    else:
+        player = generate_skater(pid, rng, age, target, position=position)
+
+    player.league_origin = "europe"
+    return player
+
+
+def generate_international_free_agents(rng: Rng, new_pid,
+                                        count: int = INTERNATIONAL_FA_PER_SEASON
+                                        ) -> List[Player]:
+    """A season's worth of imports. Goalie share matches the draft pool's."""
+    players: List[Player] = []
+    n_goalies = 1 if rng.chance(count * PROSPECT_GOALIE_FRACTION) else 0
+    for _ in range(n_goalies):
+        players.append(generate_international_free_agent(new_pid(), rng, position="G"))
+    for i in range(count - n_goalies):
+        position = SKATER_POSITIONS[i % len(SKATER_POSITIONS)]
+        players.append(generate_international_free_agent(new_pid(), rng, position=position))
+    rng.shuffle(players)
+    return players

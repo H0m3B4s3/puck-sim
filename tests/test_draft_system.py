@@ -544,3 +544,29 @@ def test_prospects_carry_a_season_line_after_an_offseason():
 
     lines = [p.development["line"] for p in prospects.developing_players(world)]
     assert lines and all(line.get("gp", 0) > 0 for line in lines)
+
+
+def test_draft_age_distribution_is_weighted_toward_eighteen():
+    """A real class is overwhelmingly 18-year-olds. Drawing uniformly across the eligible
+    band quietly broke the development system: a prospect drafted at 20 has almost no
+    runway before PROSPECT_STAGNATION_AGE starts eroding his ceiling, and he skips junior
+    entirely since the CHL tier ends at 19."""
+    rng = Rng(seed=SEED)
+    counter = iter(range(1, 10_000))
+    pool = prospectgen.generate_prospect_pool(rng, lambda: next(counter), size=400)
+    ages = [p.age for p in pool]
+    lo, hi = prospectgen.PROSPECT_AGE_RANGE
+    assert min(ages) >= lo and max(ages) <= hi
+    share_18 = sum(1 for a in ages if a == lo) / len(ages)
+    assert 0.6 < share_18 < 0.85, share_18
+    # Older prospects still exist -- they're the ones the league already passed over.
+    assert any(a >= lo + 2 for a in ages)
+
+
+def test_prospect_age_weights_cover_the_eligible_band():
+    weighted = {age for age, _ in prospectgen._PROSPECT_AGE_WEIGHTS}
+    lo, hi = prospectgen.PROSPECT_AGE_RANGE
+    assert weighted == set(range(lo, hi + 1))
+    weights = [w for _, w in prospectgen._PROSPECT_AGE_WEIGHTS]
+    assert weights == sorted(weights, reverse=True)      # younger is always likelier
+    assert abs(sum(weights) - 1.0) < 1e-9
