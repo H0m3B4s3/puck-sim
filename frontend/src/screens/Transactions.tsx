@@ -197,12 +197,6 @@ function FreeAgentsPanel({
     },
   });
 
-  if (isLoading) return <FaceoffDotSpinner />;
-  if (error) return <p className="text-muted">Error loading free agents</p>;
-  if (!freeAgents || freeAgents.length === 0) {
-    return <p className="text-muted">No free agents available</p>;
-  }
-
   const columns: ColumnDef<FreeAgentRow>[] = [
     {
       header: "Player",
@@ -278,10 +272,18 @@ function FreeAgentsPanel({
   ];
 
   const table = useReactTable({
-    data: freeAgents,
+    data: freeAgents ?? [],
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
+
+  // Early returns must come AFTER every hook (Rules of Hooks): useReactTable
+  // above runs on every render regardless of loading/error/empty state.
+  if (isLoading) return <FaceoffDotSpinner />;
+  if (error) return <p className="text-muted">Error loading free agents</p>;
+  if (!freeAgents || freeAgents.length === 0) {
+    return <p className="text-muted">No free agents available</p>;
+  }
 
   return (
     <div>
