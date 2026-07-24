@@ -63,9 +63,13 @@ def preview_league(body: LeaguePreviewRequest) -> LeaguePreviewDTO:
     ``Rng`` -- that path never surfaces the actual seed it used, so there'd be nothing to hand
     back to ``/career/new`` for reproducing the exact same league the user just previewed).
     """
+    from pucksim.sim import power
+
     seed = body.seed if body.seed is not None else secrets.randbits(31)
     world = build_world(seed=seed)
-    teams = [team_summary(t, world) for t in world.team_list()]
+    strength = power.projected_strength(world)
+    stars = power.strength_stars(world)
+    teams = [team_summary(t, world, strength, stars) for t in world.team_list()]
     return LeaguePreviewDTO(seed=seed, teams=teams)
 
 

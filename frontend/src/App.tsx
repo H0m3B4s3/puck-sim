@@ -18,6 +18,7 @@ import {
   ScreenPlaceholder,
   FaceoffDotSpinner,
   Panel,
+  TeamStrength,
   useToast,
 } from "./ui";
 import { PlayerModal } from "./PlayerModal";
@@ -62,13 +63,19 @@ function HomeScreen({
           <h3 className="text-display" style={{ fontSize: "1.25rem", marginBottom: "1rem" }}>
             Your Team
           </h3>
-          <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "1.5rem", marginBottom: "1rem", flexWrap: "wrap" }}>
             <TeamTag
               abbrev={userTeamInfo.abbrev}
               color={userTeamInfo.primary_color}
               name={userTeamInfo.name}
               big
             />
+            <div style={{ minWidth: "160px" }}>
+              <TeamStrength
+                stars={userTeamInfo.strength_stars}
+                strength={userTeamInfo.strength}
+              />
+            </div>
           </div>
 
           {userTeamInfo.record ? (
