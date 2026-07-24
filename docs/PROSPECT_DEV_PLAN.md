@@ -268,11 +268,14 @@ behaviour: at the sign-or-lose-him deadline the bar to spend a contract slot dro
 the alternative is losing him for nothing. That's what fills an AHL roster — most of whose
 players are never going to be NHL regulars.
 
-## The one trade-off left open
+## The one trade-off left open at the end of the main round
+
+> **Resolved by the follow-up round — see Phase 3 below.** The pool was raised to 260. This
+> section is kept as the reasoning that was live when the main round shipped.
 
 The undrafted-domestic (UDFA) route is structurally complete — undrafted players develop,
 re-enter the draft while they're still teenagers, and become signable when their eligibility
-ends — but at the current `prospectgen.PROSPECT_POOL_SIZE` (150) it delivers only 0–1 NHL
+ends — but at the (then-)current `prospectgen.PROSPECT_POOL_SIZE` (150) it delivers only 0–1 NHL
 players per decade, because `_effective_rounds` scales the pick count with the pool, so ~85%
 of every class gets drafted at any size below ~260 and the leftovers are the very bottom.
 
@@ -283,10 +286,10 @@ Measured both ways, 12 seasons, three seeds:
 | **150 (kept)** | 4 | ~22 | ~1200 | 1.0x | 5–9% | 0–1 |
 | 260 | 7 | ~36 | ~1500 | ~2.0x | 10–14% | ~4 |
 
-Kept at 150: the economy is healthiest there, and the *other* non-draft pathway already puts
-20–50 players a decade into the league, so the side door isn't shut. The knob and its
-measured consequences are documented at `PROSPECT_POOL_SIZE` for whoever decides a deep
-undrafted market is worth 25% more world.
+Kept at 150 for the main round: the economy is healthiest there, and the *other* non-draft
+pathway already puts 20–50 players a decade into the league, so the side door isn't shut. (The
+follow-up round then took the 260 option — the deep undrafted market was judged worth the 25%
+more world. See Phase 3.)
 
 ### Phase 7 — the confirming sweep (8 seeds × 12 seasons)
 
@@ -321,8 +324,8 @@ and that left the suite green while it did.
 - ✅ Old saves load with `development = None` / `slide_years = 0` and behave exactly as before.
 - ✅ Phase 7's sweep holds payroll at 90.8–97.4% across 8 seeds × 12 seasons with no ELC-share
   blowup — PR #61's economy is intact and tighter than before.
-- ✅ Full pytest suite green: 919 tests, up from 832 at the start of the round. (~10 minutes —
-  it is not hung.)
+- ✅ Full pytest suite green: 919 tests at the end of the main round, up from 832 at its start
+  (later 940 after the follow-up round below). (~10–12 minutes — it is not hung.)
 
 ## What a future round could pick up
 
