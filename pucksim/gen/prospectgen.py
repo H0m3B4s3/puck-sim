@@ -81,25 +81,23 @@ _PROSPECT_AGE_WEIGHTS = (
 # than early ones rather than the pool running dry. PROVISIONAL/TUNABLE,
 # flagged as a judgment call in this step's report.
 #
-# THIS IS ALSO THE KNOB THAT SETS HOW BIG THE UNDRAFTED POOL IS, which is worth knowing
-# before changing it. ``_effective_rounds`` clamps the draft to ``pool_size // num_teams``
-# rounds, so the pool and the pick count scale together and roughly 85% of every class gets
-# drafted at any size below ~260. Only a pool well clear of 7 full rounds (224 picks) leaves
-# a large undrafted population for the UDFA pathway to draw from. Measured over 12 seasons
-# on three seeds:
+# THIS IS ALSO THE KNOB THAT SETS HOW BIG THE UNDRAFTED POOL IS. ``_effective_rounds`` clamps
+# the draft to ``pool_size // num_teams`` rounds, so pool and pick count scale together and
+# roughly 85% of every class gets drafted at any size below ~260. Only a pool well clear of a
+# full 7-round draft (224 picks) leaves a real undrafted class for the UDFA pathway to draw
+# from -- at 150 the draft was actually only FOUR rounds, so nearly every credible player was
+# drafted and the domestic undrafted route delivered ~0-1 NHL players a decade.
 #
-#   150 (here): 4 rounds, ~22 undrafted/yr, world pop ~1200, ~0-1 undrafted players reach
-#               an NHL roster per decade.
-#   260:        7 rounds, ~36 undrafted/yr, world pop ~1500 (+25%, and ~2x the offseason
-#               runtime), ~4 per decade, and the share of the league on entry-level deals
-#               rises from 5-9% to 10-14% because teams draft and sign 7 players a year
-#               instead of 4.
-#
-# Kept at 150: the economy is healthiest here (payroll 94-97% of cap), and the second
-# pathway into the league -- European imports, see generate_international_free_agents below
-# -- already delivers 20-50 undrafted players to NHL rosters per decade, so the side door
-# is not actually shut. Raise this if a deep undrafted market matters more than world size.
-PROSPECT_POOL_SIZE = 150
+# Raised to 260 (2026-07-23 follow-up round) to make that route deliver real players. At 260
+# the draft runs its full 7 rounds (260 // 32 = 8, clamped to DRAFT_ROUNDS), leaving ~36
+# undrafted a year, and the domestic UDFA route now delivers a handful of NHL players per
+# decade instead of almost none. The cost, measured and accepted: world population runs ~25%
+# higher (~1500 vs ~1200), the offseason takes roughly twice as long, and the share of the
+# league on entry-level deals rises to ~10-14% -- because a full draft has teams signing seven
+# picks a year rather than four. That ELC share is if anything MORE realistic (real NHL rosters
+# carry a comparable entry-level presence), and the economy bands / regression thresholds in
+# test_econ_balance.py were widened to match after an 8-seed x 12-season sweep confirmed it.
+PROSPECT_POOL_SIZE = 260
 
 # Fraction of the generated pool that are goalies vs. skaters. Real NHL draft
 # classes run a bit lighter on goalies than an NHL roster's ~13% goalie share

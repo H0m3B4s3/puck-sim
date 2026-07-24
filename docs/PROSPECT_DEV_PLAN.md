@@ -315,8 +315,9 @@ and that left the suite green while it did.
 - ✅ A drafted 18-year-old lands in the CHL or NCAA by origin, develops on a tier-appropriate
   curve, signs an ELC that slides instead of burning, moves to the AHL at 20, and reaches the NHL
   when his rating says he's ready — not when a lookup table says so.
-- ✅ An undrafted player can develop his way into the league (thinly by the domestic route at the
-  current pool size — see the trade-off note; the international route carries 20–50 a decade).
+- ✅ An undrafted player can develop his way into the league — by the international route (20–50
+  a decade) and, since the Phase 3 follow-up widened the pool to a full seven-round draft, by the
+  domestic UDFA route too.
 - ✅ Old saves load with `development = None` / `slide_years = 0` and behave exactly as before.
 - ✅ Phase 7's sweep holds payroll at 90.8–97.4% across 8 seeds × 12 seasons with no ELC-share
   blowup — PR #61's economy is intact and tighter than before.
@@ -378,4 +379,30 @@ case — it was the one-way **penalty**.
   says whether the move "frees his full cap hit" or leaves `$Xm … on the cap`. Verified live: a
   two-way ELC prospect frees his full hit; a one-way $5.2M veteran would leave $3.25M buried.
 
-## Phase 3 — deeper undrafted market (pending)
+## Phase 3 — deeper undrafted market (done)
+
+Raised `PROSPECT_POOL_SIZE` 150 → 260. The reason the domestic UDFA route was thin wasn't
+the pool alone — `_effective_rounds` clamps the draft to `pool_size // num_teams` rounds, so
+at 150 the draft was only **four rounds** and nearly every credible player was drafted. At 260
+the draft runs its full seven rounds (224 picks), leaving ~36 undrafted a year, and the
+domestic route now delivers a handful of NHL players per decade instead of ~0–1.
+
+The costs, measured across an 8-seed × 12-season sweep and accepted:
+
+| | at 150 (Phase 7 sweep) | at 260 (this phase) |
+|---|---|---|
+| payroll % of cap (season 12) | 96.6–97.1% | 96.8–97.1% |
+| ELC share (season 12) | 6.9–9.8% | 12.6–16.5% |
+| prospects in the system | ~440 | ~730–790 |
+| world population | 1155–1225 | ~1450–1520 |
+| offseason runtime | 1.0× | ~2.0× |
+
+Payroll is unchanged and the best available free agent still never falls below 67, so the
+economy is intact — the cheap ELC players aren't displacing market-priced ones, which is the
+whole PR #61 fear. The entry-level share rose to ~12–18%, which is if anything *more* realistic
+(real rosters carry a comparable entry-level presence). The two regression guards on that share
+in `test_econ_balance.py` were widened from 0.15 to 0.22 accordingly — still a decisive catch on
+the 41% blowup they exist to prevent, with headroom above the observed ~18% max.
+
+The whole round is now complete: all three follow-ups the user picked are in, and only the
+feeder-league simulation remains open.
