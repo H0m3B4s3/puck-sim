@@ -231,11 +231,17 @@ def test_entry_level_players_do_not_take_over_the_league(aged_world):
     This is the regression guard for the missing-minor-leagues bug: with no reserve list,
     every draft signed ~150 sub-replacement teenagers straight onto NHL rosters, reaching
     41% of all rostered players on entry-level contracts and gutting league payroll.
+
+    The band widened to 0.22 with the deeper undrafted market (PROSPECT_POOL_SIZE 150->260):
+    a full 7-round draft has teams signing seven picks a year instead of four, so the
+    entry-level presence settled at ~12-18% across an 8-seed sweep. That is realistic (real
+    rosters carry a comparable share) and the payroll tests confirm it isn't the failure this
+    guards against -- payroll holds 96-97%, not the collapse that came with the 41%.
     """
     world, _ = aged_world
     rostered = [p for p in world.players.values() if p.team_id is not None]
     elc_share = sum(1 for p in rostered if p.contract.is_rookie_scale) / len(rostered)
-    assert elc_share <= 0.15, f"{elc_share:.0%} of the league is on entry-level deals"
+    assert elc_share <= 0.22, f"{elc_share:.0%} of the league is on entry-level deals"
 
 
 def test_the_talent_pipeline_keeps_supplying_the_league(aged_world):
@@ -318,8 +324,9 @@ def test_the_pipeline_actually_delivers_players_to_the_nhl(aged_world):
     share = len(on_elc) / len(rostered)
     assert share > 0.02, "no meaningful entry-level presence: the draft feeds nothing in"
     # And not so many that cheap labour is displacing market-priced players (the PR #61
-    # failure, which peaked at 41%).
-    assert share < 0.15, f"{share:.0%} of the league is on entry-level deals"
+    # failure, which peaked at 41%). Band widened to 0.22 with the deeper undrafted market --
+    # see test_entry_level_players_do_not_take_over_the_league for why ~12-18% is healthy.
+    assert share < 0.22, f"{share:.0%} of the league is on entry-level deals"
 
 
 def test_every_development_tier_stays_populated(aged_world):

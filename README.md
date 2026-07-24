@@ -74,11 +74,16 @@ real system:
 The measurement that mattered: before this round the share of the league on entry-level deals fell
 to **0% within two simulated offseasons**. The draft fed nothing into the NHL, ever, and payroll
 looked healthy the whole time because the economy had quietly stopped having a talent pipeline. It
-now holds 3–10% across 8 seeds × 12 seasons, with payroll at 91–97% of the cap and all four tiers
-populated.
+now holds a healthy entry-level presence across 8 seeds × 12 seasons, with payroll at 91–97% of
+the cap and all four tiers populated.
 
-919 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
-end-to-end, both headlessly and through the web app. Note the suite takes roughly ten minutes —
+A short follow-up round then added the manager-facing half: **call up** a signed prospect or
+**send** a rostered player down to the minors, **two-way contracts** (a bad one-way deal buried in
+the minors still counts a sheltered slice against the cap, so it's a real anchor), and a deeper
+draft class so undrafted players can develop their way into the league.
+
+940 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
+end-to-end, both headlessly and through the web app. Note the suite takes roughly twelve minutes —
 several tests sim multiple full seasons back to back. See [DEVPLAN.md](DEVPLAN.md) for the full
 step-by-step plan and status notes, including a handful of known non-blocking loose ends (search
 that file for "Known" and "not yet wired").
