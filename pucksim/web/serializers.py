@@ -50,6 +50,11 @@ class TeamSummaryDTO(BaseModel):
     division: str
     primary_color: str
     secondary_color: str
+    # Projected roster strength (sim.power): a ~25-99 overall-scale read of how good the roster
+    # is, plus a 1-5 star rank of that strength league-wide. Both need no games played, so the
+    # team-selection screen can show the user how good (or bad) a team they'd be taking over.
+    strength: Optional[int] = None
+    strength_stars: Optional[int] = None
     # None until the team has actually played a game this season (a freshly generated,
     # still-preseason career has no meaningful win/loss/points line yet) -- see
     # team_summary()'s docstring.
@@ -71,9 +76,24 @@ def _team_points(world: World, team: Team) -> int:
     )
 
 
-def team_summary(team: Team, world: World) -> TeamSummaryDTO:
+def team_summary(team: Team, world: World,
+                 strength: Optional[dict] = None,
+                 stars: Optional[dict] = None) -> TeamSummaryDTO:
     """Build a :class:`TeamSummaryDTO` for ``team``. ``record`` is populated only once the team
-    has played at least one game this season."""
+    has played at least one game this season.
+
+    ``strength``/``stars`` are the league-wide ``sim.power.projected_strength``/``strength_stars``
+    maps. Callers that serialize many teams at once (the team-picker preview, standings) should
+    compute each map once and pass it in to avoid recomputing the whole-league talent read per
+    team; when omitted they're computed here so a single-team call still gets a rating.
+    """
+    from pucksim.sim import power
+
+    if strength is None:
+        strength = power.projected_strength(world)
+    if stars is None:
+        stars = power.strength_stars(world)
+
     record = None
     if team.games_played > 0:
         record = TeamRecordDTO(
@@ -91,6 +111,8 @@ def team_summary(team: Team, world: World) -> TeamSummaryDTO:
         division=team.division,
         primary_color=team.primary_color,
         secondary_color=team.secondary_color,
+        strength=strength.get(team.tid),
+        strength_stars=stars.get(team.tid),
         record=record,
     )
 
@@ -182,10 +204,14 @@ def standings_response(world: World) -> List[StandingsEntryDTO]:
     itself is never reimplemented here, only wrapped into DTO shape. Safe to call on a freshly
     generated, 0-games-played world: every team just sorts to 0 points/wins/losses (stable on
     ``team.tid``, per ``standings()``'s documented tiebreaker chain)."""
+    from pucksim.sim import power
+
     ordered = standings(world.team_list(), world.schedule, world.standings_rule)
+    strength = power.projected_strength(world)
+    stars = power.strength_stars(world)
     out = []
     for team in ordered:
-        base = team_summary(team, world)
+        base = team_summary(team, world, strength, stars)
         out.append(
             StandingsEntryDTO(
                 **base.model_dump(),

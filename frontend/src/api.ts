@@ -78,6 +78,10 @@ export interface TeamSummary {
   division: string;
   primary_color: string;
   secondary_color: string;
+  /** Projected roster strength on the ~25-99 overall scale (null only if unavailable). */
+  strength: number | null;
+  /** 1-5 star rank of that strength league-wide. */
+  strength_stars: number | null;
   /** null until the team has played a game this season. */
   record: TeamRecord | null;
 }

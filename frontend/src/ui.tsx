@@ -255,6 +255,40 @@ export function ScreenPlaceholder({ title, step }: { title: string; step: string
 }
 
 // --- Career loader / new-career flow ----------------------------------
+// --- TeamStrength: at-a-glance projected roster strength (stars + overall number) ------------
+// Shown on the team-picker so the user can judge how good (or bad) a team they'd be taking over
+// before committing. `stars` is a 1-5 league-wide rank; `strength` is the ~25-99 overall-scale
+// projection. Degrades gracefully to a dash if the backend didn't supply a rating.
+export function TeamStrength({
+  stars,
+  strength,
+  label = "Projected",
+}: {
+  stars: number | null;
+  strength: number | null;
+  label?: string;
+}) {
+  const filled = stars ?? 0;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        fontSize: "0.8rem",
+      }}
+    >
+      <span aria-label={stars ? `${stars} out of 5 stars` : "unrated"} style={{ letterSpacing: "1px" }}>
+        <span style={{ color: "var(--color-accent, #e8b923)" }}>{"★".repeat(filled)}</span>
+        <span className="text-muted">{"★".repeat(5 - filled)}</span>
+      </span>
+      <span className="text-muted" style={{ marginLeft: "auto" }}>
+        {label} {strength ?? "—"}
+      </span>
+    </div>
+  );
+}
+
 export function NoCareerState({
   previewTeams,
   previewLoading,
@@ -319,8 +353,9 @@ export function NoCareerState({
             disabled={creatingCareer || previewLoading}
             style={{
               display: "flex",
-              alignItems: "center",
-              gap: "0.75rem",
+              flexDirection: "column",
+              alignItems: "stretch",
+              gap: "0.5rem",
               padding: "0.75rem 1rem",
               borderRadius: "8px",
               border: "1px solid var(--color-border)",
@@ -330,6 +365,7 @@ export function NoCareerState({
             }}
           >
             <TeamTag abbrev={team.abbrev} color={team.primary_color} name={team.name} />
+            <TeamStrength stars={team.strength_stars} strength={team.strength} />
           </button>
         ))}
       </div>
