@@ -55,15 +55,17 @@ def _run_offseason(client):
 # ---------------------------------------------------------------------------
 # GET /roster/prospects
 # ---------------------------------------------------------------------------
-def test_prospect_pool_is_empty_before_a_draft(client, career):
-    """A brand-new league has no development system yet -- and that's a legitimate empty
-    state, not an error."""
+def test_a_new_career_starts_with_a_seeded_farm_system(client, career):
+    """A freshly generated league now opens with a stocked pipeline for every team
+    (docs/PROSPECT_DEV_PLAN.md follow-up), so the Prospects screen has content on day one
+    instead of being blank until the first draft."""
     resp = client.get("/roster/prospects")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["prospects"] == []
+    assert body["prospects"], "the user's farm system is empty at career start"
     assert body["contracts_max"] == config.MAX_CONTRACTS
     assert body["contracts_used"] > 0                  # the NHL roster still counts
+    assert {p["tier"] for p in body["prospects"]} <= set(config.DEV_TIERS)
 
 
 def test_prospect_pool_lists_the_teams_own_prospects_after_a_draft(client, career):

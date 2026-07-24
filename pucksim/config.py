@@ -601,6 +601,57 @@ UDFA_FREE_AGENT_AGE = 20
 # hoard the entire talent pipeline at zero cost.
 MAX_CONTRACTS = 50
 
+# ---------------------------------------------------------------------------
+# Initial world seeding (`gen/leaguegen.py`, docs/PROSPECT_DEV_PLAN.md)
+# ---------------------------------------------------------------------------
+# A freshly generated league would otherwise open with empty farm systems and an empty
+# free-agent market -- the development tiers and the FA board don't fill until the first
+# offseason's draft and cull run. That's unrealistic (a real league is always mid-stream, so
+# every team already has a stocked pipeline and there's always depth on the wire) and it
+# makes the Prospects screen and the FA board blank at game start. These constants seed both
+# at world gen.
+
+# Farm system per team, split by where the prospects are. The AHL slots are older (20-24)
+# signed prospects -- an actual minor-league roster -- while the junior slots are 18-19
+# unsigned amateurs still in the CHL/NCAA/Europe. (Career AHL veterans over 25 aren't
+# modelled: MAX_PROSPECT_AGE caps the development system at 25, so the seeded AHL is the
+# prospect-relevant part of a real one, not its 27-year-old lifers.)
+INITIAL_AHL_PROSPECTS = 6
+INITIAL_JUNIOR_PROSPECTS = 6
+INITIAL_AHL_AGE_RANGE = (20, 24)
+
+# The "worse teams have better prospects" lean (semi-inverse of team strength). A real bad
+# team has spent recent years drafting high, so its pipeline is stocked; a contender's is
+# thin. Applied as a shift to each seeded prospect's target overall, linear from
+# +FARM_QUALITY_LEAN for the weakest team's roster to -FARM_QUALITY_LEAN for the strongest.
+# It's a LEAN, not a rule -- the per-prospect overall still varies by its own ~9-point sigma,
+# so a strong team can still land a gem and a weak one a bust; the weak team just gets more
+# and better shots at one.
+FARM_QUALITY_LEAN = 6
+
+# The initial free-agent pool: the depth left on the wire once a running league's good
+# players are all signed. Deliberately NOT stars -- middle-six at the very best, skewing
+# older, plus a few younger fringe players and a lot of bottom-six / third-pair filler.
+# Each tier is (count, (min_age, max_age), overall_mu, overall_sigma). Tuned to the texture
+# a manager expects to see on the wire at game start, capped so nothing here is a real
+# top-six NHL talent.
+#
+# The "AAAA" (quad-A) tier is the career minor-leaguer who's too good for the AHL but not
+# quite an NHL regular. In a real league many of these are AHL free agents / PTO bodies, so
+# the FA pool is the natural home for them -- the more so because the development system caps
+# at MAX_PROSPECT_AGE (25) and can't hold a 28-year-old on an AHL roster. In an overall-only
+# model they read a lot like the aging-middle-six tier (older, ~62 overall); the separate
+# tier is mostly so the pool visibly carries a few of them.
+# The bulk of the pool is young roster-filler depth -- most of the wire skews to the younger
+# side, with the older "meh"/AAAA veterans as texture on top rather than the majority.
+INITIAL_FA_TIERS = (
+    (8,  (28, 34), 61, 3),    # aging middle-six / second-pair -- "meh, but useful"
+    (4,  (27, 31), 63, 2),    # AAAA / quad-A tweeners -- too good for the AHL, not NHL regulars
+    (3,  (22, 25), 59, 3),    # young-ish third-line types with a little upside
+    (25, (21, 27), 52, 4),    # young roster fillers -- bottom-six / third-pair, the bulk of it
+)
+INITIAL_FA_GOALIES = 3        # backup-caliber goalies, age 26-32, overall ~56-60
+
 # How long a team holds a drafted player's rights before he returns to the pool. Real NHL
 # is two years for major-junior players and four for college players (a team can keep NCAA
 # rights until the August after graduation) -- that asymmetry is real, and it makes drafting

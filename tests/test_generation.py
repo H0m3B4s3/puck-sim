@@ -497,3 +497,107 @@ def test_gk_consistency_gate_does_not_affect_skaters():
     rng = Rng(seed=203)
     p = playergen.generate_skater(1, rng, age=25, target_overall=90, position="C")
     assert "gk_consistency" not in p.ratings
+
+
+# ---------------------------------------------------------------------------
+# Initial world seeding: farm systems + free-agent pool
+# (docs/PROSPECT_DEV_PLAN.md follow-up)
+# ---------------------------------------------------------------------------
+def test_every_team_starts_with_a_farm_system():
+    """A real league is mid-stream: no team's pipeline is empty on day one."""
+    from pucksim.systems import prospects
+
+    world = build_world(seed=42)
+    for team in world.team_list():
+        pool = prospects.team_prospects(world, team.tid)
+        assert pool, f"{team.abbrev} has an empty farm system at world gen"
+
+
+def test_seeded_farm_populates_the_ahl_not_just_junior():
+    """Seeded AHL prospects are what make the AHL tier non-empty at gen -- without the older
+    signed group it would be all 18-year-olds in junior/college."""
+    from pucksim.systems import prospects
+
+    world = build_world(seed=42)
+    tiers = {prospects.current_tier(p) for p in prospects.developing_players(world)}
+    assert config.DEV_TIER_AHL in tiers
+    ahl = [p for p in prospects.developing_players(world)
+           if prospects.current_tier(p) == config.DEV_TIER_AHL]
+    assert ahl
+    assert all(p.contract.years_remaining > 0 for p in ahl)   # AHL requires a contract
+    assert all(p.contract.two_way for p in ahl)               # on two-way ELCs
+
+
+def test_weaker_teams_get_better_farm_systems():
+    """The semi-inverse-of-strength lean: worse teams have accumulated better prospects.
+    Compared across the weak half vs. the strong half so a single team's noise can't decide
+    it; it's a lean, so the gap is directional, not guaranteed team-by-team."""
+    import statistics
+    from pucksim.gen.leaguegen import _roster_strength
+    from pucksim.systems import prospects
+
+    for seed in (1, 7, 42):
+        world = build_world(seed=seed)
+
+        def top_potential(tid):
+            pots = sorted((p.scouted_potential() for p in prospects.team_prospects(world, tid)),
+                          reverse=True)[:5]
+            return statistics.mean(pots) if pots else 0
+
+        ranked = sorted(world.team_list(), key=lambda t: _roster_strength(world, t))
+        weak = statistics.mean(top_potential(t.tid) for t in ranked[:16])
+        strong = statistics.mean(top_potential(t.tid) for t in ranked[16:])
+        assert weak > strong, f"seed {seed}: weak farms {weak:.1f} !> strong {strong:.1f}"
+
+
+def test_world_starts_with_a_stocked_free_agent_market():
+    """The wire isn't empty at game start -- there's depth to sign."""
+    from pucksim.systems import prospects
+
+    world = build_world(seed=42)
+    fas = [world.players[pid] for pid in world.free_agents
+           if not prospects.is_reserved_prospect(world.players[pid], world.season_year)]
+    assert len(fas) >= 20
+
+
+def test_initial_free_agents_are_depth_not_stars():
+    """Middle-six at the very best -- every genuine NHL talent is already signed. And the
+    bulk skews young (roster fillers), per the seeding design."""
+    from pucksim.systems import prospects
+
+    world = build_world(seed=42)
+    fas = [world.players[pid] for pid in world.free_agents
+           if not prospects.is_reserved_prospect(world.players[pid], world.season_year)
+           and world.players[pid].team_id is None
+           and world.players[pid].contract.years_remaining == 0]
+    assert fas
+    assert max(p.overall for p in fas) <= 70, "a star leaked into the initial FA pool"
+    young = sum(1 for p in fas if p.age <= 27) / len(fas)
+    assert young >= 0.5, f"the initial FA pool should skew young, got {young:.0%} <= 27"
+
+
+def test_seed_pools_false_produces_empty_pools():
+    """The escape hatch unit tests use -- a bare league with no seeded farm or FA depth."""
+    from pucksim.systems import prospects
+
+    world = build_world(seed=42, seed_pools=False)
+    assert not prospects.developing_players(world)
+    assert world.free_agents == []
+
+
+def test_seeding_never_puts_a_team_over_the_cap():
+    """Seeded prospects and free agents are off every NHL roster, so they cost no cap space
+    -- the seeded league must still open cap-legal."""
+    from pucksim.systems import cap
+
+    world = build_world(seed=7)
+    for team in world.team_list():
+        assert not cap.over_cap(world, team)
+
+
+def test_seeded_world_is_deterministic_per_seed():
+    """Adding the seeding passes must not break byte-for-byte reproducibility."""
+    a = build_world(seed=42)
+    b = build_world(seed=42)
+    assert {p: a.players[p].to_dict() for p in a.players} == \
+           {p: b.players[p].to_dict() for p in b.players}

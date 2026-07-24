@@ -37,13 +37,20 @@ from __future__ import annotations
 from typing import Optional
 
 from pucksim import config
-from pucksim.config import MINIMUM_SALARY
+from pucksim import config
+from pucksim.config import (DEV_TIER_AHL, INITIAL_AHL_AGE_RANGE, INITIAL_AHL_PROSPECTS,
+                            INITIAL_FA_GOALIES, INITIAL_FA_TIERS, INITIAL_JUNIOR_PROSPECTS,
+                            FARM_QUALITY_LEAN, MINIMUM_SALARY)
 from pucksim.gen.playergen import generate_goalie, generate_skater
+from pucksim.gen.prospectgen import PROSPECT_GOALIE_FRACTION, generate_prospect
+from pucksim.models.attributes import SKATER_POSITIONS
 from pucksim.models.coach import assign_coach
+from pucksim.models.contract import Contract
 from pucksim.models.tactics import Tactics
 from pucksim.models.team import Team, auto_build_lines, seed_chemistry
 from pucksim.models.world import World
 from pucksim.rng import Rng
+from pucksim.systems import prospects
 from pucksim.systems.cap import max_salary, payroll
 
 # ---------------------------------------------------------------------------
@@ -365,12 +372,112 @@ def _build_roster(world: World, team: Team) -> None:
     seed_chemistry(team, rng, base=_CHEMISTRY_BASE_SECS, spread=_CHEMISTRY_SPREAD_SECS)
 
 
-def build_world(seed: Optional[int] = None) -> World:
+def _roster_strength(world: World, team: Team) -> float:
+    """A team's raw strength for seeding: mean overall of its rostered players."""
+    overalls = [world.players[pid].overall for pid in team.roster if pid in world.players]
+    return sum(overalls) / len(overalls) if overalls else 0.0
+
+
+def _farm_position(rng: Rng, index: int) -> str:
+    """A position for a seeded farm prospect: mostly skaters, occasional goalie."""
+    if rng.chance(PROSPECT_GOALIE_FRACTION):
+        return "G"
+    return SKATER_POSITIONS[index % len(SKATER_POSITIONS)]
+
+
+def _seed_farm_systems(world: World) -> None:
+    """Give every team a starting prospect pool, better for weaker teams.
+
+    A real league is always mid-stream: every club already has a stocked pipeline, and a bad
+    team's is the deepest because it has spent recent years drafting high. Without this a
+    freshly generated world opens with empty farm systems until the first draft -- the
+    Prospects screen is blank and the development tiers are unpopulated on day one.
+
+    Quality leans semi-inversely to roster strength (``config.FARM_QUALITY_LEAN``): the
+    weakest team's prospects get the biggest target-overall bonus, the strongest team's a
+    matching penalty, linear in between. It's a lean, not a rule -- each prospect still varies
+    by its own generation sigma, so a contender can still turn up a gem.
+
+    Each team gets two kinds of prospect: an AHL group (older, already signed to two-way
+    entry-level deals -- an actual minor-league roster) and a junior group (18-19 amateurs
+    still in the CHL/NCAA/Europe, unsigned). Signed AHL prospects still cost no cap space
+    while they're off the NHL roster, same as any developing player.
+    """
+    teams = world.team_list()
+    n = len(teams)
+    # Worst roster first, so rank 0 = weakest team gets the +FARM_QUALITY_LEAN bonus.
+    ranked = sorted(teams, key=lambda t: _roster_strength(world, t))
+    lo_age, hi_age = INITIAL_AHL_AGE_RANGE
+
+    for rank, team in enumerate(ranked):
+        # Linear lean from +LEAN (weakest) to -LEAN (strongest).
+        frac = 0.0 if n <= 1 else rank / (n - 1)
+        bonus = round(FARM_QUALITY_LEAN * (1.0 - 2.0 * frac))
+
+        # AHL roster: older prospects, signed to two-way ELCs so they land in the pro tier.
+        for i in range(INITIAL_AHL_PROSPECTS):
+            player = generate_prospect(world.new_pid(), world.rng, _farm_position(world.rng, i),
+                                       age=world.rng.randint(lo_age, hi_age), overall_bonus=bonus)
+            world.add_player(player)
+            prospects.enter_development(player, DEV_TIER_AHL, world.season_year,
+                                        rights_tid=team.tid)
+            ok, _reason = prospects.sign_elc(world, team.tid, player.pid)
+            if not ok:
+                prospects.leave_development(player)   # e.g. contract limit -- drop him
+
+        # Junior group: draft-age amateurs placed where their background puts them (an
+        # occasional 20-21 junior graduate gets signed into the AHL by place_in_development's
+        # overage path, which is realistic).
+        for i in range(INITIAL_JUNIOR_PROSPECTS):
+            player = generate_prospect(world.new_pid(), world.rng, _farm_position(world.rng, i),
+                                       overall_bonus=bonus)
+            world.add_player(player)
+            prospects.place_in_development(world, player, team.tid)
+
+
+def _seed_free_agents(world: World) -> None:
+    """Stock the free-agent market so the wire isn't empty at game start.
+
+    A running league always has depth available -- the players nobody wanted to re-sign. This
+    seeds that: aging middle-six "meh" veterans, a few AAAA/quad-A tweeners, a couple of
+    young-ish third-line types, and a bulk of young roster-filler bottom-six/third-pair depth
+    (``config.INITIAL_FA_TIERS``), plus a handful of backup goalies. Nothing here is a real
+    top-six NHL talent -- those are all signed. They enter as ordinary free agents
+    (``team_id=None``, empty contract), so ``World.add_player`` drops them straight onto the
+    free-agent list and they're immediately signable.
+    """
+    def _emit(target: int, age: int, position: str) -> None:
+        pid = world.new_pid()
+        if position == "G":
+            player = generate_goalie(pid, world.rng, age, target, cap=world.salary_cap)
+        else:
+            player = generate_skater(pid, world.rng, age, target, position=position)
+        player.contract = Contract.free_agent()   # playergen prices one; a FA has none
+        world.add_player(player)
+
+    for count, (min_age, max_age), mu, sigma in INITIAL_FA_TIERS:
+        for i in range(count):
+            target = int(round(max(35, min(70, world.rng.gauss(mu, sigma)))))
+            age = world.rng.randint(min_age, max_age)
+            _emit(target, age, SKATER_POSITIONS[i % len(SKATER_POSITIONS)])
+
+    for _ in range(INITIAL_FA_GOALIES):
+        target = int(round(max(45, min(66, world.rng.gauss(58, 3)))))
+        _emit(target, world.rng.randint(26, 32), "G")
+
+
+def build_world(seed: Optional[int] = None, *, seed_pools: bool = True) -> World:
     """Generate a complete, ready-to-play 32-team NHL-shaped league.
 
     Deterministic: the same ``seed`` always produces byte-identical rosters
     (every draw -- team order, player generation, coach assignment, chemistry
     seeding -- comes from the single ``World.rng`` stream in a fixed order).
+
+    ``seed_pools`` (default ``True``) fills the farm systems and the free-agent market that
+    are otherwise empty until the first offseason (``_seed_farm_systems``/
+    ``_seed_free_agents``). Pass ``False`` for a bare league with empty pools -- useful for
+    unit tests that build their own controlled prospect/FA setups and don't want the seeded
+    population interfering with counts.
     """
     rng = Rng(seed)
     world = World(rng=rng)
@@ -435,5 +542,13 @@ def build_world(seed: Optional[int] = None) -> World:
                 team.tactics = Tactics()
 
                 tid += 1
+
+    # Populate the pools that are otherwise empty until the first offseason: every team's
+    # farm system (weaker teams get better prospects) and the free-agent wire. Done after all
+    # rosters exist so team-strength ranking sees the finished rosters, and last so roster
+    # generation stays byte-identical for a given seed regardless of these passes.
+    if seed_pools:
+        _seed_farm_systems(world)
+        _seed_free_agents(world)
 
     return world

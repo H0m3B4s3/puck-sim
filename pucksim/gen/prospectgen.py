@@ -255,7 +255,8 @@ def _pre_draft_bio(rng: Rng, player: Player) -> Dict:
     return production_line(rng, player, level, rng.randint(28, 68))
 
 
-def generate_prospect(pid: int, rng: Rng, position: str = None) -> Player:
+def generate_prospect(pid: int, rng: Rng, position: str = None, *,
+                       age: int = None, overall_bonus: int = 0) -> Player:
     """Generate one draft-eligible prospect Player.
 
     Delegates entirely to ``playergen.generate_skater``/``generate_goalie`` for
@@ -267,9 +268,16 @@ def generate_prospect(pid: int, rng: Rng, position: str = None) -> Player:
     ``team_id=None`` (undrafted) -- callers must go through
     ``freeagency.sign_rookie``/``World.sign_player`` once a team actually
     drafts this prospect, never assign a team directly.
+
+    ``age`` overrides the draft-age draw (used by farm seeding to place an older,
+    already-signable prospect straight into the AHL -- see ``gen/leaguegen``).
+    ``overall_bonus`` shifts the target overall up or down: farm seeding uses it to lean
+    prospect quality inversely to team strength, so weaker teams get better systems, the
+    way a real bad team's accumulated high picks stock its pipeline.
     """
-    age = _random_prospect_age(rng)
-    target_overall = _random_prospect_target_overall(rng)
+    age = _random_prospect_age(rng) if age is None else age
+    target_overall = int(round(max(_PROSPECT_OVERALL_FLOOR,
+                                   min(90, _random_prospect_target_overall(rng) + overall_bonus))))
 
     if position == "G":
         player = generate_goalie(pid, rng, age, target_overall)

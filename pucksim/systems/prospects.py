@@ -385,6 +385,36 @@ def enter_development(player: Player, tier: str, season_year: int,
     return player.development
 
 
+def place_in_development(world: World, player: Player, tid: int) -> None:
+    """Put a player into whichever development tier will take him, for ``tid``.
+
+    The shared placement logic used both when a player is drafted (``draft_system``) and
+    when a farm system is seeded at world generation (``gen/leaguegen``). Most players go
+    straight where their background puts them -- an 18-year-old junior player to junior, a
+    college recruit to the NCAA. The one wrinkle is the overage player: a 20-or-21-year-old
+    major-junior graduate has aged out of junior and, under the CHL-NHL transfer agreement,
+    can only turn pro if he's actually under contract. So if no tier will take him unsigned,
+    his team signs him to an entry-level deal on the spot and stashes him in the AHL -- which
+    is exactly what real teams do with their overage picks.
+
+    A player no tier will take even after that (too old for the system entirely) is left
+    alone -- no development record, so he's just an ordinary player/free agent. Callers that
+    care whether placement stuck can check ``player.is_prospect`` afterward.
+    """
+    tier = best_tier(player)
+    if tier is not None:
+        enter_development(player, tier, world.season_year, rights_tid=tid)
+        return
+    if not is_elc_eligible(player):
+        return
+    # The overage case. Record the rights first (``sign_elc`` checks them), sign, and keep
+    # him only if the contract actually did unlock the professional tier.
+    enter_development(player, DEV_TIER_AHL, world.season_year, rights_tid=tid)
+    ok, _reason = sign_elc(world, tid, player.pid)
+    if not (ok and eligible_for_tier(player, DEV_TIER_AHL)):
+        leave_development(player)
+
+
 def leave_development(player: Player) -> None:
     """Take ``player`` out of the development system.
 
