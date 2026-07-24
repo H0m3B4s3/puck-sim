@@ -409,3 +409,38 @@ the 41% blowup they exist to prevent, with headroom above the observed ~18% max.
 
 The whole round is now complete: all three follow-ups the user picked are in, and only the
 feeder-league simulation remains open.
+
+## Phase 4 — seed the initial world (done)
+
+A freshly generated league opened with **empty** farm systems and an **empty** free-agent
+market — both only filled from the first offseason's draft and cull. Unrealistic (a real
+league is always mid-stream) and it left the Prospects screen and the FA board blank on day
+one. `gen/leaguegen.build_world` now seeds both, after the rosters exist and last so roster
+generation stays byte-identical per seed.
+
+- **Farm systems**, semi-inverse to team strength. Each team gets an AHL group (older 20–24
+  prospects signed to two-way ELCs — an actual minor-league roster) and a junior group (18–19
+  amateurs in the CHL/NCAA/Europe, unsigned). Quality leans by `FARM_QUALITY_LEAN`: the weakest
+  roster's prospects get the biggest target-overall bonus, the strongest a matching penalty,
+  linear between — a lean, not a rule, so a contender can still turn up a gem. Measured: the weak
+  half's top-5 prospect potential runs 4–7 points above the strong half's across seeds.
+- **Free-agent pool**, the depth left on the wire. Bulk is young roster-filler (bottom-six /
+  third-pair), with aging middle-six "meh" veterans, a few AAAA/quad-A tweeners, and a couple of
+  young-ish third-liners as texture. Capped so nothing is a real top-six talent (observed overall
+  48–66, median age 25, ~67% aged ≤27).
+- Shared plumbing: the draft's tier-placement logic moved to `prospects.place_in_development`
+  (draft and farm-seeding both call it); `generate_prospect` gained `age`/`overall_bonus`;
+  `build_world(seed_pools=False)` gives a bare league for unit tests that need empty pools.
+
+Economy unchanged: seeded prospects and free agents are off every NHL roster, so they cost no
+cap, and the multi-season steady state is identical to before (payroll ~97%, ELC ~12–18%). The
+seeding just makes the world open *warmed up* — ~1130 players at gen instead of ~820 — rather
+than empty, converging to the same ~1500 within a few seasons. `build_world` stays ~0.1s.
+
+**Known model limit, flagged not fixed:** genuine career-AHL veterans (27–30-year-old "AAAA"
+lifers) can't live *on* an AHL roster, because the development system caps at
+`MAX_PROSPECT_AGE = 25`. They're seeded into the FA pool instead (realistic — many are AHL free
+agents / PTO bodies), and the seeded AHL runs to age 24. Persisting 27+ players on AHL rosters
+would need a targeted rule (a signed AHL player doesn't age out of the system while under
+contract) — a small but real change to `advance_development`'s semantics, left for a future
+round.

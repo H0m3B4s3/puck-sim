@@ -62,7 +62,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pucksim.config import DEV_TIER_AHL, NHL_READY_OVERALL, UDFA_FREE_AGENT_AGE
+from pucksim.config import NHL_READY_OVERALL, UDFA_FREE_AGENT_AGE
 from pucksim.gen.prospectgen import generate_prospect_pool
 from pucksim.models.draft import DraftClass
 from pucksim.models.league import Game, standings
@@ -319,38 +319,8 @@ def make_pick(world: World, prospect_id: int) -> bool:
         # Roster full or no cap room: he's good enough for the league but there's nowhere
         # to put him today. Fall through and develop him instead of losing him.
 
-    _assign_to_development(world, player, tid)
+    prospects.place_in_development(world, player, tid)
     return False
-
-
-def _assign_to_development(world: World, player: Player, tid: int) -> None:
-    """Place a just-drafted player into whichever development tier will take him.
-
-    Most picks go straight where they came from -- an 18-year-old junior player back to
-    junior, a college recruit to the NCAA. The interesting case is the overage pick: a
-    20-or-21-year-old major-junior player has aged out of junior and, under the CHL-NHL
-    transfer agreement, can only turn pro if he is actually under contract. So if no tier
-    will take him unsigned, the drafting team signs him to an entry-level deal on the spot
-    and stashes him in the AHL -- which is exactly what real teams do with their overage
-    picks, and why the AHL is where older prospects belong.
-
-    A player no tier will take even after that (too old for the system entirely) simply
-    stays an ordinary free agent with his draft rights recorded. The pick still counts;
-    he's just not a prospect.
-    """
-    tier = prospects.best_tier(player)
-    if tier is not None:
-        prospects.enter_development(player, tier, world.season_year, rights_tid=tid)
-        return
-
-    if not prospects.is_elc_eligible(player):
-        return
-    # The overage case. Record the rights first (``sign_elc`` checks them), sign, and keep
-    # him only if the contract actually did unlock the professional tier.
-    prospects.enter_development(player, DEV_TIER_AHL, world.season_year, rights_tid=tid)
-    ok, _reason = prospects.sign_elc(world, tid, player.pid)
-    if not (ok and prospects.eligible_for_tier(player, DEV_TIER_AHL)):
-        prospects.leave_development(player)
 
 
 def _round_for_pick(dc: DraftClass, pick_number_1_based: int) -> int:

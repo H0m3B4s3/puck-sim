@@ -396,7 +396,9 @@ def test_a_young_prospect_with_time_left_is_left_in_school():
 def _world_with_a_prospect(age=18, origin="chl", overall=55, potential=85, signed=True):
     from pucksim.gen.leaguegen import build_world
 
-    world = build_world(11)
+    # seed_pools=False -- these tests assert on aggregate prospect counts / the single
+    # promotion candidate, so the seeded farm system would interfere.
+    world = build_world(11, seed_pools=False)
     tid = world.team_list()[0].tid
     player = make_prospect(pid=world.new_pid(), age=age, origin=origin, overall=overall)
     player.potential = potential
@@ -652,7 +654,9 @@ def _world_with_roster_room(tid_prospect_overall=90):
     """A real league with one guaranteed unsigned/signed prospect and a roster spot free."""
     from pucksim.gen.leaguegen import build_world
 
-    world = build_world(11)
+    # seed_pools=False so `promote_ready_prospects` sees only the one prospect these tests
+    # plant, not a seeded farm full of other ready ones.
+    world = build_world(11, seed_pools=False)
     tid = world.team_list()[0].tid
     while len(world.teams[tid].roster) >= config.ROSTER_MAX - 1:
         world.release_player(world.teams[tid].roster[-1])
