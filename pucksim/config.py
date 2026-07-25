@@ -31,6 +31,24 @@ GOALIES_MAX = 3
 ROSTER_MIN = SKATERS_MIN + GOALIES_MIN   # 20
 ROSTER_MAX = SKATERS_MAX + GOALIES_MAX   # 23
 
+# How many players actually DRESS for a game, as opposed to being under contract. The NHL limit is
+# 20: 18 skaters (conventionally 12 forwards and 6 defensemen) plus 2 goalies. Everyone else is a
+# healthy scratch.
+#
+# The engine had no scratch concept at all -- every rostered player was eligible to be fielded, so a
+# 23-man roster effectively dressed 23. That is not just a cosmetic difference: with 13 forwards and
+# 7 defensemen all available, an injury redistributed minutes onto whoever was already playing the
+# most (``_backfill_from_bench`` picks the highest-overall body), which inflated top-line ice time
+# and was one of two identified causes of first-line forwards running ~3 minutes over their real
+# NHL band. See models/team.dressed_lineup.
+#
+# Only the total and the skater/goalie split are enforced, NOT a 12F/6D shape: dressing 11 forwards
+# and 7 defensemen is a legal and reasonably common real-hockey choice, and the line/pair chart
+# already decides composition.
+DRESSED_SKATERS_PER_GAME = 18
+DRESSED_GOALIES_PER_GAME = 2
+DRESSED_PLAYERS_PER_GAME = DRESSED_SKATERS_PER_GAME + DRESSED_GOALIES_PER_GAME   # 20
+
 SEASON_GAMES = 82
 PLAYOFF_TEAMS_PER_CONF = 8
 

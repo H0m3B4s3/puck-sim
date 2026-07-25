@@ -139,20 +139,46 @@ Found during calibration, real but not yet worth a target band:
   Closing this properly is a feature (a real stoppage model), not a constant to retune, so no band
   is claimed for them yet.
 
-- **First-line forward ice time still runs ~3 minutes high** (23.65 vs an 18–20 band) even after
-  second units brought it down from 25.7. The other three TOI tiers now pass. Two contributing
-  causes, neither of which is the even-strength share:
-  - **The same top forwards are on PP1 *and* PK1.** `_pk_defensive_value` ranks by the `defense`
-    composite, and an elite two-way forward tops both lists — so a first-liner collects even-strength
-    minutes, power-play minutes and penalty-kill minutes. Real coaches rarely put their leading
-    scorer on the top penalty-kill unit. Excluding PP1 forwards from PK1 selection is the likely fix.
-  - **Rosters carry 13 forwards and 7 defensemen and everyone dresses.** There is no scratch concept,
-    so injuries redistribute minutes onto the players already playing the most, and the rank-based
-    metric selects exactly those.
+- **First-line forward ice time runs ~4 minutes high** (24.05 vs an 18–20 band). The other three TOI
+  tiers pass. The cause is almost entirely **special-teams double duty**: the same elite two-way
+  forwards land on PP1 *and* PK1, because `_pk_defensive_value` ranks by a `defense` composite that a
+  good two-way star tops. With PP1 taking 65% of ~5.2 power-play minutes and PK1 55% of ~5.2
+  penalty-kill minutes, a forward on both collects ~6.3 minutes of special-teams time where a real
+  first-liner gets ~3 on the power play and almost none on the kill. Excluding PP1 forwards from PK1
+  selection is worth roughly 2.9 minutes.
 
-  Resist "fixing" this by lowering `FORWARD_LINE_SHIFT_SHARES`: that buries a special-teams and
-  roster-depth problem inside a 5v5 number and makes both wrong. Verify any change against
-  single-game slot TOI in `tests/test_deployment.py`, which is unambiguous.
+  A correction worth recording, because the first diagnosis was wrong: the 20-player dress limit was
+  expected to help here and does the opposite. It raised F1 from 23.65 to 24.05. Dressing 12 forwards
+  instead of 13 means the same ~183 forward-minutes per game are shared by fewer players, so every
+  tier rises. That is arithmetically inevitable and correct — the dress limit is right for other
+  reasons (see `dressed_lineup`), just not this one.
+
+  The upside of the limit is that the arithmetic is now clean and the bands are directly reachable:
+  with exactly 12 forwards dressed, the four tier means must sum to ~61 minutes, and the NHL
+  reference (19 + 16 + 14 + 11) sums to 60.
+
+  A second-order effect once the overlap is fixed: `FORWARD_LINE_SHIFT_SHARES` is applied on *every*
+  shift, but on a power-play or penalty-kill shift the chosen line doesn't actually play — the unit
+  does. So a line's realized even-strength time is its share of the ~66 even-strength shifts, not of
+  all ~80. Any share retuning has to account for that rather than assuming share × 61 minutes.
+
+- **In-game fatigue is inert for skaters, and is never an input to deployment.** Two separate
+  problems found 2026-07-25:
+  - `FATIGUE_GAIN_PER_SEC = 0.028` against `FATIGUE_RECOVER_PER_SEC = 0.05`. Break-even is
+    `0.028·f = 0.05·(1−f)`, i.e. a player only accumulates fatigue if he is on the ice for **more
+    than 64% of the game**. No skater is — a first-pair defenseman plays ~40%. So every skater sits
+    at ~0 fatigue all game and `fatigue_realization` returns 1.0 on essentially every shot. The
+    peak of 40 measured in a game belongs to a *goalie*, who never leaves the ice and therefore
+    never recovers. For a four-line rotation at 25% ice time, equilibrium needs
+    `gain = 3 × recover`; the ratio is currently inverted at `gain = 0.56 × recover`.
+  - Even with real fatigue, nothing reads it when choosing a line. `build_deployment_pattern` is a
+    fixed allocation, so a first-line forward who just played two minutes of power play can be sent
+    straight back out for a 5v5 shift. There is no cost to double-shifting and no way for a coach to
+    say "line 1 is gassed, roll line 3."
+
+  Both are prerequisites for the per-team/possession-gated shift model: a "death shift" where the
+  defending team cannot change has no consequence at all if being stuck out there does not tire
+  anyone.
 
 **A rule this round learned the hard way:** any constant expressed *per shot-attempt cycle* is
 coupled to shot volume, and correcting volume rescales all of them silently. Hits were tuned at

@@ -24,6 +24,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel
 
+from pucksim import config
 from pucksim.config import MAX_CONTRACTS, NHL_READY_OVERALL
 from pucksim.models.league import points_for_game, standings
 from pucksim.models.player import Player
@@ -399,11 +400,35 @@ class PlayerSummaryDTO(BaseModel):
     injury_status: Optional[str] = None
     key_ratings: List[KeyRatingDTO] = []
     contract: ContractSummaryDTO
+    # Game-night status (20-player dress limit). ``scratched`` means healthy but sitting;
+    # ``scratch_requested`` means the user asked for it, which can differ from ``scratched`` when
+    # injuries forced a promotion. Both default False so the many callers that build a summary
+    # without team context are unaffected.
+    scratched: bool = False
+    scratch_requested: bool = False
 
 
 class RosterDTO(BaseModel):
     """Full roster for a team with player summaries."""
     players: List[PlayerSummaryDTO]
+
+
+class ScratchStatusDTO(BaseModel):
+    """Game-night lineup status under the 20-player dress limit.
+
+    ``overridden`` is the point of this DTO: when injuries leave too few healthy players, the sim
+    promotes explicitly-scratched players so a legal lineup can be iced. Those ids appear here so the
+    UI can tell the user their instruction was overridden instead of silently ignoring it.
+    """
+    dressed_count: int
+    dressed_limit: int
+    skaters_dressed: int
+    goalies_dressed: int
+    scratched: List[PlayerSummaryDTO] = []
+    injured: List[PlayerSummaryDTO] = []
+    overridden: List[PlayerSummaryDTO] = []
+    short_skaters: int = 0
+    short_goalies: int = 0
 
 
 def _key_ratings(player: Player) -> List[KeyRatingDTO]:
@@ -423,13 +448,21 @@ def _key_ratings(player: Player) -> List[KeyRatingDTO]:
             for label, name in axes]
 
 
-def player_summary(player: Player) -> PlayerSummaryDTO:
-    """Build a :class:`PlayerSummaryDTO` for ``player``. Used by roster endpoints."""
+def player_summary(player: Player, *, scratched: bool = False,
+                   scratch_requested: bool = False) -> PlayerSummaryDTO:
+    """Build a :class:`PlayerSummaryDTO` for ``player``. Used by roster endpoints.
+
+    ``scratched``/``scratch_requested`` are keyword-only and default False because scratch status is
+    a property of a player *on a team*, which this function has no access to. Only the roster
+    endpoints, which resolve a ``DressedLineup`` first, pass them.
+    """
     injury_status = None
     if player.is_injured:
         injury_status = f"{player.injury.description} ({player.injury.games_remaining} games)"
 
     return PlayerSummaryDTO(
+        scratched=scratched,
+        scratch_requested=scratch_requested,
         pid=player.pid,
         name=player.name,
         position=player.position,
@@ -526,6 +559,36 @@ class RosterLinesDTO(BaseModel):
     # which renders as "not set" without needing a null check.
     pp_unit_2: SpecialTeamsUnitDTO = SpecialTeamsUnitDTO(players=[])
     pk_unit_2: SpecialTeamsUnitDTO = SpecialTeamsUnitDTO(players=[])
+    scratch_status: Optional[ScratchStatusDTO] = None
+
+
+def scratch_status_response(team: Team, world: World) -> ScratchStatusDTO:
+    """Resolve ``team``'s dressed lineup and describe it for the UI."""
+    from pucksim.models.team import dressed_lineup
+
+    lineup = dressed_lineup(team, world.players)
+    requested = set(team.scratches)
+
+    def summaries(pids) -> List[PlayerSummaryDTO]:
+        return [
+            player_summary(world.players[pid],
+                           scratched=pid in lineup.scratched,
+                           scratch_requested=pid in requested)
+            for pid in pids if pid in world.players
+        ]
+
+    dressed = [world.players[pid] for pid in lineup.dressed if pid in world.players]
+    return ScratchStatusDTO(
+        dressed_count=len(lineup.dressed),
+        dressed_limit=config.DRESSED_PLAYERS_PER_GAME,
+        skaters_dressed=sum(1 for p in dressed if p.position != "G"),
+        goalies_dressed=sum(1 for p in dressed if p.position == "G"),
+        scratched=summaries(lineup.scratched),
+        injured=summaries(lineup.injured),
+        overridden=summaries(lineup.promoted),
+        short_skaters=lineup.short_skaters,
+        short_goalies=lineup.short_goalies,
+    )
 
 
 def roster_lines_response(team: Team, world: World) -> RosterLinesDTO:
@@ -576,6 +639,7 @@ def roster_lines_response(team: Team, world: World) -> RosterLinesDTO:
         pk_unit_1=_unit(team.pk_unit_1),
         pp_unit_2=_unit(team.pp_unit_2),
         pk_unit_2=_unit(team.pk_unit_2),
+        scratch_status=scratch_status_response(team, world),
     )
 
 

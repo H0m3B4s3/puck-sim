@@ -22,6 +22,7 @@ from pucksim.models.team import (
     auto_build_lines,
     auto_build_special_teams_units,
     coach_pp_forwards,
+    dressed_lineup,
     Team,
 )
 from pucksim.systems import prospects
@@ -32,11 +33,13 @@ from pucksim.web.serializers import (
     RosterDTO,
     RosterLinesDTO,
     RosterTacticsDTO,
+    ScratchStatusDTO,
     TacticsDTO,
     player_summary,
     prospect_dto,
     roster_lines_response,
     roster_tactics_response,
+    scratch_status_response,
 )
 from pucksim.web.session import (
     get_session_id,
@@ -63,7 +66,18 @@ def get_roster(world: World = Depends(get_world)) -> RosterDTO:
     if team is None:
         raise HTTPException(status_code=404, detail="no user team found")
 
-    players = [player_summary(world.players[pid]) for pid in team.roster if pid in world.players]
+    # Resolve the dress limit once so every row can carry its game-night status. ``scratched`` is
+    # what actually happens; ``scratch_requested`` is what the user asked for. They differ when
+    # injuries forced a promotion, which is why both are reported rather than one combined flag.
+    lineup = dressed_lineup(team, world.players)
+    actually_scratched = set(lineup.scratched)
+    requested = set(team.scratches)
+    players = [
+        player_summary(world.players[pid],
+                       scratched=pid in actually_scratched,
+                       scratch_requested=pid in requested)
+        for pid in team.roster if pid in world.players
+    ]
     return RosterDTO(players=players)
 
 
@@ -234,6 +248,63 @@ def get_roster_tactics(world: World = Depends(get_world)) -> RosterTacticsDTO:
         raise HTTPException(status_code=404, detail="no user team found")
 
     return roster_tactics_response(team)
+
+
+# ---------------------------------------------------------------------------
+# GET/PUT /roster/scratches -- healthy scratches under the 20-player dress limit
+# ---------------------------------------------------------------------------
+class ScratchesUpdateRequest(BaseModel):
+    """Request body for setting the user team's healthy scratches.
+
+    A full replacement, not a partial update: the client sends the complete set of players it wants
+    sitting. Sending ``[]`` clears every scratch and lets ``dressed_lineup`` pick them by depth.
+    """
+    scratches: List[int]
+
+
+@router.get("/scratches", response_model=ScratchStatusDTO)
+def get_roster_scratches(world: World = Depends(get_world)) -> ScratchStatusDTO:
+    """Return who dresses and who sits for the user's team tonight.
+
+    Includes ``overridden`` -- explicitly-scratched players the sim had to promote because injuries
+    left too few healthy bodies for a legal lineup. The lineup is always playable; this is how the UI
+    learns the instruction was overridden instead of it happening silently.
+    """
+    team = world.user_team
+    if team is None:
+        raise HTTPException(status_code=404, detail="no user team found")
+    return scratch_status_response(team, world)
+
+
+@router.put("/scratches", response_model=ScratchStatusDTO)
+def put_roster_scratches(
+    body: ScratchesUpdateRequest,
+    world: World = Depends(get_world),
+    sid: str = Depends(get_session_id),
+) -> ScratchStatusDTO:
+    """Set the user team's healthy scratches.
+
+    Validates only that each id is on the roster. It deliberately does NOT reject a request that
+    scratches too many players to ice a legal lineup: ``dressed_lineup`` resolves that by promoting
+    the best scratches back in and reporting them in ``overridden``, so the sim is never blocked by a
+    lineup the user has not gotten around to fixing. Injured players are accepted and stored but are
+    redundant -- unavailability from injury is derived from the player, not from this list.
+    """
+    team = world.user_team
+    if team is None:
+        raise HTTPException(status_code=404, detail="no user team found")
+
+    roster_ids = set(team.roster)
+    for pid in body.scratches:
+        if pid not in roster_ids:
+            raise HTTPException(status_code=400, detail=f"player {pid} not on roster")
+
+    # De-duplicate while preserving the client's order, so a repeated id isn't stored twice.
+    seen = set()
+    team.scratches = [pid for pid in body.scratches
+                      if not (pid in seen or seen.add(pid))]
+    session_store.save(sid, world)
+    return scratch_status_response(team, world)
 
 
 # ---------------------------------------------------------------------------
@@ -443,5 +514,16 @@ def get_team_roster(tid: int, world: World = Depends(get_world)) -> RosterDTO:
     if team is None:
         raise HTTPException(status_code=404, detail=f"Team {tid} not found")
 
-    players = [player_summary(world.players[pid]) for pid in team.roster if pid in world.players]
+    # Resolve the dress limit once so every row can carry its game-night status. ``scratched`` is
+    # what actually happens; ``scratch_requested`` is what the user asked for. They differ when
+    # injuries forced a promotion, which is why both are reported rather than one combined flag.
+    lineup = dressed_lineup(team, world.players)
+    actually_scratched = set(lineup.scratched)
+    requested = set(team.scratches)
+    players = [
+        player_summary(world.players[pid],
+                       scratched=pid in actually_scratched,
+                       scratch_requested=pid in requested)
+        for pid in team.roster if pid in world.players
+    ]
     return RosterDTO(players=players)
