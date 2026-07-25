@@ -141,6 +141,7 @@ explicit exclusions for later steps):
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 from pucksim import config
@@ -435,6 +436,54 @@ SAVE_PROB_MAX = 0.99
 RUSH_ATTEMPT_FRACTION = 0.35
 
 
+@lru_cache(maxsize=32)
+def build_deployment_pattern(shares: Tuple[float, ...], unit_count: int,
+                             length: int) -> Tuple[int, ...]:
+    """Expand per-unit shift shares into a repeating pattern of unit indices.
+
+    Returns a tuple of ``length`` slot indices whose frequencies match ``shares`` and which
+    interleaves the units rather than running them in blocks -- so line 1 takes roughly every third
+    shift, not the first 32 shifts of the period.
+
+    Uses sequential proportional (Sainte-Lague) allocation: at each position, give the slot to
+    whichever unit has the largest ``share / (already_awarded + 0.5)``. That is deterministic, needs
+    no RNG (so it cannot perturb the seeded stream), spreads each unit evenly across the pattern by
+    construction, and guarantees every unit with a positive share appears -- which is what keeps
+    ``test_every_boxed_player_has_positive_ice_time`` meaningful rather than incidentally true.
+
+    ``unit_count`` is the number of lines/pairs the team ACTUALLY has, which need not match the
+    length of ``shares``: a short-handed roster may build only three forward lines, and
+    ``auto_build_lines`` is not guaranteed to produce exactly four. Extra shares are dropped and
+    the remainder renormalized; missing ones repeat the last (thinnest) share.
+
+    Cached because the result depends only on its arguments, and there are at most a handful of
+    distinct (shares, unit_count) combinations in a league. Arguments are tuples/ints for that
+    reason -- do not make this take a list.
+    """
+    if unit_count <= 0 or length <= 0:
+        return (0,)
+    s = list(shares[:unit_count])
+    while len(s) < unit_count:
+        s.append(s[-1] if s else 1.0)
+    total = sum(s)
+    if total <= 0:
+        s = [1.0] * unit_count
+        total = float(unit_count)
+    s = [x / total for x in s]
+
+    awarded = [0] * unit_count
+    pattern: List[int] = []
+    for _ in range(length):
+        best_i, best_q = 0, -1.0
+        for i in range(unit_count):
+            q = s[i] / (awarded[i] + 0.5)
+            if q > best_q:
+                best_q, best_i = q, i
+        pattern.append(best_i)
+        awarded[best_i] += 1
+    return tuple(pattern)
+
+
 def _weighted_index(rng, weights: List[float]) -> int:
     return rng.choices(range(len(weights)), weights=weights, k=1)[0]
 
@@ -505,11 +554,16 @@ class _TeamState:
         available_ids = {p.pid for p in available_players(team, self.players)}
         self.unavailable: set = {pid for pid in team.roster if pid not in available_ids}
 
-        # Round-robin rotation pointers into team.lines / team.pairs (MVP: no line-juggling AI,
-        # just a fixed deterministic rotation so ice time distributes across the whole roster --
-        # DEVPLAN.md's explicit instruction).
+        # Rotation pointers -- now indices into a weighted deployment PATTERN rather than directly
+        # into team.lines / team.pairs. The pattern gives line 1 a bigger share of shifts than line
+        # 4 (config.FORWARD_LINE_SHIFT_SHARES / D_PAIR_SHIFT_SHARES), replacing the flat round robin
+        # that gave every line an identical 25%. See build_deployment_pattern.
         self._line_idx = 0
         self._pair_idx = 0
+        self._line_pattern = build_deployment_pattern(
+            config.FORWARD_LINE_SHIFT_SHARES, len(team.lines), config.DEPLOYMENT_PATTERN_LENGTH)
+        self._pair_pattern = build_deployment_pattern(
+            config.D_PAIR_SHIFT_SHARES, len(team.pairs), config.DEPLOYMENT_PATTERN_LENGTH)
         self.on_ice: List[int] = []           # 5 (or 6, pulled-goalie) skaters, current shift
 
         # Line-juggling AI (DEVPLAN.md Step 2.8): the line-slot/pair-slot index actually used
@@ -579,15 +633,23 @@ class _TeamState:
 
     # -- on-ice group assembly ------------------------------------------------
     def _next_normal_group(self) -> List[int]:
-        """Round-robin to the next forward line + D pair (line 0->1->2->3->0.., pair
-        0->1->2->0..): the normal-rotation on-ice group, ignoring strength state. Plain
-        ``List[int]`` built by concatenating a forward line + a D pair (DESIGN.md point 1 --
-        never a hard Line/Pair object). Advances the rotation pointers as a side effect --
-        called exactly once per real shift boundary (``advance_shift``, below); mid-shift
-        strength-state changes must reuse ``self._normal_group`` via
-        ``refresh_on_ice_for_strength_state`` instead of calling this again, or the round-robin
-        pointer would skip an extra line/pair every time a penalty is drawn or expires mid-shift
-        (a real bug this split specifically guards against).
+        """Advance to the next forward line + D pair: the normal-rotation on-ice group, ignoring
+        strength state. Plain ``List[int]`` built by concatenating a forward line + a D pair
+        (DESIGN.md point 1 -- never a hard Line/Pair object).
+
+        Which line/pair comes next is read from this team's weighted deployment PATTERN, not a flat
+        round robin -- line 1 gets ~31% of shifts and line 4 ~19%, pair 1 ~39% and pair 3 ~27%
+        (config.FORWARD_LINE_SHIFT_SHARES / D_PAIR_SHIFT_SHARES, expanded by
+        ``build_deployment_pattern``). The old ``(idx + 1) % len(lines)`` round robin gave every line
+        an identical share, which meant a 4th liner played as many minutes as the 1C and every
+        defenseman outplayed every forward. Note this also gives the line-juggling AI real teeth:
+        demoting a player to line 4 now costs him ice time rather than just relabeling his slot.
+
+        Advances the pattern pointer as a side effect -- called exactly once per real shift boundary
+        (``advance_shift``, below); mid-shift strength-state changes must reuse
+        ``self._normal_group`` via ``refresh_on_ice_for_strength_state`` instead of calling this
+        again, or the pointer would skip an extra slot every time a penalty is drawn or expires
+        mid-shift (a real bug this split specifically guards against).
 
         Injury-aware (DEVPLAN.md Step 2.3): any id in ``self.unavailable`` (injured, this game or
         carried in from a previous one) is dropped from the line/pair before it's returned, and
@@ -600,12 +662,18 @@ class _TeamState:
         """
         lines = self.team.lines
         pairs = self.team.pairs
-        self._current_line_idx = self._line_idx % len(lines) if lines else 0
-        self._current_pair_idx = self._pair_idx % len(pairs) if pairs else 0
+        # Read the next slot out of the weighted deployment pattern instead of incrementing
+        # straight through the lines. The pattern index advances by one per shift; which LINE that
+        # lands on is what the shares control. Clamped against the live list length so a roster
+        # whose line count changed after construction can never index out of range.
+        self._current_line_idx = (self._line_pattern[self._line_idx % len(self._line_pattern)]
+                                  % len(lines)) if lines else 0
+        self._current_pair_idx = (self._pair_pattern[self._pair_idx % len(self._pair_pattern)]
+                                  % len(pairs)) if pairs else 0
         line = lines[self._current_line_idx] if lines else []
         pair = pairs[self._current_pair_idx] if pairs else []
-        self._line_idx = (self._line_idx + 1) % max(1, len(lines))
-        self._pair_idx = (self._pair_idx + 1) % max(1, len(pairs))
+        self._line_idx += 1
+        self._pair_idx += 1
 
         healthy_line = [pid for pid in line if pid not in self.unavailable]
         healthy_pair = [pid for pid in pair if pid not in self.unavailable]

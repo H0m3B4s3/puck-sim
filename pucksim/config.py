@@ -95,6 +95,37 @@ SHOOTOUT_RATING_GAP_SLOPE = 0.004
 SHIFT_SECONDS_TARGET = 45
 
 # ---------------------------------------------------------------------------
+# Deployment: share of shifts each line / D pair gets
+# ---------------------------------------------------------------------------
+# Fraction of a team's shifts given to forward line 1..4 and D pair 1..3. Must each sum to 1.0.
+#
+# The engine used to rotate through lines and pairs in a flat round robin -- 25% to every forward
+# line, 33% to every D pair. That was an explicit MVP simplification ("no line-juggling AI, just a
+# fixed deterministic rotation so ice time distributes across the whole roster"), but it means a 4th
+# liner plays as many minutes as the 1C, and every defenseman outplays every forward. Measured
+# consequence before this changed: all four forward lines sat at ~16 minutes and all three pairs at
+# ~20, and 4th liners scored like first liners because ice time is the largest single input to
+# individual production.
+#
+# Real NHL deployment is roughly 19 / 16 / 14 / 11 minutes for forward lines and 24 / 20 / 16 for
+# pairs. These shares reproduce those ratios. They are what makes star concentration come from the
+# right mechanism -- a coach playing his best players more -- rather than from an exaggerated
+# shooter-selection weight.
+#
+# Not yet a coach tendency: CoachProfile has no deployment knob (it has pp_forwards,
+# line_juggling_patience, shot_volume, shot_quality_bias), so every team currently deploys
+# identically. A "star minutes / balanced bench" coach axis is the obvious extension and is
+# deliberately left for later rather than invented here.
+FORWARD_LINE_SHIFT_SHARES = (0.315, 0.267, 0.233, 0.185)
+D_PAIR_SHIFT_SHARES = (0.395, 0.335, 0.270)
+
+# Length of the repeating shift-slot pattern these shares are expanded into (see
+# engine.build_deployment_pattern). Long enough that the realized frequencies match the shares
+# closely, short enough to stay cheap and readable. A pattern -- rather than a weighted random draw
+# per shift -- keeps deployment deterministic and guarantees every line still gets ice time.
+DEPLOYMENT_PATTERN_LENGTH = 80
+
+# ---------------------------------------------------------------------------
 # Standings rules (DESIGN.md point 7)
 # ---------------------------------------------------------------------------
 # Not a single hardcoded win/loss scheme like the NBA: this is a user-selectable

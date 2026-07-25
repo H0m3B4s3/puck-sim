@@ -90,6 +90,23 @@ the leader does.
 | `toi_d1_min` | 23 – 25 | |
 | `toi_d3_min` | 15 – 17 | |
 
+**Tiers are assigned by ranking, not by reading the line chart.** A team's top 3 forwards by
+per-game ice time are "F1", the next 3 "F2", and so on; top 2 defensemen are "D1". Since every
+roster carries 13 forwards and 7 defensemen, the four forward tiers and three pair tiers cover
+exactly the top 12 F and top 6 D — the dressed lineup, which is the same convention the NHL figures
+above are drawn from, with the 13th forward and 7th defenseman as the scratches.
+
+Reading `Team.lines` directly looks more accurate and is wrong over a full season: the coach
+line-juggling AI mutates it as the year goes (measured ~34 reshuffles per team per season, with 31
+of 32 teams having changed their lines inside the first 20 days). Attributing a player's whole-season
+ice time to whichever slot he occupies in game 82 averages his time across every slot he passed
+through, which compresses the measured spread toward flat and hides precisely what the metric
+exists to detect. The first cut of this metric did read the line chart and reported a 1.17x
+top-to-bottom forward ratio while the deployment pattern was in fact producing 1.72x.
+
+For the clean read on deployment itself, `tests/test_deployment.py` measures a single game with no
+reshuffle, where slot semantics are unambiguous.
+
 ### Unbanded diagnostics
 
 Printed for context, never asserted:

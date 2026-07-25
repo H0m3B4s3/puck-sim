@@ -288,29 +288,52 @@ def _per_team_game_sog(world: World, games) -> List[int]:
     return totals
 
 
-def _toi_by_slot(world: World) -> Dict[str, float]:
-    """Mean per-game ice time in MINUTES for each deployment slot (F1-F4, D1-D3).
+_FORWARD_POSITIONS = ("LW", "C", "RW")
 
-    A slot's ice time is averaged over every player occupying it across all 32 teams, weighted by
-    nobody -- a straight mean of per-player per-game minutes. Uses ``Team.lines``/``Team.pairs``
-    (the roster's static deployment structure) rather than trying to infer a slot from ice time,
-    which would make the metric circular.
+
+def _toi_by_slot(world: World) -> Dict[str, float]:
+    """Mean per-game ice time in MINUTES for each deployment tier (F1-F4, D1-D3).
+
+    Tiers are assigned by RANKING each team's skaters on actual per-game ice time -- top 3 forwards
+    are "F1", next 3 "F2", and so on; top 2 defensemen are "D1". It deliberately does NOT read
+    ``Team.lines``/``Team.pairs``.
+
+    Reading the line chart looks more direct and is wrong over a full season, because the coach
+    line-juggling AI mutates ``team.lines`` as the season goes (measured: ~34 reshuffles per team
+    per season, and 31 of 32 teams had changed their lines within the first 20 days). Attributing a
+    player's whole-season ice time to whatever slot he happens to occupy in game 82 averages his
+    time across every slot he passed through, which compresses the measured spread toward flat and
+    hides exactly the thing this metric exists to detect. Ranking is invariant to that: a player who
+    got first-line minutes all year is a first-liner no matter where the chart currently lists him.
+
+    Not circular, despite ranking on the quantity being measured. The question is not "who is on
+    line 1" but "how much more does a team's most-used forward trio play than its least-used" --
+    a spread, which a flat rotation still fails (every tier converges on the same value) and a
+    weighted one still passes.
     """
     buckets: Dict[str, List[float]] = {}
     for team in world.team_list():
-        for idx, line in enumerate(team.lines):
-            _collect_slot(world, buckets, f"F{idx + 1}", line)
-        for idx, pair in enumerate(team.pairs):
-            _collect_slot(world, buckets, f"D{idx + 1}", pair)
+        forwards, defensemen = [], []
+        for pid in team.roster:
+            player = world.players.get(pid)
+            if player is None or player.season is None or player.season.gp == 0:
+                continue
+            toi = player.season.secs / player.season.gp / 60.0
+            if player.position in _FORWARD_POSITIONS:
+                forwards.append(toi)
+            elif player.position == "D":
+                defensemen.append(toi)
+        forwards.sort(reverse=True)
+        defensemen.sort(reverse=True)
+        for tier in range(4):
+            group = forwards[tier * 3:tier * 3 + 3]
+            if group:
+                buckets.setdefault(f"F{tier + 1}", []).extend(group)
+        for tier in range(3):
+            group = defensemen[tier * 2:tier * 2 + 2]
+            if group:
+                buckets.setdefault(f"D{tier + 1}", []).extend(group)
     return {slot: statistics.fmean(vals) for slot, vals in buckets.items() if vals}
-
-
-def _collect_slot(world: World, buckets: Dict[str, List[float]], slot: str, pids) -> None:
-    for pid in pids:
-        player = world.players.get(pid)
-        if player is None or player.season is None or player.season.gp == 0:
-            continue
-        buckets.setdefault(slot, []).append(player.season.secs / player.season.gp / 60.0)
 
 
 # ---------------------------------------------------------------------------
