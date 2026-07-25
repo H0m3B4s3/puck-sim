@@ -691,7 +691,8 @@ def sign_eligible_prospects(world: World, exclude_tid: Optional[int] = None) -> 
     return signed
 
 
-def promote_prospect(world: World, tid: int, pid: int) -> Tuple[bool, str]:
+def promote_prospect(world: World, tid: int, pid: int, *,
+                     emergency: bool = False) -> Tuple[bool, str]:
     """Call one signed prospect up onto ``tid``'s NHL roster. Returns ``(ok, reason)``.
 
     The user-facing half of graduation: what ``promote_ready_prospects`` does automatically
@@ -701,6 +702,15 @@ def promote_prospect(world: World, tid: int, pid: int) -> Tuple[bool, str]:
     cap hit real), and the team has the roster spot and cap room. Nothing about being
     NHL-*ready* is enforced: a manager may call up a raw prospect if he wants to, exactly as
     a real team can, and eat the roster spot and the bad hockey that follows.
+
+    ``emergency=True`` waives the 23-man roster ceiling -- and ONLY that -- for
+    systems/callups.py's recall of a replacement when injuries have left a team unable to
+    dress a legal 18 skaters. Injured players stay on ``Team.roster``, so a team with three
+    men hurt sits at the ceiling with twenty healthy bodies and cannot recall the
+    replacement it is required to dress; relieving that is exactly what injured reserve is
+    for. The CAP is still enforced: ``cap.injury_relief`` gives such a team the same room
+    the real rule does, so an emergency recall goes inside the hard cap rather than around
+    it, and a team that is merely short of talent gets nothing.
 
     ``World.sign_player`` clears the development record (its documented single choke point
     for "reaching an NHL roster ends development"), so a promoted player is a player, not a
@@ -717,7 +727,8 @@ def promote_prospect(world: World, tid: int, pid: int) -> Tuple[bool, str]:
     if player.contract.years_remaining <= 0:
         return False, "Sign him to an entry-level contract before calling him up."
     team = world.teams[tid]
-    ok, reason = cap.can_sign(world, team, player.contract.current_salary)
+    ok, reason = cap.can_sign(world, team, player.contract.current_salary,
+                              ignore_roster_limit=emergency)
     if not ok:
         return False, reason
     world.sign_player(pid, tid)

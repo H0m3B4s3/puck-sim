@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from pucksim.config import (BURY_CAP_SHELTER, CAP_GROWTH_RATE, MAX_CONTRACT_YEARS,
+from pucksim.config import (BURY_CAP_SHELTER, CAP_GROWTH_RATE, LTIR_SEVERITIES, MAX_CONTRACT_YEARS,
                              MAX_SALARY_CAP_FRACTION, MINIMUM_SALARY, ROSTER_MAX, ROSTER_MIN,
                              ROOKIE_SALARY_CAP_FRACTION, SALARY_CURVE, SALARY_CURVE_REFERENCE_CAP,
                              TRADE_MATCH_BUFFER, VETERAN_DISCOUNT, VETERAN_DISCOUNT_AGE,
@@ -91,9 +91,40 @@ def payroll(world: World, team: Team) -> int:
     return team_salary(team, world.players) + buried_cap_hit(world, team)
 
 
+def injury_relief(world: World, team: Team) -> int:
+    """Cap relief for seriously injured players -- the NHL's long-term injured reserve.
+
+    A team that loses a top-six forward for two months must be able to replace him, and the
+    real rule is that it may exceed the cap by up to his hit while he is out. Without this,
+    ``systems/callups.py`` -- which recalls a body whenever injuries drop a roster below a
+    dressable 18 skaters -- had nowhere to put the replacement's salary, and measurably
+    pushed two teams over a cap that this module is otherwise careful to keep a hard
+    invariant (see ``can_sign``'s note on ``fill_rosters``).
+
+    Gated on ``Injury.severity`` rather than ``games_remaining`` deliberately. Severity is
+    fixed for the life of the injury; remaining games count down, so relief keyed to it would
+    silently expire in the last week of a long absence and flip a legal roster to illegal
+    without anything happening. Minor knocks earn nothing -- a team absorbs a two-game
+    absence with the scratches it already carries, which is what healthy scratches are for.
+    """
+    total = 0
+    for pid in team.roster:
+        player = world.players.get(pid)
+        if player is None or player.injury is None:
+            continue
+        if player.injury.severity not in LTIR_SEVERITIES:
+            continue
+        total += player.contract.current_salary
+    return total
+
+
 def cap_space(world: World, team: Team) -> int:
-    """Room remaining under the cap, floored at 0 (never negative)."""
-    return max(0, world.salary_cap - payroll(world, team))
+    """Room remaining under the cap, floored at 0 (never negative).
+
+    Net of ``injury_relief``, so a team carrying long-term injuries has the room to replace
+    them that the real rule gives it.
+    """
+    return max(0, world.salary_cap - payroll(world, team) + injury_relief(world, team))
 
 
 def over_cap(world: World, team: Team) -> bool:
@@ -101,8 +132,8 @@ def over_cap(world: World, team: Team) -> bool:
     trade-matching edge case -- normal signings are blocked by ``can_sign`` before this
     can happen, but a team can still legally land here e.g. rounding or a future waiver
     claim that ignores space, so this stays a real, checkable query rather than an
-    assumed-impossible invariant)."""
-    return payroll(world, team) > world.salary_cap
+    assumed-impossible invariant). Net of ``injury_relief``, matching ``cap_space``."""
+    return payroll(world, team) - injury_relief(world, team) > world.salary_cap
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +289,8 @@ def grow_cap(world: World, rate: float = CAP_GROWTH_RATE) -> None:
     world.salary_cap = int(world.salary_cap * (1 + rate))
 
 
-def can_sign(world: World, team: Team, salary: int) -> Tuple[bool, str]:
+def can_sign(world: World, team: Team, salary: int, *,
+             ignore_roster_limit: bool = False) -> Tuple[bool, str]:
     """Whether a team may sign a player (free agent or rookie) at ``salary``.
 
     Hard cap: unlike HoopR's soft-cap NBA model (minimum contracts and the mid-level
@@ -266,6 +298,14 @@ def can_sign(world: World, team: Team, salary: int) -> Tuple[bool, str]:
     that pushes payroll over ``world.salary_cap`` -- there is no exception mechanism.
     Roster-size legality uses hockey's real 23-man active-roster ceiling
     (``config.ROSTER_MAX``).
+
+    ``ignore_roster_limit`` waives ONLY the 23-man ceiling, and only
+    ``systems/callups.py``'s emergency recall passes it: injured players stay on
+    ``Team.roster`` here, so a team with three men hurt is at the ceiling with twenty
+    healthy bodies and could not recall the replacement it is required to dress. That is
+    what injured reserve relieves in the real rule. The cap check is deliberately NOT
+    waived alongside it -- ``injury_relief`` already gives that same team the room a real
+    one gets, so an emergency recall stays inside the hard cap rather than around it.
 
     A team must also keep back enough room to fill its *remaining mandatory* roster spots
     at the league minimum (``config.ROSTER_MIN``). Without that reserve a team can legally
@@ -277,7 +317,7 @@ def can_sign(world: World, team: Team, salary: int) -> Tuple[bool, str]:
     up front is both the realistic GM behavior and the only fix that keeps the hard cap an
     actual invariant rather than a hope.
     """
-    if len(team.roster) >= ROSTER_MAX:
+    if not ignore_roster_limit and len(team.roster) >= ROSTER_MAX:
         return False, "Roster is full (23-man active-roster maximum)."
     allowance = signing_allowance(world, team)
     if salary > allowance:

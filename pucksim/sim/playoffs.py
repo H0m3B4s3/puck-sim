@@ -38,7 +38,8 @@ from pucksim import config
 from pucksim.models.league import Game, Phase, conference_standings
 from pucksim.models.world import World
 from pucksim.sim.boxscore import GameResult
-from pucksim.sim.season import sim_one
+from pucksim.sim.season import _heal_injuries, sim_one
+from pucksim.systems import callups
 
 BEST_OF = 7
 WINS_NEEDED = BEST_OF // 2 + 1            # 4
@@ -147,7 +148,17 @@ def advance_playoff_slate(world: World) -> List[Tuple[dict, GameResult]]:
     live-coaching seam existing but not being wired to anything yet).
 
     Returns the list of ``(series_dict, GameResult)`` pairs played this slate.
+
+    Injuries heal and rosters are maintained around each slate, exactly as they are around each
+    regular-season day (``season.advance_one_day``). Neither used to happen here at all, and the
+    postseason was where it hurt most: a man hurt in game 1 of round 1 was out for the entire
+    playoffs no matter how minor the knock, and nothing could replace him. Measured over one
+    full bracket before the fix, **42% of playoff team-games dressed fewer than 18 skaters, one
+    as few as 11** -- against 13.8% of regular-season team-days at the time. Two months of
+    attrition with no healing and no reinforcements compounds every round.
     """
+    callups.run_daily_roster_moves(world)
+
     results: List[Tuple[dict, GameResult]] = []
     for s in active_series(world):
         home, away = _series_next_home_away(s)
@@ -159,6 +170,7 @@ def advance_playoff_slate(world: World) -> List[Tuple[dict, GameResult]]:
         _record_series_game(s, home, away, result)
         results.append((s, result))
 
+    _heal_injuries(world)
     world.day += 1
     if not active_series(world):
         _build_next_round(world)

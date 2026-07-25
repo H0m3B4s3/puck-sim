@@ -604,6 +604,14 @@ MINIMUM_SALARY = 800_000
 # one-way contracts. PROVISIONAL, in the real rule's ballpark.
 BURY_CAP_SHELTER = 1_950_000
 
+# Which `Injury.severity` levels earn long-term-injured-reserve cap relief
+# (`systems/cap.py::injury_relief`). The real rule keys off expected absence (10 games / 24
+# days); severity is this sim's stand-in for that, and it has the practical advantage of being
+# FIXED for the life of the injury -- relief keyed to `games_remaining` would silently expire
+# in the last week of a long absence and flip a legal roster illegal with nothing having
+# happened. Minor knocks earn nothing: a two-game absence is what healthy scratches are for.
+LTIR_SEVERITIES = ("moderate", "major")
+
 # Cap ceiling for a single contract's annual salary, expressed as a fraction of
 # the league cap (real NHL's "20% max AAV" rule of thumb -- no player may sign
 # for more than 20% of the cap in a single season). Applied in

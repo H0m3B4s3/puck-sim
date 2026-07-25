@@ -110,6 +110,7 @@ from pucksim.models.world import World
 from pucksim.sim.boxscore import GameResult
 from pucksim.sim.engine import simulate_game
 from pucksim.sim.goalies import GoalieRestState, choose_starting_goalie
+from pucksim.systems import callups
 
 # ---------------------------------------------------------------------------
 # Goalie rest-state tracking (DEVPLAN.md Step 2.2) -- WHERE THIS STATE LIVES, AND WHY:
@@ -421,6 +422,14 @@ def advance_one_day(world: World) -> List[Game]:
     DEVPLAN.md Step 2.9b-ii: populate ``world.game_results`` with box-score data for each
     played game so ``GET /season/games/{gid}/boxscore`` can retrieve them later.
     """
+    # Roster maintenance BEFORE the day's games, so a team that lost bodies to injury in
+    # yesterday's game has them replaced in time to dress a legal lineup tonight rather than
+    # a day late (systems/callups.py). Unlike the offseason's promote_ready_prospects this
+    # is NOT excluded for the user's team: it fires only when a roster physically cannot
+    # dress 18 skaters, and leaving a manager to discover that by losing a game 6-1 is not
+    # agency, it's a trap. Roster moves are reported through the standard roster screen.
+    callups.run_daily_roster_moves(world)
+
     todays = [g for g in world.schedule if g.day == world.day and not g.played]
     for game in todays:
         result = sim_one(world, game)

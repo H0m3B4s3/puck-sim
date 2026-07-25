@@ -238,6 +238,64 @@ coupled to shot volume, and correcting volume rescales all of them silently. Hit
 volume again, audit every `*_PER_CYCLE` / `*_PER_ATTEMPT_*` constant, and prefer asserting such
 rates as a *share of attempts* rather than a count per game (see `tests/test_shot_blocking.py`).
 
+### Fixed 2026-07-25 — teams were playing short, and it inflated everything
+
+**There was no in-season call-up.** Promotion out of the development tiers ran only in the
+offseason (`prospects.promote_ready_prospects`), so a team that lost a third skater to injury in
+November played short until he healed. Teams carry 20 skaters and dress 18, so exactly two injuries
+were absorbable. Measured over one 82-day regular season, seed 7:
+
+| dressed skaters | 15 | 16 | 17 | 18 |
+|---|---|---|---|---|
+| team-days | 19 | 74 | 270 | 2261 |
+
+**13.8% of team-days dressed fewer than 18 skaters.** Nothing reported it — the sim plays such a
+game short-handed by design (`DressedLineup.short_skaters`) rather than refusing to sim it, so the
+only visible symptom was in the distribution.
+
+That symptom is the reason this belongs in this document rather than in a roster-management round: a
+shortfall concentrates a fixed amount of ice time onto fewer players, and it was the largest single
+contributor to the goal histogram running hot. `systems/callups.py` closed it, and both the depth and
+the top of the distribution moved a long way:
+
+| | before | after | reference |
+|---|---|---|---|
+| team-days dressing < 18 skaters | 13.8% | **0%** | 0% |
+| skaters with GP > 0 | 588 | **706** | NHL ~830 |
+| goal leader | 93 | **55** | 50–66 |
+| leader's share of team SOG | 17.7% | **12.95%** | ~13.5% |
+
+Three things worth remembering:
+
+- **The triggers are stateless on purpose.** Call up below 18 healthy skaters, send down above
+  `SKATERS_MAX`. A team is only ever above `SKATERS_MAX` because a call-up put it there, so the
+  second rule returns exactly what the first added with nothing persisted. A "this player is on a
+  call-up" flag would have to survive save/load, trades and the offseason, and any path that dropped
+  it would strand a player on an NHL roster forever. It also means old saves self-correct on the
+  first day advanced.
+- **A recall has to be able to break the 23-man ceiling, and must not break the cap.** Injured
+  players stay on `Team.roster`, so a team with three men hurt sits at the ceiling with twenty
+  healthy bodies. Waiving the ceiling alone put two teams over the cap by up to $2.6M — the exact
+  class of hard-cap leak `cap.can_sign` was hardened against. The fix is the real rule:
+  `cap.injury_relief` (LTIR) gives such a team room equal to its long-term absences, after which 0
+  teams finish over. Relief is keyed to `Injury.severity`, not `games_remaining`, because a
+  counting-down clock would silently expire in the last week of a long absence and flip a legal
+  roster illegal with nothing having happened.
+- **The farm is thinner than expected at defense.** Five teams finished a season with zero signed
+  defense prospects, so a defense shortfall falls back to recalling a forward. Dressing a full
+  complement out of position beats dressing 17.
+- **The postseason was the worse half.** `advance_playoff_slate` ran no roster maintenance *and*
+  never called `_heal_injuries` at all, so a man hurt in game 1 of round 1 was out for the entire
+  playoffs however minor the knock, with nobody able to replace him. Two months of attrition with no
+  healing and no reinforcements compounds every round: **42% of playoff team-games dressed fewer
+  than 18 skaters, one as few as 11**, against 13.8% of regular-season team-days. Both hooks now run
+  around each slate exactly as they do around each regular-season day; playoff games now dress 18
+  every time. Worth noting the missing heal was a *pre-existing* bug that this measurement found
+  rather than one the call-up work introduced.
+
+The residual gap to the NHL's ~830 skaters is trades, waiver churn and 23-man rosters rotating three
+healthy scratches rather than two — real, but a management-metagame feature rather than a constant.
+
 ## Changing a band
 
 These bands are **not** placeholders in the sense the engine's first-pass tuning constants are.
