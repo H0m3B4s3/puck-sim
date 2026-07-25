@@ -32,7 +32,7 @@ from typing import List, Tuple
 
 from pucksim.config import ROSTER_MAX, ROSTER_MIN, TRADE_DEADLINE_FRACTION, SEASON_GAMES
 from pucksim.models.league import Phase
-from pucksim.models.team import Team, auto_build_lines, roster_players
+from pucksim.models.team import Team, auto_build_lineup, roster_players
 from pucksim.models.world import World
 from pucksim.systems import cap
 
@@ -134,8 +134,8 @@ def execute_trade(world: World, offer: TradeOffer) -> None:
         world.transfer_player(pid, b.tid)
     for pid in list(offer.b_sends):
         world.transfer_player(pid, a.tid)
-    auto_build_lines(a, world.players)
-    auto_build_lines(b, world.players)
+    auto_build_lineup(a, world.players)
+    auto_build_lineup(b, world.players)
 
 
 def propose_trade(world: World, offer: TradeOffer) -> Tuple[bool, str]:

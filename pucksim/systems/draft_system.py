@@ -67,7 +67,7 @@ from pucksim.gen.prospectgen import generate_prospect_pool
 from pucksim.models.draft import DraftClass
 from pucksim.models.league import Game, standings
 from pucksim.models.player import Player
-from pucksim.models.team import auto_build_lines
+from pucksim.models.team import auto_build_lineup
 from pucksim.models.world import World
 from pucksim.systems import prospects
 from pucksim.systems.freeagency import sign_rookie
@@ -417,7 +417,7 @@ def undrafted_to_free_agency(world: World) -> int:
         if tier is not None:
             prospects.enter_development(player, tier, world.season_year, rights_tid=None)
     for team in world.team_list():
-        auto_build_lines(team, world.players)
+        auto_build_lineup(team, world.players)
     return len(undrafted)
 
 

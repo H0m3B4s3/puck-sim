@@ -429,6 +429,40 @@ def auto_build_special_teams_units(team: Team, players: Dict[int, Player],
     team.pk_unit_1 = [p.pid for p in top_pk_forwards] + [p.pid for p in top_pk_d]
 
 
+def coach_pp_forwards(team: Team) -> int:
+    """The team coach's preferred PP shape (3F+2D or 4F+1D), defaulting to 3 when the team has no
+    coach. ``Team.coach`` is a serialized dict, not a live CoachProfile (see models/coach.py), so
+    the archetype has to be resolved back into a profile to read the tendency off it."""
+    if team.coach and isinstance(team.coach, dict):
+        from pucksim.models.coach import profile_for
+        return profile_for(team.coach.get("archetype", "Balanced")).pp_forwards
+    return 3
+
+
+def auto_build_lineup(team: Team, players: Dict[int, Player]) -> None:
+    """Rebuild EVERYTHING deployment-related for ``team``: forward lines, D pairs, goalie
+    assignments (``auto_build_lines``) AND the special-teams units (``auto_build_special_teams_units``,
+    with the coach's own ``pp_forwards`` shape).
+
+    This exists because the two builders were separate and the second one was almost never called.
+    Nine places rebuilt a roster's lines after it changed -- world generation, trades, free agency,
+    the draft, prospect call-ups and send-downs -- and not one of them touched the special-teams
+    units. The practical effect was that ``pp_unit_1``/``pk_unit_1`` were empty for every team in
+    every league (only one caller, the web roster router's explicit "rebuild special teams" button,
+    ever populated them), so ``special_teams.on_ice_group_for_state`` always fell through to its
+    undersized-unit fallback and a power play was served by whichever line the normal rotation
+    happened to reach. The single largest real-hockey mechanism for concentrating scoring in star
+    players simply did not exist.
+
+    Call THIS at every seam where a roster changes, not ``auto_build_lines`` alone -- that is the
+    whole point of it being one function. ``auto_build_lines`` remains public for the narrow cases
+    that genuinely want only the even-strength chart (e.g. the roster router's
+    ``include_special_teams=false`` path).
+    """
+    auto_build_lines(team, players)
+    auto_build_special_teams_units(team, players, pp_forwards=coach_pp_forwards(team))
+
+
 def rotation_pool(team: Team, players: Dict[int, Player]) -> List[int]:
     """The bench/scratch pool: roster ids minus whoever's in an active line/pair/goalie slot."""
     active = set()

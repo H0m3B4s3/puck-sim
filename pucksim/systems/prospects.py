@@ -706,7 +706,7 @@ def promote_prospect(world: World, tid: int, pid: int) -> Tuple[bool, str]:
     for "reaching an NHL roster ends development"), so a promoted player is a player, not a
     prospect, the instant this returns True.
     """
-    from pucksim.models.team import auto_build_lines
+    from pucksim.models.team import auto_build_lineup
     from pucksim.systems import cap
 
     player = world.players.get(pid)
@@ -721,7 +721,7 @@ def promote_prospect(world: World, tid: int, pid: int) -> Tuple[bool, str]:
     if not ok:
         return False, reason
     world.sign_player(pid, tid)
-    auto_build_lines(team, world.players)
+    auto_build_lineup(team, world.players)
     return True, f"{player.name} called up to the NHL roster."
 
 
@@ -740,7 +740,7 @@ def demote_player(world: World, tid: int, pid: int) -> Tuple[bool, str]:
     NHL send-down of a non-exempt player must clear waivers first -- deferred with the rest
     of the CBA to DEVPLAN Step 3.1), so any eligible player can be sent down freely here.
     """
-    from pucksim.models.team import auto_build_lines
+    from pucksim.models.team import auto_build_lineup
 
     player = world.players.get(pid)
     if player is None or player.team_id != tid:
@@ -753,7 +753,7 @@ def demote_player(world: World, tid: int, pid: int) -> Tuple[bool, str]:
     team = world.teams[tid]
     world.release_player(pid)          # off the roster, team_id=None, into free_agents
     enter_development(player, tier, world.season_year, rights_tid=tid)
-    auto_build_lines(team, world.players)
+    auto_build_lineup(team, world.players)
     return True, f"{player.name} sent down to the {tier.upper()}."
 
 
