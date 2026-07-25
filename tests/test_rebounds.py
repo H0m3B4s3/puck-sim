@@ -72,13 +72,32 @@ def test_high_rebound_control_surrenders_fewer_rebounds():
 
 def test_goals_per_game_stays_realistic():
     """Calibration guardrail: resolving rebounds as immediate extra looks (a change to the shift
-    loop) plus their higher conversion must keep total scoring in a realistic NHL band."""
+    loop) plus their higher conversion must keep total scoring in a realistic NHL band.
+
+    Samples every team in each world exactly once (16 disjoint matchups) rather than always playing
+    ``tids[0]`` against ``tids[1]``. That fixed pairing was a biased sample, not a neutral one --
+    team 0 draws a top-5 goalie in most seeds, so 0-vs-1 games average 4.55 goals where sampling
+    all 32 teams from the same worlds gives 5.37. The bias was harmless while it happened to land
+    inside the band, and became a spurious failure the moment scoring moved for legitimate reasons.
+    An arbitrary pair is also a high-variance estimator: two different pairing schemes over the same
+    80 games disagreed by 0.7 goals, which is more than the distance to the band edge.
+
+    Note this measures single games out of freshly generated worlds, a different quantity from
+    league-wide goals per game over a played season (~6.2 -- see ``goals_per_game`` in
+    testkit/distribution.py and docs/DISTRIBUTION_TARGETS.md). Fresh worlds have no accumulated
+    injuries, no goalie rotation and un-juggled lines, all of which suppress scoring relative to a
+    real season. This band is wide enough to cover both readings; the season-level instrument is
+    the tighter one.
+    """
     total_goals = 0
-    n = 80
-    for seed in range(n):
+    games = 0
+    for seed in range(5):
         world = build_world(seed=seed)
         tids = sorted(world.teams.keys())
-        result = GameSim(world, tids[0], tids[1]).play()
-        total_goals += result.home_score + result.away_score
-    per_game = total_goals / n
+        half = len(tids) // 2
+        for i in range(half):
+            result = GameSim(world, tids[i], tids[i + half]).play()
+            total_goals += result.home_score + result.away_score
+            games += 1
+    per_game = total_goals / games
     assert 4.8 <= per_game <= 6.6, f"goals/game drifted to {per_game:.2f}"

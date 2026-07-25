@@ -82,12 +82,18 @@ def test_fast_teams_outscore_slow_teams():
 
 
 def test_goals_per_game_stays_realistic():
+    """Samples every team in each world once rather than always playing tids[0] vs tids[1] -- that
+    fixed pairing is a biased, high-variance estimator (team 0 draws a top-5 goalie in most seeds).
+    See tests/test_rebounds.py::test_goals_per_game_stays_realistic for the full reasoning."""
     total_goals = 0
-    n = 100
-    for seed in range(n):
+    games = 0
+    for seed in range(6):
         world = build_world(seed=seed)
         tids = sorted(world.teams.keys())
-        result = GameSim(world, tids[0], tids[1]).play()
-        total_goals += result.home_score + result.away_score
-    per_game = total_goals / n
+        half = len(tids) // 2
+        for i in range(half):
+            result = GameSim(world, tids[i], tids[i + half]).play()
+            total_goals += result.home_score + result.away_score
+            games += 1
+    per_game = total_goals / games
     assert 4.6 <= per_game <= 6.6, f"goals/game drifted to {per_game:.2f}"

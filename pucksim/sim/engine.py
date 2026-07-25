@@ -174,7 +174,27 @@ from pucksim.systems.development import GoalieFormState, apply_goalie_form
 # distributions, etc.). Real balancing needs actual simulated-season data, which doesn't exist
 # until this step ships.
 # ---------------------------------------------------------------------------
-BASE_SHOT_ATTEMPTS_PER_SHIFT = 0.9    # league-average expected shot attempts per shift, per team
+# Expected shot attempts generated per shift by BOTH TEAMS COMBINED -- the ice as a whole, not one
+# team. Only whichever team currently has possession attempts a shot (see _play_shift's possession
+# loop), so this rate is inherently shared; the constant it replaced was documented "per team",
+# which is what made it wrong. At 0.9 "per team" the derived mean interval came to 45/0.9 = 50s,
+# LONGER than the 45s mean shift, so most shifts generated no attempt at all and the league ran
+# 13.5 shots on goal per team per game against a real ~30.
+#
+# Sitting above the shift length was also what made shot totals so erratic: the attempt count was
+# governed by P(gaussian interval < shift clock), which is hypersensitive right at the boundary.
+# That produced a 4.6 standard deviation on a 13.5 mean, i.e. single-digit-shot games as routine
+# events rather than tail ones. See docs/DISTRIBUTION_TARGETS.md for the full before/after.
+#
+# 1.45 puts the mean interval at ~31s, comfortably inside the shift rather than beyond it, and
+# targets ~55 shot attempts (Corsi) per team per game.
+SHOT_ATTEMPTS_PER_SHIFT_BOTH_TEAMS = 1.45
+
+# Gaussian spread of the interval around its mean, as a fraction of that mean. Lowered from 0.35:
+# with the mean now well inside the shift, a wide spread is no longer needed to produce any
+# variance at all, and 0.35 was contributing avoidable noise to game-to-game shot totals on top of
+# the genuine binomial variance the process already has.
+SHOT_INTERVAL_SIGMA_FRACTION = 0.25
 FATIGUE_GAIN_PER_SEC = 0.028          # fatigue points gained per second of shift ice time
 FATIGUE_RECOVER_PER_SEC = 0.05        # fatigue points recovered per second on the bench
 
@@ -326,9 +346,109 @@ _SHOT_TYPE_QUALITY = {
     "one_timer": 0.75, "tip": 0.80, "wrist": 0.55, "backhand": 0.45, "slap": 0.35,
 }
 
+# How OFTEN each zone/shot-type is chosen, as distinct from how GOOD it is (the two dicts above).
+#
+# These used to not exist: _pick_zone_and_shot_type weighted selection by _ZONE_QUALITY itself, so
+# a zone was chosen in proportion to how dangerous it is. That inverts real hockey -- the crease is
+# the most dangerous place to shoot from and therefore the place you are least often allowed to
+# shoot from. The consequence was quantitative, not cosmetic: quality-weighted selection puts the
+# mean shot quality at ~0.68, while every downstream formula (on_goal_p, save_p, xg) centers its
+# quality term on 0.5. Every single shot in the game was therefore getting a systematic ~+0.09
+# on-goal bonus and ~-0.06 save-probability penalty it had not earned, which is most of why league
+# save percentage sat at .770 against a real .905.
+#
+# Splitting frequency from quality fixes the bias at its source rather than papering over it by
+# re-tuning the slopes that consume it. Frequencies are approximate NHL shot-location and
+# shot-type distributions; with these, mean shot quality lands at ~0.52, so the 0.5 centering the
+# rest of the engine already assumes becomes correct instead of merely conventional.
+_ZONE_SELECT_WEIGHT = {
+    "crease": 0.05, "slot": 0.15,
+    "high_slot": 0.15, "circle": 0.20,
+    "point": 0.28, "bad_angle": 0.17,
+}
+_SHOT_TYPE_SELECT_WEIGHT = {
+    "one_timer": 0.16, "tip": 0.10, "wrist": 0.54, "backhand": 0.08, "slap": 0.12,
+}
+
+# Selection-weighted mean quality of each pool, i.e. sum(select_weight * quality). Precomputed so
+# the quality-bias tilt below can be centered rather than one-sided -- a positive bias must make
+# good looks more likely AND bad looks less likely, or it silently inflates total attempts' quality
+# instead of redistributing it.
+_ZONE_QUALITY_MEAN = sum(_ZONE_SELECT_WEIGHT[z] * _ZONE_QUALITY[z] for z in ALL_ZONES)
+_SHOT_TYPE_QUALITY_MEAN = sum(_SHOT_TYPE_SELECT_WEIGHT[t] * _SHOT_TYPE_QUALITY[t]
+                              for t in SHOT_TYPES)
+
+# How hard a unit of quality bias (coach shot_quality_bias + strength state, see
+# _pick_zone_and_shot_type) tilts selection toward better looks. Applied multiplicatively around
+# each pool's mean quality, so a power play's +0.22 bias makes a crease look ~1.4x as likely and a
+# point shot ~0.8x as likely -- a redistribution, which is what "the power play generates better
+# chances" actually means. PROVISIONAL/TUNABLE, same framing as the rest of this block.
+_QUALITY_BIAS_TILT = 4.0
+
+# The shot quality an average attempt actually carries, given the selection frequencies above.
+# Every formula that consumes ``quality`` (on_goal_p, save_p, xg) subtracts this before applying
+# its slope, so that an average look is the neutral case and only above/below-average looks move
+# the outcome. Previously those formulas all subtracted a hardcoded 0.5 while the real mean sat at
+# ~0.68, which handed every shot in the game an unearned bonus -- centering on the measured mean
+# is what makes the slopes mean what they claim to.
+_QUALITY_NEUTRAL = 0.5 * _ZONE_QUALITY_MEAN + 0.5 * _SHOT_TYPE_QUALITY_MEAN
+
+# Probability a league-average goalie stops an average-quality shot from an average shooter. This
+# is the single anchor the whole conversion model hangs off: it appears as the base of save_p, as
+# the center of the def_real realization rescale, and in the skill-neutral xG model, and all three
+# must stay in lock-step or xG stops tracking actual goals.
+#
+# It sits well above the .901 league save percentage it actually produces, because three
+# systematic terms pull the realized average down from the anchor: shots that reach the net are a
+# better-than-average sample of the shots taken (quality raises on_goal_p as well as goal
+# probability), ~23% of attempts carry the rush bonus, and the def_real realization rescale is
+# one-sided downward. The offset is large enough that this constant must be swept against a FULL
+# season and read off the distribution report -- do not try to derive it, and do not tune it on a
+# short sample, which at this sensitivity is noisy enough to suggest cliffs a full season shows
+# are not there.
+SAVE_PROB_ANCHOR = 0.958
+
+# How much better/worse than average a look has to be to move the outcome. Unchanged in magnitude
+# from the original tuning -- only their centering (see _QUALITY_NEUTRAL) was wrong.
+SAVE_QUALITY_SLOPE = 0.35
+ON_GOAL_QUALITY_SLOPE = 0.5
+
+# Probability an average-quality attempt from an average shooter reaches the net rather than being
+# blocked or missing. NHL shots-on-goal / shot-attempts runs ~0.53.
+ON_GOAL_BASE_P = 0.53
+
+# Clamps on a single shot's save probability. The ceiling was 0.97, which sounds permissive but is
+# only ~1.5 standard deviations above the anchor once shot quality and the shooter-vs-goalie skill
+# gap are both in play (the gap term alone has a standard deviation of ~0.056). It therefore
+# truncated a large part of the upper tail and pulled realized league save percentage several
+# points BELOW the anchor -- so raising the anchor to compensate ran into the very clamp causing
+# the problem. A routine point shot smothered by an elite goalie genuinely is a ~99% save, so the
+# ceiling belongs there; the floor is untouched (it is nowhere near binding).
+SAVE_PROB_MIN = 0.55
+SAVE_PROB_MAX = 0.99
+
+# Fraction of shift-opening attempts that are genuinely rush chances off a zone entry, as opposed
+# to established offensive-zone play. Every first-attempt-of-a-shift used to carry the rush bonus
+# unconditionally; at the corrected attempt volume that made 65% of all shots "off the rush",
+# against a real-hockey figure closer to 20-25%. Combined with the ~65% of attempts that open a
+# shift, this lands the rush share near 23%.
+RUSH_ATTEMPT_FRACTION = 0.35
+
 
 def _weighted_index(rng, weights: List[float]) -> int:
     return rng.choices(range(len(weights)), weights=weights, k=1)[0]
+
+
+def _tilted_weight(select_weight: float, quality: float, quality_mean: float,
+                   bias: float) -> float:
+    """A zone's/shot-type's selection weight, tilted by a shot-quality ``bias``.
+
+    Multiplicative and centered on ``quality_mean``: an option better than its pool's average gets
+    more likely as bias rises, a worse-than-average one gets less likely, and a zero bias returns
+    the base frequency untouched. Floored just above zero so an extreme bias can never make an
+    option impossible (real hockey still produces the occasional point shot on the power play).
+    """
+    return max(0.005, select_weight * (1.0 + bias * (quality - quality_mean) * _QUALITY_BIAS_TILT))
 
 
 def _shootout_shooter_score(player: Player) -> float:
@@ -673,6 +793,16 @@ class GameSim:
         self.period = 1
         self.game_secs = 0.0     # elapsed game time, monotonically increasing across periods/OT
         self._is_ot = False
+        # Remaining wait on a shot-attempt interval that was still in flight when a shift's clock
+        # expired, resumed at the start of the next shift instead of being discarded and redrawn
+        # (see _play_shift). A line change on the fly does not stop play, so the clock toward the
+        # next attempt should not restart either.
+        #
+        # Only ever set on the clock-expiry path. A goal or an icing/offside stoppage kills the
+        # play dead and restarts from a faceoff, and both of those break out of the loop AFTER the
+        # pending gap has already been consumed, so they leave this None with no explicit clearing
+        # -- which is exactly the desired "fresh interval after a faceoff" behavior.
+        self._pending_attempt_gap: Optional[float] = None
 
         # Strength-state state machine (DEVPLAN.md Step 2.1): shared game state, not per-team --
         # both teams are always in the same state, just from opposite perspectives (see
@@ -956,6 +1086,9 @@ class GameSim:
         # Faceoff at the start of every period (DEVPLAN.md Step 2.3: the winner now gates the
         # first shift's starting possession -- see _play_shift's use of self._pending_faceoff).
         self._pending_faceoff = self._log_faceoff(FACEOFF_PERIOD_START)
+        # An intermission stops play, so no interval carries into a new period (unlike an
+        # on-the-fly line change within one -- see _pending_attempt_gap).
+        self._pending_attempt_gap = None
 
         while clock > 0:
             shift_secs = max(15.0, self.rng.gauss(config.SHIFT_SECONDS_TARGET, SHIFT_SECONDS_JITTER))
@@ -1027,14 +1160,28 @@ class GameSim:
         elapsed = 0.0
         goal_scored = False
         stoppage = False   # set True by an icing/offside mid-shift stoppage -- ends the shift
-        # The first shot attempt of a shift is normally off the initial entry (a rush) -- unless the
-        # defending team's puck-moving goalie cuts the entry off first (DEVPLAN.md Step 2.x).
-        rush = not self._goalie_negates_rush(defense)
+        # Only the first shot attempt of a shift can be a rush chance off the initial entry, and
+        # only some of those actually are -- most shifts open with established zone play or a puck
+        # battle (see RUSH_ATTEMPT_FRACTION). A puck-moving defending goalie can additionally cut
+        # the entry off before the rush develops (DEVPLAN.md Step 2.x); that check is second so a
+        # shift that was never a rush anyway doesn't spend an RNG draw on it.
+        rush = self.rng.chance(RUSH_ATTEMPT_FRACTION) and not self._goalie_negates_rush(defense)
         rebound = False   # set True for the attempt immediately following an unconverted on-goal shot
         while elapsed < shift_secs:
-            attempt_gap = self._shot_attempt_interval(offense)
+            # An interval left pending when the previous shift's clock expired resumes here
+            # instead of being discarded and redrawn -- see _pending_attempt_gap.
+            if self._pending_attempt_gap is not None:
+                attempt_gap = self._pending_attempt_gap
+                self._pending_attempt_gap = None
+            else:
+                attempt_gap = self._shot_attempt_interval(offense)
             elapsed += attempt_gap
             if elapsed >= shift_secs:
+                # The shift clock ran out with this interval still in flight. Carry the part of it
+                # that has NOT yet been served into the next shift, so the wait resumes rather
+                # than restarting. Discarding it here (the old behavior) threw away real attempt
+                # time at all ~80 shift boundaries in a game.
+                self._pending_attempt_gap = elapsed - shift_secs
                 break
 
             # Advance the strength-state clock by the interval that just elapsed (penalty
@@ -1140,8 +1287,9 @@ class GameSim:
         DEVPLAN.md Step 2.1)."""
         mult = R.shot_volume_multiplier(offense.coach_profile.shot_volume)
         state_mult = R.strength_state_shot_volume_multiplier(self.strength.state_for(offense.tid))
-        mean_interval = config.SHIFT_SECONDS_TARGET / (BASE_SHOT_ATTEMPTS_PER_SHIFT * mult * state_mult)
-        return max(2.0, self.rng.gauss(mean_interval, mean_interval * 0.35))
+        mean_interval = (config.SHIFT_SECONDS_TARGET
+                         / (SHOT_ATTEMPTS_PER_SHIFT_BOTH_TEAMS * mult * state_mult))
+        return max(2.0, self.rng.gauss(mean_interval, mean_interval * SHOT_INTERVAL_SIGMA_FRACTION))
 
     # -- pull the goalie / extra attacker (DEVPLAN.md Step 2.2) ------------------
     def _update_goalie_pulls(self, secs_remaining_in_period: float) -> None:
@@ -1476,9 +1624,11 @@ class GameSim:
         looks -- DEVPLAN.md Step 2.1's strength-state shot modifiers)."""
         bias = (R.shot_quality_bias_delta(offense.coach_profile.shot_quality_bias)
                 + R.strength_state_shot_quality_delta(self.strength.state_for(offense.tid)))
-        zone_weights = [max(0.05, _ZONE_QUALITY[z] + bias) for z in ALL_ZONES]
+        zone_weights = [_tilted_weight(_ZONE_SELECT_WEIGHT[z], _ZONE_QUALITY[z],
+                                       _ZONE_QUALITY_MEAN, bias) for z in ALL_ZONES]
         zone = ALL_ZONES[_weighted_index(self.rng, zone_weights)]
-        type_weights = [max(0.05, _SHOT_TYPE_QUALITY[t] + bias) for t in SHOT_TYPES]
+        type_weights = [_tilted_weight(_SHOT_TYPE_SELECT_WEIGHT[t], _SHOT_TYPE_QUALITY[t],
+                                       _SHOT_TYPE_QUALITY_MEAN, bias) for t in SHOT_TYPES]
         shot_type = SHOT_TYPES[_weighted_index(self.rng, type_weights)]
         return zone, shot_type
 
@@ -1516,7 +1666,9 @@ class GameSim:
         reusing the save-probability shape with a neutral zero skill gap (the same quality/rush
         terms the real save formula uses), so summed over a team's shots on goal it tracks the
         team's actual goals rather than drifting."""
-        neutral_save_p = max(0.55, min(0.97, 0.90 - (quality - 0.5) * 0.35 - rush_bonus))
+        neutral_save_p = max(SAVE_PROB_MIN, min(SAVE_PROB_MAX, SAVE_PROB_ANCHOR
+                                                - (quality - _QUALITY_NEUTRAL) * SAVE_QUALITY_SLOPE
+                                                - rush_bonus))
         return 1.0 - neutral_save_p
 
     def _pick_blocker(self, defense: _TeamState) -> Optional[Player]:
@@ -1706,7 +1858,9 @@ class GameSim:
             rush_bonus = 0.0
 
         # -- on-goal (not blocked/missed) probability -----------------------
-        on_goal_p = max(0.35, min(0.92, 0.55 + (quality - 0.5) * 0.5 + gap * off_real))
+        on_goal_p = max(0.35, min(0.92, ON_GOAL_BASE_P
+                                  + (quality - _QUALITY_NEUTRAL) * ON_GOAL_QUALITY_SLOPE
+                                  + gap * off_real))
         on_goal = self.rng.chance(on_goal_p)
 
         if not on_goal:
@@ -1747,12 +1901,15 @@ class GameSim:
         self.result.goalie_line(goalie.pid).shots_faced += 1
         self.result.goalie_line(goalie.pid).xga += xg
 
-        save_p = max(0.55, min(0.97, 0.90 - (quality - 0.5) * 0.35 - rush_bonus - gap * off_real))
-        # def_real scales the goalie's realized share of their save probability edge over a
-        # neutral 0.90 baseline, mirroring HoopR's shooter/defender gap-parity approach. Hot hand
+        save_p = max(SAVE_PROB_MIN, min(SAVE_PROB_MAX, SAVE_PROB_ANCHOR
+                                        - (quality - _QUALITY_NEUTRAL) * SAVE_QUALITY_SLOPE
+                                        - rush_bonus - gap * off_real))
+        # def_real scales the goalie's realized share of their save probability edge over the
+        # neutral anchor, mirroring HoopR's shooter/defender gap-parity approach. Hot hand
         # is already folded into def_real above -- do NOT add it again here (see this method's
         # docstring / ratings.hot_hand_boost's "no upweighting" note).
-        save_p = max(0.55, min(0.97, 0.90 + (save_p - 0.90) * def_real))
+        save_p = max(SAVE_PROB_MIN, min(SAVE_PROB_MAX,
+                                        SAVE_PROB_ANCHOR + (save_p - SAVE_PROB_ANCHOR) * def_real))
         saved = self.rng.chance(save_p)
 
         if saved:

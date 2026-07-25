@@ -293,8 +293,17 @@ SYNERGY_QUALITY_MAX = 0.09       # symmetric clamp on the total quality delta (e
 # checking (defending) team may throw a body check on the puck carrier, and the fore-checking
 # (attacking) team may finish a check of its own. Per-cycle probabilities are tuned so a full game
 # nets a realistic ~20-25 hits per team. The hitter is chosen weighted by checking+strength.
-HIT_CHANCE_DEF_PER_CYCLE = 0.72
-HIT_CHANCE_OFF_PER_CYCLE = 0.60
+#
+# Cut to a third of their original values (0.72 / 0.60) in the 2026-07-24 calibration round. They
+# are per SHOT-ATTEMPT CYCLE, and that round corrected the attempt rate from ~40 to ~103 cycles per
+# game -- so the same per-cycle odds started producing 65 hits per team per game instead of the
+# ~22 they were tuned for. The ratio between the two is preserved; only the scale moved.
+#
+# This is not merely a box-score correction: a separating hit raises the possession-flip chance to
+# HIT_TURNOVER_FLIP_P (0.72) from a neutral 0.50, so an inflated hit rate was also forcing
+# possession to change hands far more often than intended.
+HIT_CHANCE_DEF_PER_CYCLE = 0.24
+HIT_CHANCE_OFF_PER_CYCLE = 0.20
 # A more physical on-ice group throws more hits (real physical teams lead the league in hits), so
 # the per-cycle hit chance scales with the hitting group's average checking/strength, centered on
 # the ~69 rating mean so a league-average team stays at the base rate. Bounded so it stays sane.
