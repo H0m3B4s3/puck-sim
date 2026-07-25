@@ -80,6 +80,7 @@ from pucksim.sim.season import (  # noqa: E402
     regular_season_complete,
     start_season,
 )
+from testkit.distribution import format_report, measure  # noqa: E402
 
 # Minimum games played before a goalie is eligible for the "top goalies by save_pct" leaderboard --
 # without this, a goalie with a single mop-up appearance and a lucky 100% save_pct would dominate a
@@ -287,6 +288,35 @@ def _print_season_summary(world: World, season_num: int, games_per_season: int) 
     _print_standings(world)
     _print_top_scorers(world)
     _print_top_goalies(world, games_per_season)
+    _print_distribution(world, games_per_season)
+
+
+# ---------------------------------------------------------------------------
+# League distribution report (2026-07-24 calibration round)
+# ---------------------------------------------------------------------------
+# The metric math itself lives in testkit/distribution.py, NOT here, so that
+# tests/test_distribution.py asserts against exactly the numbers this prints rather than a second
+# implementation that can drift from it. See that module's docstring for why this report exists.
+_FULL_SEASON_FRACTION_FOR_TARGETS = 0.6
+
+
+def _print_distribution(world: World, games_per_season: int) -> None:
+    """Print the league-wide distribution report against its NHL target bands.
+
+    The target bands in ``distribution.TARGETS`` are per-82-games rates, so a deliberately short
+    ``--games-per-season`` smoke run will fail most of the counting-stat rows for reasons that have
+    nothing to do with calibration (nobody scores 50 goals in a 10-game season). The rate metrics
+    -- shots per game, shooting/save percentage, assists per goal -- stay meaningful at any length,
+    so the report is still printed, just prefixed with a warning so a short run's FAILs aren't
+    mistaken for regressions.
+    """
+    if games_per_season < config.SEASON_GAMES * _FULL_SEASON_FRACTION_FOR_TARGETS:
+        print(
+            f"\n[note] {games_per_season}-game season -- the per-82-game counting-stat targets "
+            "below (goal/point leader, skaters >= N goals) are not meaningful at this length. "
+            "The rate metrics (SOG, shooting/save %, assists per goal, TOI) still are."
+        )
+    print(format_report(measure(world)))
 
 
 # ---------------------------------------------------------------------------
