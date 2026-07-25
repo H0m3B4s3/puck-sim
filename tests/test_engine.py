@@ -344,8 +344,11 @@ def test_goal_credits_scorer_and_updates_goalie_goals_against():
     exception introduced by Step 2.2's pull-the-goalie mechanic: an empty-net goal (scored
     against a team whose goalie was pulled for an extra attacker, ``goalie_id`` logged as
     ``None`` on that event) is never charged against any goalie's box score -- matching real NHL
-    scorekeeping, where an ENG doesn't count against a goalie's save percentage/GAA. So the
-    correct invariant is goals_against + empty_net_goals == total goals, not a flat equality."""
+    scorekeeping, where an ENG doesn't count against a goalie's save percentage/GAA.
+
+    A SHOOTOUT win is the second such exception, for the same reason: the winner is awarded a
+    goal in the final score and it is charged to nobody's save percentage. So the invariant is
+    goals_against + empty_net_goals + shootout_decider == total goals, not a flat equality."""
     world, home_tid, away_tid, result = _play(seed=12, collect_pbp=True)
     home_team = world.team(home_tid)
     away_team = world.team(away_tid)
@@ -358,7 +361,10 @@ def test_goal_credits_scorer_and_updates_goalie_goals_against():
     empty_net_goals = sum(1 for e in result.pbp
                           if e.event_type == EVENT_GOAL and e.goalie_id is None)
 
-    assert total_goals_against + empty_net_goals == result.home_score + result.away_score
+    shootout_decider = 1 if result.went_so else 0
+
+    assert (total_goals_against + empty_net_goals + shootout_decider
+            == result.home_score + result.away_score)
 
 
 # ---------------------------------------------------------------------------

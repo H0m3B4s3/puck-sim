@@ -363,6 +363,41 @@ SHOT_WEIGHT_MIN = 0.15    # a checking-line grinder still shoots sometimes
 # engine._D_ZONE_SELECT_WEIGHT).
 D_SHOT_WEIGHT_MULT = 0.62
 
+# How often a goal is assisted (engine._pick_assists). The two rates compound: total assists per
+# goal is PRIMARY + PRIMARY * SECONDARY, so 0.92 + 0.92*0.85 = 1.70, the real-NHL figure.
+#
+# They were 0.80 and 0.55, giving 1.24 -- a quarter of every playmaker's real production simply
+# never existed. It is not a cosmetic shortfall: assists are most of a centre's point total, so it
+# distorted the whole points leaderboard, and it made the point leader (85) look low at the same
+# time the goal leader looked high. PRIMARY is set from the real unassisted-goal rate (~8% of
+# goals); SECONDARY follows from the 1.70 target given that primary.
+PRIMARY_ASSIST_CHANCE = 0.92
+SECONDARY_ASSIST_CHANCE = 0.85
+
+# Assist-credit weighting by ``playmaking``, in the same pivot/slope form as the shot weight above
+# (it was ``max(0.5, playmaking - 20)``, the same subtract-an-offset shape that distorted shooter
+# selection). Pivot is the league-mean playmaking rating.
+ASSIST_WEIGHT_PIVOT = 60.0
+ASSIST_WEIGHT_SLOPE = 0.014
+ASSIST_WEIGHT_MIN = 0.15
+
+# Defensemen took 42.3% of assists against a real ~36%. The gap is largely STRUCTURAL rather than a
+# weighting error: the scorer is excluded from his own assist pool, and forwards score ~83% of
+# goals, so the pool is 2F+2D far more often than 3F+1D. On headcount alone that puts D at ~45% of
+# assists before any rating is consulted.
+#
+# Both are weighted DOWN, but not equally, and the asymmetry is the actual hockey: a defenseman's
+# assist much more often comes from starting the breakout or putting a point shot on net for a
+# rebound -- second assists -- than from making the final pass to a man in the slot.
+#
+# A correction worth recording: an earlier revision weighted the primary only, on the theory that
+# leaving the secondary alone WAS the asymmetry. It made D assists worse (42.3% -> 48.2%), because
+# raising the assist rates shifted the mix toward secondaries (35% -> 46% of all assists) and
+# swamped a primary-only lever. Expressing the asymmetry as a ratio between two multipliers, rather
+# than as one multiplier and a zero, controls the total and keeps the shape.
+D_PRIMARY_ASSIST_MULT = 0.60
+D_SECONDARY_ASSIST_MULT = 0.80
+
 # Hitting / body checks (DEVPLAN.md Step 2.x "impactful ratings"): the engine had no hit mechanic
 # at all and the SkaterStatLine `hits` field was never incremented. Each shot-attempt cycle, the
 # checking (defending) team may throw a body check on the puck carrier, and the fore-checking

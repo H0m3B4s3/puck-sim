@@ -121,6 +121,45 @@ def test_goalie_fatigue_is_not_derived_from_the_skater_rate():
     assert 20.0 <= peak <= 70.0, f"full-game goalie ended at {peak:.1f}"
 
 
+def test_a_pulled_goalie_does_not_recover_like_a_resting_skater():
+    """``_apply_ice_time`` skipped the goalie by matching ``state.goalie_id`` -- which is None
+    while he is PULLED, so the pulled goalie stopped being skipped and fell into the skater REST
+    branch, decaying his fatigue at the skater recovery constant. Measured on a real game: a
+    60-second pull shed 39.6 fatigue down to 11.7, so a team that pulled its goalie got a
+    materially fresher one back for overtime. He is on the bench, but he is not a resting skater.
+    """
+    world = build_world(seed=7)
+    sim = GameSim(world, 0, 1)
+    sim._advance_shift_for_all()
+    state = sim.home
+    goalie_pid = state.starter_goalie_id
+    state.fatigue[goalie_pid] = 40.0
+
+    state.goalie_pulled = True
+    state.goalie_id = None                  # exactly what _maybe_pull_goalie does
+    sim._apply_ice_time(60.0)
+
+    assert state.fatigue[goalie_pid] >= 40.0, (
+        f"pulled goalie recovered to {state.fatigue[goalie_pid]:.1f} from 40.0")
+
+
+def test_a_pulled_goalie_is_charged_no_ice_time():
+    """The other half of the same branch, and the part that was already right: his stat clock
+    stops while the net is empty."""
+    world = build_world(seed=7)
+    sim = GameSim(world, 0, 1)
+    sim._advance_shift_for_all()
+    state = sim.home
+    goalie_pid = state.starter_goalie_id
+    sim._apply_ice_time(60.0)
+    before = sim.result.goalie_line(goalie_pid).secs
+
+    state.goalie_pulled = True
+    state.goalie_id = None
+    sim._apply_ice_time(60.0)
+    assert sim.result.goalie_line(goalie_pid).secs == before
+
+
 def test_realization_stays_capped_at_one():
     """The no-upweighting invariant (see ratings.py): fatigue may only ever pull performance DOWN.
     A fresh player performs at his rating, never above it."""
@@ -203,7 +242,14 @@ def test_single_unit_roster_never_raises():
 def test_post_power_play_double_shifting_is_rare():
     """The behavior this whole step exists for. Before it, 27% of the 5v5 shifts immediately
     following a power play reused 3 or more of the players who had just been on the PP unit -- a
-    coach nobody would hire, and free given fatigue was inert."""
+    coach nobody would hire, and free given fatigue was inert.
+
+    Sampled over 200 games rather than 20. A post-PP 5v5 shift is a rare event -- 20 games yield
+    only ~15 of them, and at a true rate near 9% a 15-sample estimate lands above the 15%
+    threshold roughly one run in twenty. It duly did, on an unrelated change that merely shifted
+    the RNG stream; the measured rate over 233 samples was 9.0%. Games are ~12ms here, so the
+    wider sample costs about two seconds and removes the coin flip.
+    """
     world = build_world(seed=7)
     reused_3plus = 0
     post_pp_shifts = 0
@@ -228,13 +274,13 @@ def test_post_power_play_double_shifting_is_rare():
 
     GameSim._apply_ice_time = instrumented
     try:
-        for i in range(20):
+        for i in range(200):
             previous.clear()
             GameSim(world, i % 32, (i + 9) % 32).play()
     finally:
         GameSim._apply_ice_time = original
 
-    assert post_pp_shifts >= 10, f"only {post_pp_shifts} post-PP shifts sampled"
+    assert post_pp_shifts >= 100, f"only {post_pp_shifts} post-PP shifts sampled"
     rate = reused_3plus / post_pp_shifts
     assert rate <= 0.15, f"{rate:.0%} of post-PP shifts reused 3+ of the PP unit"
     assert statistics.fmean(carried) < 1.3, (
