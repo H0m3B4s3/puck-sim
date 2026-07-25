@@ -47,7 +47,13 @@ from pucksim.models.attributes import SKATER_POSITIONS
 from pucksim.models.coach import assign_coach
 from pucksim.models.contract import Contract
 from pucksim.models.tactics import Tactics
-from pucksim.models.team import Team, auto_build_lines, seed_chemistry
+from pucksim.models.team import (
+    Team,
+    auto_build_lines,
+    auto_build_special_teams_units,
+    coach_pp_forwards,
+    seed_chemistry,
+)
 from pucksim.models.world import World
 from pucksim.rng import Rng
 from pucksim.systems import prospects
@@ -368,6 +374,9 @@ def _build_roster(world: World, team: Team) -> None:
         world.sign_player(goalie.pid, team.tid)
 
     _fit_payroll_to_cap(world, team, rng)
+    # Even-strength chart only. The special-teams units are built by the caller AFTER it assigns
+    # this team's coach, because the PP unit's shape (3F+2D vs 4F+1D) is a coach tendency and
+    # ``team.coach`` is still None at this point -- see build_world.
     auto_build_lines(team, world.players)
     seed_chemistry(team, rng, base=_CHEMISTRY_BASE_SECS, spread=_CHEMISTRY_SPREAD_SECS)
 
@@ -529,6 +538,18 @@ def build_world(seed: Optional[int] = None, *, seed_pools: bool = True) -> World
                 # database round-trip.
                 coach = assign_coach(tid, rng)
                 team.coach = coach.to_dict()
+
+                # Special-teams units, built HERE rather than inside _build_roster because the PP
+                # unit's shape is a coach tendency (``pp_forwards``: 3F+2D conservative or 4F+1D
+                # overload) and the coach does not exist until the line above. Building them
+                # earlier silently gave all 32 teams the conservative 3F+2D shape regardless of
+                # archetype -- 13 of 32 coaches in a typical league want the overload.
+                #
+                # Neither builder draws from ``rng``, so doing this after coach assignment does not
+                # perturb the world-generation RNG stream: a given seed still produces byte-identical
+                # rosters and ratings.
+                auto_build_special_teams_units(
+                    team, world.players, pp_forwards=coach_pp_forwards(team))
 
                 # Team.tactics (DEVPLAN.md Step 2.8): unlike ``coach`` above, ``Tactics`` is
                 # a real dataclass on Team now (Step 2.8 migrated it off the Optional[dict]

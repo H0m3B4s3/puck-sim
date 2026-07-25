@@ -18,7 +18,12 @@ from pydantic import BaseModel
 
 from pucksim.config import MAX_CONTRACTS
 from pucksim.models.tactics import Tactics, SETTINGS as TACTICS_SETTINGS
-from pucksim.models.team import auto_build_lines, auto_build_special_teams_units, Team
+from pucksim.models.team import (
+    auto_build_lines,
+    auto_build_special_teams_units,
+    coach_pp_forwards,
+    Team,
+)
 from pucksim.systems import prospects
 from pucksim.web.serializers import (
     PlayerSummaryDTO,
@@ -109,16 +114,10 @@ def auto_build_lines_post(
     # Rebuild lines
     auto_build_lines(team, world.players)
 
-    # Optionally rebuild special teams
+    # Optionally rebuild special teams, using the coach's own preferred PP shape.
     if body.include_special_teams:
-        # Get the coach's pp_forwards setting if a coach exists
-        pp_forwards = 3
-        if team.coach and isinstance(team.coach, dict):
-            from pucksim.models.coach import profile_for
-            archetype_name = team.coach.get("archetype", "Balanced")
-            profile = profile_for(archetype_name)
-            pp_forwards = profile.pp_forwards
-        auto_build_special_teams_units(team, world.players, pp_forwards=pp_forwards)
+        auto_build_special_teams_units(team, world.players,
+                                       pp_forwards=coach_pp_forwards(team))
 
     # Persist the mutation back to session store
     session_store.save(sid, world)

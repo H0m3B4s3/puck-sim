@@ -18,6 +18,8 @@ from pucksim.rng import Rng
 from pucksim.sim import special_teams as ST
 from pucksim.sim.boxscore import EVENT_GOAL, EVENT_PENALTY, EVENT_SHOT
 from pucksim.sim.engine import GameSim
+from pucksim.sim.season import advance_one_day, regular_season_complete, start_season
+from pucksim.systems.offseason import run_offseason
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -302,12 +304,75 @@ def test_on_ice_group_for_state_uses_pk_unit():
 def test_on_ice_group_for_state_falls_back_when_unit_missing():
     world = build_world(seed=5)
     team = world.team(sorted(world.teams.keys())[0])
-    # team.pp_unit_1/pk_unit_1 default to [] -- never built.
+    # Units ARE built at world generation now, so this has to clear them explicitly to exercise the
+    # fallback. It used to rely on them defaulting to [] -- which was the bug: every team in every
+    # generated league had empty units, so this fallback was not an edge case, it was the ONLY path
+    # a power play ever took.
+    team.pp_unit_1 = []
+    team.pk_unit_1 = []
     normal_group = team.lines[0] + team.pairs[0]
     group = ST.on_ice_group_for_state(team, config.STRENGTH_PP, normal_group=normal_group,
                                        skaters_needed=config.PP_UNIT_SIZE)
     assert len(group) == config.PP_UNIT_SIZE
     assert set(group) <= set(normal_group)
+
+
+def test_world_generation_builds_special_teams_units_for_every_team():
+    """Regression guard for the bug this replaced: build_world called auto_build_lines but never
+    auto_build_special_teams_units, so pp_unit_1/pk_unit_1 were empty for all 32 teams and
+    on_ice_group_for_state always took its undersized-unit fallback. The single largest real-hockey
+    mechanism for concentrating scoring in stars did not exist."""
+    world = build_world(seed=7)
+    for tid in sorted(world.teams.keys()):
+        team = world.team(tid)
+        assert len(team.pp_unit_1) == config.PP_UNIT_SIZE, f"team {tid} PP unit {team.pp_unit_1}"
+        assert len(team.pk_unit_1) == config.PK_UNIT_SIZE, f"team {tid} PK unit {team.pk_unit_1}"
+        assert len(set(team.pp_unit_1)) == len(team.pp_unit_1), "duplicate player on PP unit"
+        assert len(set(team.pk_unit_1)) == len(team.pk_unit_1), "duplicate player on PK unit"
+        assert set(team.pp_unit_1) <= set(team.roster)
+        assert set(team.pk_unit_1) <= set(team.roster)
+
+
+def test_pp_unit_shape_honors_each_coach_archetype():
+    """The PP unit's shape is a coach tendency (``pp_forwards``: 3F+2D conservative, 4F+1D
+    overload). World generation assigns the coach AFTER building the roster, so building units
+    inside the roster builder silently gave all 32 teams the conservative shape -- 13 of 32 coaches
+    in a typical league want the overload. Both shapes must appear, each matching its own coach."""
+    from pucksim.models.coach import profile_for
+
+    world = build_world(seed=7)
+    shapes = set()
+    for tid in sorted(world.teams.keys()):
+        team = world.team(tid)
+        want = profile_for(team.coach.get("archetype", "Balanced")).pp_forwards
+        got = sum(1 for pid in team.pp_unit_1 if world.player(pid).position != "D")
+        assert got == want, (
+            f"team {tid} coach {team.coach.get('archetype')!r} wants {want} forwards, got {got}")
+        shapes.add(got)
+    assert shapes == {3, 4}, f"expected both PP shapes across the league, saw {shapes}"
+
+
+def test_special_teams_units_survive_a_full_offseason():
+    """Nine separate places rebuilt a roster's lines after it changed -- world generation, trades,
+    free agency, the draft, prospect call-ups and send-downs -- and none of them rebuilt the
+    special-teams units. Building units correctly at world generation is therefore only half a fix:
+    without every one of those seams also maintaining them, units would go stale (referencing traded
+    or waived players) or undersized within a season of roster churn. They all route through
+    ``auto_build_lineup`` now, and this asserts the end state after real churn rather than trusting
+    that the call sites were all found."""
+    world = build_world(seed=7)
+    start_season(world)
+    while not regular_season_complete(world):
+        advance_one_day(world)
+    run_offseason(world, champion_tid=sorted(world.teams.keys())[0])
+
+    for tid in sorted(world.teams.keys()):
+        team = world.team(tid)
+        roster = set(team.roster)
+        assert len(team.pp_unit_1) == config.PP_UNIT_SIZE, f"team {tid} PP unit {team.pp_unit_1}"
+        assert len(team.pk_unit_1) == config.PK_UNIT_SIZE, f"team {tid} PK unit {team.pk_unit_1}"
+        assert set(team.pp_unit_1) <= roster, f"team {tid} PP unit has off-roster players"
+        assert set(team.pk_unit_1) <= roster, f"team {tid} PK unit has off-roster players"
 
 
 # ---------------------------------------------------------------------------

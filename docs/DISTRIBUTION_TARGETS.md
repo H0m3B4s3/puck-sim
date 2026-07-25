@@ -139,6 +139,13 @@ Found during calibration, real but not yet worth a target band:
   Closing this properly is a feature (a real stoppage model), not a constant to retune, so no band
   is claimed for them yet.
 
+- **Only one power-play / penalty-kill unit exists.** `Team` has `pp_unit_1` and `pk_unit_1` and no
+  second unit, so the top group plays *100%* of every power play where a real team splits the time
+  roughly 65/35 across two units. That alone puts a top-line forward at ~25.7 minutes against an
+  NHL ceiling of ~23. Tracked as step 4b of the calibration round — note the fix belongs here and
+  **not** in `FORWARD_LINE_SHIFT_SHARES`: lowering even-strength shares to compensate would hide a
+  special-teams modeling gap inside a 5v5 number and make both wrong.
+
 **A rule this round learned the hard way:** any constant expressed *per shot-attempt cycle* is
 coupled to shot volume, and correcting volume rescales all of them silently. Hits were tuned at
 ~22 per team per game and became 65 without a single line of the hit code changing. When touching

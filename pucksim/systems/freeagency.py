@@ -26,7 +26,7 @@ from typing import List, Tuple
 from pucksim.config import MINIMUM_SALARY, ROOKIE_CONTRACT_YEARS, ROSTER_MAX
 from pucksim.models.contract import flat_contract
 from pucksim.models.player import Player
-from pucksim.models.team import Team, auto_build_lines
+from pucksim.models.team import Team, auto_build_lineup
 from pucksim.models.world import World
 from pucksim.systems import cap
 
@@ -200,7 +200,7 @@ def sign_free_agent(world: World, team: Team, pid: int, salary: int, years: int
         return False, reason
     player.contract = flat_contract(salary, years, signed_year=world.season_year)
     world.sign_player(pid, team.tid)
-    auto_build_lines(team, world.players)
+    auto_build_lineup(team, world.players)
     return True, "Signed."
 
 
@@ -223,7 +223,7 @@ def sign_rookie(world: World, team: Team, pid: int, years: int = None) -> Tuple[
     player.contract = flat_contract(salary, years, is_rookie_scale=True,
                                      signed_year=world.season_year, two_way=True)
     world.sign_player(pid, team.tid)
-    auto_build_lines(team, world.players)
+    auto_build_lineup(team, world.players)
     return True, "Signed to an entry-level contract."
 
 
@@ -320,7 +320,7 @@ def run_fa_wave(world: World, exclude_tid: int = None) -> dict:
         world.sign_player(player.pid, team.tid)
         signings += 1
     for t in ai_teams:
-        auto_build_lines(t, world.players)
+        auto_build_lineup(t, world.players)
     return {"signings": signings}
 
 
