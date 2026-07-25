@@ -393,6 +393,20 @@ PP_UNIT_SIZE = 5
 PK_UNIT_SIZE = 4
 PK_UNIT_SIZE_5V3 = 3
 
+# Share of a team's special-teams shifts that go to the FIRST unit; the rest go to the second.
+#
+# Only one unit existed until the 2026-07-24 calibration round, which meant the top group played
+# 100% of every power play. Per instant that is indistinguishable from real hockey -- there is only
+# ever one group on the ice -- but integrated over a season it is not: it put a first-line forward
+# at 25.7 minutes a night against an NHL ceiling of ~23, and funneled every power-play point through
+# five players instead of the nine or ten who really share them.
+#
+# Real NHL PP1/PP2 usage runs about 65/35 for teams with a settled top unit, and penalty-kill duty
+# is split closer to even (55/45) because killing penalties is tiring, defensive work that coaches
+# spread more deliberately than power-play offense.
+PP_UNIT_1_SHARE = 0.65
+PK_UNIT_1_SHARE = 0.55
+
 # ---------------------------------------------------------------------------
 # Playoff officiating/discipline mode (DEVPLAN.md Step 2.6 design note, 2026-07-02)
 # ---------------------------------------------------------------------------

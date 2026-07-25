@@ -65,11 +65,20 @@ class Team:
     # lines/pairs above, never a hard class. ``pp_unit_1`` is the top power-play unit (4F/1D or
     # 3F/2D depending on the team's coach ``pp_forwards`` setting -- see
     # ``auto_build_special_teams_units`` below); ``pk_unit_1`` is the top penalty-kill unit
-    # (typically 2F/2D). Only "unit 1" (each team's best group) is modeled in this step -- a
-    # second-unit PP/PK rotation is a reasonable future refinement, not required here since the
-    # engine only ever needs one PP/PK group on the ice at a time for the v1 penalty model.
+    # (typically 2F/2D).
+    #
+    # Second units exist as of the 2026-07-24 calibration round. They were originally left out as
+    # "a reasonable future refinement... the engine only ever needs one PP/PK group on the ice at a
+    # time" -- true per instant, but it made the top unit play 100% of every power play, where a
+    # real team splits the time roughly 65/35 (config.PP_UNIT_1_SHARE). Once units were actually
+    # being built at all, that put a first-line forward at 25.7 minutes a night against an NHL
+    # ceiling of ~23, and it concentrated power-play scoring into five players instead of nine or
+    # ten. Second units default to empty and every consumer falls back to unit 1, so a hand-built
+    # Team in a test and an old save both keep working.
     pp_unit_1: List[int] = field(default_factory=list)
     pk_unit_1: List[int] = field(default_factory=list)
+    pp_unit_2: List[int] = field(default_factory=list)
+    pk_unit_2: List[int] = field(default_factory=list)
 
     chemistry: Dict[str, float] = field(default_factory=dict)  # pair_key(a,b) -> shared secs
 
@@ -115,6 +124,8 @@ class Team:
         self.pairs = [[p for p in pair if p != pid] for pair in self.pairs]
         self.pp_unit_1 = [p for p in self.pp_unit_1 if p != pid]
         self.pk_unit_1 = [p for p in self.pk_unit_1 if p != pid]
+        self.pp_unit_2 = [p for p in self.pp_unit_2 if p != pid]
+        self.pk_unit_2 = [p for p in self.pk_unit_2 if p != pid]
         if self.goalie_starter == pid:
             self.goalie_starter = None
         if self.goalie_backup == pid:
@@ -172,6 +183,8 @@ class Team:
             "pairs": [list(pair) for pair in self.pairs],
             "pp_unit_1": list(self.pp_unit_1),
             "pk_unit_1": list(self.pk_unit_1),
+            "pp_unit_2": list(self.pp_unit_2),
+            "pk_unit_2": list(self.pk_unit_2),
             "goalie_starter": self.goalie_starter,
             "goalie_backup": self.goalie_backup,
             "chemistry": {k: round(v, 1) for k, v in self.chemistry.items()},
@@ -198,6 +211,10 @@ class Team:
             pairs=[list(pair) for pair in d.get("pairs", [])],
             pp_unit_1=list(d.get("pp_unit_1", [])),
             pk_unit_1=list(d.get("pk_unit_1", [])),
+            # Default to empty, not to unit 1: a save written before second units existed has no
+            # unit-2 key, and every consumer already falls back to unit 1 when unit 2 is empty.
+            pp_unit_2=list(d.get("pp_unit_2", [])),
+            pk_unit_2=list(d.get("pk_unit_2", [])),
             goalie_starter=d.get("goalie_starter"),
             goalie_backup=d.get("goalie_backup"),
             chemistry={k: float(v) for k, v in d.get("chemistry", {}).items()},
@@ -396,10 +413,23 @@ def _pk_defensive_value(player: Player) -> float:
     return composite(player.ratings, "defense")
 
 
+def _take_unit(ranked_forwards: List[Player], ranked_d: List[Player],
+               n_forwards: int, n_d: int, exclude: set) -> List[int]:
+    """Pull the best ``n_forwards`` + ``n_d`` ids off two pre-ranked lists, skipping ``exclude``.
+
+    Undersized rather than crashing when the roster cannot supply enough bodies (an
+    injury-depleted team, or a second unit on a thin bench) -- same "not an optimal solver"
+    philosophy as auto_build_lines.
+    """
+    picked = [p.pid for p in ranked_forwards if p.pid not in exclude][:n_forwards]
+    picked += [p.pid for p in ranked_d if p.pid not in exclude][:n_d]
+    return picked
+
+
 def auto_build_special_teams_units(team: Team, players: Dict[int, Player],
                                     pp_forwards: int = 3) -> None:
-    """Build the team's top power-play unit (``team.pp_unit_1``) and top penalty-kill unit
-    (``team.pk_unit_1``) from its current roster. Mutates both fields in place.
+    """Build both power-play units (``team.pp_unit_1``/``pp_unit_2``) and both penalty-kill units
+    (``team.pk_unit_1``/``pk_unit_2``) from the current roster. Mutates all four in place.
 
     ``pp_forwards`` (3 or 4, mirrors ``CoachProfile.pp_forwards``) controls the PP unit shape:
     3 forwards + 2 D (conservative) or 4 forwards + 1 D (aggressive overload). Falls back to
@@ -407,11 +437,17 @@ def auto_build_special_teams_units(team: Team, players: Dict[int, Player],
     roster) rather than crashing -- a partial/undersized unit is legal, just not ideal, same
     philosophy as auto_build_lines's "not an optimal solver" framing.
 
-    PK unit is always the classic 2F/2D defensive-shutdown shape (config.PK_UNIT_SIZE == 4).
+    PK units are always the classic 2F/2D defensive-shutdown shape (config.PK_UNIT_SIZE == 4).
 
-    A player can appear on both units (real NHL rosters often double up their best two-way
-    players across both special-teams groups) -- no exclusivity is enforced between PP and PK
-    selection, only within each unit's own slot-fill.
+    Second units take the best remaining players NOT already on the corresponding first unit, which
+    is the one place exclusivity IS enforced: a player cannot be on both PP units, because the whole
+    point of a second unit is to rest the first. Across PP and PK there is still no exclusivity --
+    real NHL rosters routinely double up their best two-way players on both special-teams groups,
+    and within each unit only its own slot-fill is deduplicated.
+
+    Why second units exist at all: without them the first unit played 100% of every power play,
+    which put a first-line forward at ~25.7 minutes a night (NHL ceiling ~23) and concentrated all
+    power-play scoring into five players. See config.PP_UNIT_1_SHARE for how the time is split.
     """
     roster = roster_players(team, players)
     forwards = [p for p in roster if p.position in _FORWARD_SLOTS]
@@ -420,13 +456,16 @@ def auto_build_special_teams_units(team: Team, players: Dict[int, Player],
     pp_forwards = 4 if pp_forwards == 4 else 3
     pp_d = 5 - pp_forwards
 
-    top_forwards = sorted(forwards, key=_pp_offensive_value, reverse=True)[:pp_forwards]
-    top_pp_d = sorted(defensemen, key=_pp_offensive_value, reverse=True)[:pp_d]
-    team.pp_unit_1 = [p.pid for p in top_forwards] + [p.pid for p in top_pp_d]
+    pp_ranked_f = sorted(forwards, key=_pp_offensive_value, reverse=True)
+    pp_ranked_d = sorted(defensemen, key=_pp_offensive_value, reverse=True)
+    team.pp_unit_1 = _take_unit(pp_ranked_f, pp_ranked_d, pp_forwards, pp_d, set())
+    team.pp_unit_2 = _take_unit(pp_ranked_f, pp_ranked_d, pp_forwards, pp_d,
+                                set(team.pp_unit_1))
 
-    top_pk_forwards = sorted(forwards, key=_pk_defensive_value, reverse=True)[:2]
-    top_pk_d = sorted(defensemen, key=_pk_defensive_value, reverse=True)[:2]
-    team.pk_unit_1 = [p.pid for p in top_pk_forwards] + [p.pid for p in top_pk_d]
+    pk_ranked_f = sorted(forwards, key=_pk_defensive_value, reverse=True)
+    pk_ranked_d = sorted(defensemen, key=_pk_defensive_value, reverse=True)
+    team.pk_unit_1 = _take_unit(pk_ranked_f, pk_ranked_d, 2, 2, set())
+    team.pk_unit_2 = _take_unit(pk_ranked_f, pk_ranked_d, 2, 2, set(team.pk_unit_1))
 
 
 def coach_pp_forwards(team: Team) -> int:

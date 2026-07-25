@@ -564,6 +564,26 @@ class _TeamState:
             config.FORWARD_LINE_SHIFT_SHARES, len(team.lines), config.DEPLOYMENT_PATTERN_LENGTH)
         self._pair_pattern = build_deployment_pattern(
             config.D_PAIR_SHIFT_SHARES, len(team.pairs), config.DEPLOYMENT_PATTERN_LENGTH)
+
+        # Special-teams unit rotation. Same deterministic-pattern idiom as the lines above (no RNG,
+        # so it cannot perturb the seeded stream), just over two units weighted by
+        # config.PP_UNIT_1_SHARE / PK_UNIT_1_SHARE. Without this the first unit played every
+        # power-play second of the season.
+        self._pp_unit_pattern = build_deployment_pattern(
+            (config.PP_UNIT_1_SHARE, 1.0 - config.PP_UNIT_1_SHARE), 2,
+            config.DEPLOYMENT_PATTERN_LENGTH)
+        self._pk_unit_pattern = build_deployment_pattern(
+            (config.PK_UNIT_1_SHARE, 1.0 - config.PK_UNIT_1_SHARE), 2,
+            config.DEPLOYMENT_PATTERN_LENGTH)
+        self._pp_unit_idx = 0
+        self._pk_unit_idx = 0
+        # A shift ordinal, plus the ordinal the current unit choice was made for. The choice must be
+        # made at most ONCE per shift and then reused: a shift can re-resolve its strength state
+        # several times (a penalty drawn, expiring, another drawn), and re-rolling each time would
+        # both flip units mid-shift and burn through the pattern far faster than one shift per step.
+        self._shift_ordinal = 0
+        self._st_choice_ordinal = -1
+        self._st_use_second = False
         self.on_ice: List[int] = []           # 5 (or 6, pulled-goalie) skaters, current shift
 
         # Line-juggling AI (DEVPLAN.md Step 2.8): the line-slot/pair-slot index actually used
@@ -720,8 +740,32 @@ class _TeamState:
         ``special_teams.on_ice_group_for_state`` -- see that function's docstring for the
         fallback behavior when a unit is undersized/missing.
         """
+        self._shift_ordinal += 1
         self._normal_group = self._next_normal_group()
         self.refresh_on_ice_for_strength_state(strength_state, skaters_needed, penalized_ids)
+
+    def _special_teams_use_second_unit(self, state: str) -> bool:
+        """Whether this shift fields the SECOND power-play/penalty-kill unit.
+
+        Decided at most once per shift and then cached (see ``_st_choice_ordinal``): a single shift
+        can re-resolve its strength state several times as penalties are drawn and expire, and
+        re-deciding on each call would flip units partway through a shift and advance the pattern
+        several times per shift instead of once. The pattern pointer only moves on shifts that
+        actually field a special-teams unit, so the realized split matches
+        ``config.PP_UNIT_1_SHARE``/``PK_UNIT_1_SHARE`` over real special-teams shifts rather than
+        over all shifts.
+        """
+        if self._st_choice_ordinal == self._shift_ordinal:
+            return self._st_use_second
+        self._st_choice_ordinal = self._shift_ordinal
+        if state == config.STRENGTH_PP:
+            pattern, idx = self._pp_unit_pattern, self._pp_unit_idx
+            self._pp_unit_idx += 1
+        else:
+            pattern, idx = self._pk_unit_pattern, self._pk_unit_idx
+            self._pk_unit_idx += 1
+        self._st_use_second = bool(pattern[idx % len(pattern)])
+        return self._st_use_second
 
     def refresh_on_ice_for_strength_state(self, strength_state: Optional[str] = None,
                                            skaters_needed: int = 5,
@@ -758,6 +802,7 @@ class _TeamState:
             self.on_ice = ST.on_ice_group_for_state(
                 self.team, state, normal_group=normal_group,
                 skaters_needed=skaters_needed, penalized_ids=excluded_ids,
+                use_second_unit=self._special_teams_use_second_unit(state),
             )
         if self.goalie_pulled:
             self.on_ice = self._with_extra_attacker(self.on_ice)

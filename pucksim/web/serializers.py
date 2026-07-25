@@ -521,6 +521,11 @@ class RosterLinesDTO(BaseModel):
     goalie_backup: GoalieSlotDTO
     pp_unit_1: SpecialTeamsUnitDTO
     pk_unit_1: SpecialTeamsUnitDTO
+    # Second units. Default to an empty unit rather than being Optional so a client can always
+    # read ``.players`` -- a Team from an older save has no second unit and returns an empty list,
+    # which renders as "not set" without needing a null check.
+    pp_unit_2: SpecialTeamsUnitDTO = SpecialTeamsUnitDTO(players=[])
+    pk_unit_2: SpecialTeamsUnitDTO = SpecialTeamsUnitDTO(players=[])
 
 
 def roster_lines_response(team: Team, world: World) -> RosterLinesDTO:
@@ -557,20 +562,20 @@ def roster_lines_response(team: Team, world: World) -> RosterLinesDTO:
     )
 
     # Special teams units
-    pp_unit_1 = SpecialTeamsUnitDTO(
-        players=[player_summary(players_dict[pid]) for pid in team.pp_unit_1 if pid in players_dict]
-    )
-    pk_unit_1 = SpecialTeamsUnitDTO(
-        players=[player_summary(players_dict[pid]) for pid in team.pk_unit_1 if pid in players_dict]
-    )
+    def _unit(pids) -> SpecialTeamsUnitDTO:
+        return SpecialTeamsUnitDTO(
+            players=[player_summary(players_dict[pid]) for pid in pids if pid in players_dict]
+        )
 
     return RosterLinesDTO(
         lines=lines,
         pairs=pairs,
         goalie_starter=goalie_starter,
         goalie_backup=goalie_backup,
-        pp_unit_1=pp_unit_1,
-        pk_unit_1=pk_unit_1,
+        pp_unit_1=_unit(team.pp_unit_1),
+        pk_unit_1=_unit(team.pk_unit_1),
+        pp_unit_2=_unit(team.pp_unit_2),
+        pk_unit_2=_unit(team.pk_unit_2),
     )
 
 

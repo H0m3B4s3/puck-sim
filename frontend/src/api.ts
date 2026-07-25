@@ -220,6 +220,10 @@ export interface RosterLinesResponse {
   goalie_backup: GoalieSlot;
   pp_unit_1: SpecialTeamsUnit;
   pk_unit_1: SpecialTeamsUnit;
+  // Second units. Always present, but `players` is empty for a team saved before second units
+  // existed, so treat an empty list as "not set" rather than assuming five players.
+  pp_unit_2: SpecialTeamsUnit;
+  pk_unit_2: SpecialTeamsUnit;
 }
 
 export interface TacticsData {

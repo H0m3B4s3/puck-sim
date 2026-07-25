@@ -327,16 +327,26 @@ class StrengthStateMachine:
 # PP/PK unit selection -- which on-ice group a team fields given the current strength state.
 # ---------------------------------------------------------------------------
 def on_ice_group_for_state(team: Team, state: str, *, normal_group: List[int],
-                            skaters_needed: int, penalized_ids: Optional[List[int]] = None) -> List[int]:
+                            skaters_needed: int, penalized_ids: Optional[List[int]] = None,
+                            use_second_unit: bool = False) -> List[int]:
     """Pick the on-ice skater group appropriate for the team's current strength state.
 
-    - STRENGTH_PP: the team's top power-play unit (``team.pp_unit_1``), truncated/padded to
-      ``skaters_needed`` (5, the full-strength side of the man advantage).
-    - STRENGTH_PK: the team's top penalty-kill unit (``team.pk_unit_1``), truncated/padded to
-      ``skaters_needed`` (4, or 3 on a 5-on-3).
+    - STRENGTH_PP: one of the team's power-play units, truncated/padded to ``skaters_needed``
+      (5, the full-strength side of the man advantage).
+    - STRENGTH_PK: one of the team's penalty-kill units, truncated/padded to ``skaters_needed``
+      (4, or 3 on a 5-on-3).
     - Otherwise (5v5/4v4/3v3 etc.): the normal rotation group passed in by the caller
-      (engine.py's existing line/pair round-robin), unchanged -- this function only overrides
+      (engine.py's existing line/pair rotation), unchanged -- this function only overrides
       group selection for PP/PK states.
+
+    ``use_second_unit`` selects the SECOND unit instead of the first. The caller owns that decision
+    (engine.py's ``_TeamState`` alternates them on a deterministic pattern weighted by
+    ``config.PP_UNIT_1_SHARE``/``PK_UNIT_1_SHARE``) rather than this function, because the choice has
+    to stay stable across the several times a single shift can re-resolve its strength state -- a
+    penalty drawn, expiring, and another drawn all call back in here, and flipping units partway
+    through would field a group nobody deployed. Silently falls back to the first unit when the
+    second is empty, which is what a Team built before second units existed, or loaded from an older
+    save, will have.
 
     Falls back to the normal rotation group (trimmed/padded) if the requested special-teams
     unit is empty/undersized (e.g. auto_build_special_teams_units was never called, or an
@@ -345,10 +355,13 @@ def on_ice_group_for_state(team: Team, state: str, *, normal_group: List[int],
     """
     penalized = set(penalized_ids or [])
 
-    if state == config.STRENGTH_PP and team.pp_unit_1:
-        group = [pid for pid in team.pp_unit_1 if pid not in penalized]
-    elif state in (config.STRENGTH_PK, config.STRENGTH_5V3) and team.pk_unit_1:
-        group = [pid for pid in team.pk_unit_1 if pid not in penalized]
+    pp_unit = (team.pp_unit_2 if use_second_unit and team.pp_unit_2 else team.pp_unit_1)
+    pk_unit = (team.pk_unit_2 if use_second_unit and team.pk_unit_2 else team.pk_unit_1)
+
+    if state == config.STRENGTH_PP and pp_unit:
+        group = [pid for pid in pp_unit if pid not in penalized]
+    elif state in (config.STRENGTH_PK, config.STRENGTH_5V3) and pk_unit:
+        group = [pid for pid in pk_unit if pid not in penalized]
     else:
         group = [pid for pid in normal_group if pid not in penalized]
 
