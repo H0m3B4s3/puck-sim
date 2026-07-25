@@ -355,7 +355,17 @@ def build_on_ice_cache(players: List[Player], chem_real: float = 1.0) -> OnIceCa
         # DEVPLAN.md's "weight by a scoring-relevant composite" instruction).
         scoring = (0.45 * r.get("shot_accuracy", 25) + 0.30 * r.get("shot_power", 25)
                    + 0.25 * r.get("offensive_awareness", 25))
-        cache.shot_weights.append(max(1.0, scoring - 40))
+        # Pivot/slope around the league-mean composite, not ``max(1.0, scoring - 40)``. Subtracting
+        # a fixed offset from a mean-60 composite left a mean weight of 20, so a 90th-percentile
+        # shooter carried 2.05x an average one's weight -- which gave the league goal leader 17.7% of
+        # his team's shots against a real ~13.5%. See config.SHOT_WEIGHT_PIVOT.
+        weight = 1.0 + (scoring - config.SHOT_WEIGHT_PIVOT) * config.SHOT_WEIGHT_SLOPE
+        if p.position == "D":
+            # Two defensemen on the ice against three forwards were taking 34.6% of attempts (real
+            # ~26%) purely on headcount. This is volume only -- a defenseman's shots are ALSO much
+            # lower quality, handled by the shooter-aware zone mix in engine.py.
+            weight *= config.D_SHOT_WEIGHT_MULT
+        cache.shot_weights.append(max(config.SHOT_WEIGHT_MIN, weight))
         cache.playmaking_weights.append(max(0.5, r.get("playmaking", 25) - 20))
     if players:
         cache.avg_morale_real = sum(morale_realization(p.morale) for p in players) / len(players)

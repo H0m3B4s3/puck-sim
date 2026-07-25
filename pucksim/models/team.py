@@ -608,7 +608,19 @@ def auto_build_special_teams_units(team: Team, players: Dict[int, Player],
     team.pp_unit_2 = _take_unit(pp_ranked_f, pp_ranked_d, pp_forwards, pp_d,
                                 set(team.pp_unit_1))
 
-    pk_ranked_f = sorted(forwards, key=_pk_defensive_value, reverse=True)
+    # A coach does not put his leading scorer on the top penalty-kill unit. ``_pk_defensive_value``
+    # ranks by the ``defense`` composite, which an elite two-way forward tops -- so the same forwards
+    # landed on PP1 AND PK1 and collected ~6.3 minutes of special-teams time a night, against ~3 for
+    # a real first-liner. That was the measured cause of first-line forward ice time sitting ~4
+    # minutes over its NHL band, and of the goal leader taking far too many shots.
+    #
+    # PP1 forwards are therefore pushed to the BACK of the penalty-kill ranking rather than removed
+    # outright: on a thin or injury-hit roster they must still be eligible, or the unit would come up
+    # short. Defensemen are deliberately not filtered -- a shutdown defenseman playing both units is
+    # normal, and there are only six of them to go round.
+    pp_forwards_used = {pid for pid in team.pp_unit_1}
+    pk_ranked_f = sorted(forwards,
+                         key=lambda p: (p.pid in pp_forwards_used, -_pk_defensive_value(p)))
     pk_ranked_d = sorted(defensemen, key=_pk_defensive_value, reverse=True)
     team.pk_unit_1 = _take_unit(pk_ranked_f, pk_ranked_d, 2, 2, set())
     team.pk_unit_2 = _take_unit(pk_ranked_f, pk_ranked_d, 2, 2, set(team.pk_unit_1))

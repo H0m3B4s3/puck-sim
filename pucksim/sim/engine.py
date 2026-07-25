@@ -448,6 +448,28 @@ _SHOT_TYPE_SELECT_WEIGHT = {
     "one_timer": 0.16, "tip": 0.10, "wrist": 0.54, "backhand": 0.08, "slap": 0.12,
 }
 
+# Defensemen shoot from different places, with different shots. A defenseman lives at the point: he
+# takes far more of his attempts from distance and far fewer from the slot or crease, and leans on the
+# slap shot and the low wrister rather than the tip or the backhand.
+#
+# This is the LARGER half of why defensemen scored 31% of all goals against a real ~13%. Volume was
+# only moderately wrong (34.6% of attempts vs ~26%); the real distortion was that a defenseman's
+# point shot was modeled as exactly as dangerous as a winger's slot chance, so D converted at 8.94%
+# against a real ~4.5% -- nearly the forward rate. The old code picked the zone BEFORE the shooter,
+# so it could not have known any better.
+#
+# Doing it as a frequency shift rather than a flat "penalize D shots" multiplier keeps the whole model
+# coherent: the same lower quality flows into on_goal_p (point shots get blocked more, which is true),
+# save_p, AND xG, so expected goals still tracks actual goals instead of drifting for one position.
+_D_ZONE_SELECT_WEIGHT = {
+    "crease": 0.01, "slot": 0.05,
+    "high_slot": 0.13, "circle": 0.16,
+    "point": 0.48, "bad_angle": 0.17,
+}
+_D_SHOT_TYPE_SELECT_WEIGHT = {
+    "one_timer": 0.13, "tip": 0.02, "wrist": 0.42, "backhand": 0.03, "slap": 0.40,
+}
+
 # Selection-weighted mean quality of each pool, i.e. sum(select_weight * quality). Precomputed so
 # the quality-bias tilt below can be centered rather than one-sided -- a positive bias must make
 # good looks more likely AND bad looks less likely, or it silently inflates total attempts' quality
@@ -455,6 +477,13 @@ _SHOT_TYPE_SELECT_WEIGHT = {
 _ZONE_QUALITY_MEAN = sum(_ZONE_SELECT_WEIGHT[z] * _ZONE_QUALITY[z] for z in ALL_ZONES)
 _SHOT_TYPE_QUALITY_MEAN = sum(_SHOT_TYPE_SELECT_WEIGHT[t] * _SHOT_TYPE_QUALITY[t]
                               for t in SHOT_TYPES)
+
+
+def _select_weights_for(position: str):
+    """The (zone, shot-type) frequency tables this shooter draws from. Defensemen get their own."""
+    if position == "D":
+        return _D_ZONE_SELECT_WEIGHT, _D_SHOT_TYPE_SELECT_WEIGHT
+    return _ZONE_SELECT_WEIGHT, _SHOT_TYPE_SELECT_WEIGHT
 
 # How hard a unit of quality bias (coach shot_quality_bias + strength state, see
 # _pick_zone_and_shot_type) tilts selection toward better looks. Applied multiplicatively around
@@ -484,7 +513,7 @@ _QUALITY_NEUTRAL = 0.5 * _ZONE_QUALITY_MEAN + 0.5 * _SHOT_TYPE_QUALITY_MEAN
 # season and read off the distribution report -- do not try to derive it, and do not tune it on a
 # short sample, which at this sensitivity is noisy enough to suggest cliffs a full season shows
 # are not there.
-SAVE_PROB_ANCHOR = 0.961
+SAVE_PROB_ANCHOR = 0.948
 
 # How much better/worse than average a look has to be to move the outcome. Unchanged in magnitude
 # from the original tuning -- only their centering (see _QUALITY_NEUTRAL) was wrong.
@@ -559,6 +588,9 @@ def build_deployment_pattern(shares: Tuple[float, ...], unit_count: int,
         pattern.append(best_i)
         awarded[best_i] += 1
     return tuple(pattern)
+
+
+_FORWARD_POSITIONS = ("LW", "C", "RW")
 
 
 def _weighted_index(rng, weights: List[float]) -> int:
@@ -802,10 +834,49 @@ class _TeamState:
 
         healthy_line = [pid for pid in line if pid not in self.unavailable]
         healthy_pair = [pid for pid in pair if pid not in self.unavailable]
+        # Fill a hurt player's slot from his OWN position group first: a winger's minutes go to
+        # another forward, not to whichever body happens to carry the highest overall rating.
+        if len(healthy_line) < len(line):
+            healthy_line = self._fill_slots(healthy_line, len(line), forwards=True,
+                                            exclude=set(healthy_pair))
+        if len(healthy_pair) < len(pair):
+            healthy_pair = self._fill_slots(healthy_pair, len(pair), forwards=False,
+                                            exclude=set(healthy_line))
         group = healthy_line + healthy_pair
-        if len(healthy_line) < len(line) or len(healthy_pair) < len(pair):
+        if len(group) < len(line) + len(pair):
+            # Last resort only: a roster so depleted at one position that it cannot field a
+            # same-position replacement really does have to double-shift whoever is left.
             group = self._backfill_from_bench(group, len(line) + len(pair))
         return group
+
+    def _fill_slots(self, group: List[int], target_size: int, *, forwards: bool,
+                    exclude: set) -> List[int]:
+        """Top ``group`` up to ``target_size`` using dressed players of the MATCHING position group.
+
+        Replacing an injured player used to go straight to ``_backfill_from_bench``, which picks the
+        highest-``overall`` available skater of any position. Measured consequence: injuring a
+        first-line centre handed his minutes to defensemen -- one went from 25.6 to 32.8 minutes a
+        game, and the actual forwards barely moved. A forward's ice time should go to a forward.
+
+        Candidates are ranked by fatigue first, then overall. Ranking by rating alone repeatedly
+        grabbed the same rested-looking star and buried him; the freshest capable body is both more
+        realistic and self-balancing, since taking the extra shift raises his fatigue and moves the
+        next one to somebody else.
+        """
+        if len(group) >= target_size:
+            return group
+        wanted = _FORWARD_POSITIONS if forwards else ("D",)
+        on_ice = set(group) | exclude
+        candidates = [pid for pid in self.team.roster
+                      if pid not in on_ice and pid not in self.unavailable
+                      and pid in self.players and self.players[pid].position in wanted]
+        candidates.sort(key=lambda pid: (self.fatigue.get(pid, 0.0), -self.players[pid].overall))
+        result = list(group)
+        for pid in candidates:
+            if len(result) >= target_size:
+                break
+            result.append(pid)
+        return result
 
     def _unit_fatigue(self, unit: List[int]) -> float:
         """Mean current fatigue of a line's/pair's available members (0 for an empty unit)."""
@@ -1987,7 +2058,8 @@ class GameSim:
                 if state.players.get(pid) is not None and state.players[pid].position in ("LW", "RW")]
 
     # -- shot resolution ----------------------------------------------------
-    def _pick_zone_and_shot_type(self, offense: _TeamState) -> Tuple[str, str]:
+    def _pick_zone_and_shot_type(self, offense: _TeamState,
+                                 shooter: Optional[Player] = None) -> Tuple[str, str]:
         """Pick a zone + shot type for this attempt, skewed by the offense's coach
         shot_quality_bias (higher bias -> more likely to land in a high-danger zone / a
         high-percentage shot type) AND by the offense's current strength state (a PP creates
@@ -1995,10 +2067,14 @@ class GameSim:
         looks -- DEVPLAN.md Step 2.1's strength-state shot modifiers)."""
         bias = (R.shot_quality_bias_delta(offense.coach_profile.shot_quality_bias)
                 + R.strength_state_shot_quality_delta(self.strength.state_for(offense.tid)))
-        zone_weights = [_tilted_weight(_ZONE_SELECT_WEIGHT[z], _ZONE_QUALITY[z],
+        # WHO is shooting decides where from: a defenseman shoots from the point, a winger from the
+        # slot. ``shooter=None`` keeps the forward tables, so a caller that has not resolved a shooter
+        # yet still gets sensible behavior rather than a crash.
+        zone_table, type_table = _select_weights_for(shooter.position if shooter else "")
+        zone_weights = [_tilted_weight(zone_table[z], _ZONE_QUALITY[z],
                                        _ZONE_QUALITY_MEAN, bias) for z in ALL_ZONES]
         zone = ALL_ZONES[_weighted_index(self.rng, zone_weights)]
-        type_weights = [_tilted_weight(_SHOT_TYPE_SELECT_WEIGHT[t], _SHOT_TYPE_QUALITY[t],
+        type_weights = [_tilted_weight(type_table[t], _SHOT_TYPE_QUALITY[t],
                                        _SHOT_TYPE_QUALITY_MEAN, bias) for t in SHOT_TYPES]
         shot_type = SHOT_TYPES[_weighted_index(self.rng, type_weights)]
         return zone, shot_type
@@ -2148,7 +2224,7 @@ class GameSim:
 
         shooter = self._pick_shooter(offense)
         goalie = defense.goalie()
-        zone, shot_type = self._pick_zone_and_shot_type(offense)
+        zone, shot_type = self._pick_zone_and_shot_type(offense, shooter)
 
         r = shooter.ratings
         shot_skill = (0.5 * r.get("shot_accuracy", 25) + 0.3 * r.get("shot_power", 25)

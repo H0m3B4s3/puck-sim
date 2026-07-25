@@ -337,6 +337,32 @@ SYNERGY_PIVOT_SCORE = 0.70       # measured shot-weighted mean forward-line syne
 SYNERGY_QUALITY_SLOPE = 0.22     # shot-quality points added per synergy-score point above pivot
 SYNERGY_QUALITY_MAX = 0.09       # symmetric clamp on the total quality delta (either direction)
 
+# ---------------------------------------------------------------------------
+# Shooter selection
+# ---------------------------------------------------------------------------
+# Which on-ice skater takes a given shot attempt, weighted by a scoring composite (see
+# ratings.build_on_ice_cache). Expressed as a pivot/slope around the league-mean composite, the same
+# shape the rest of this file uses, rather than the old ``max(1.0, scoring - 40)``.
+#
+# The subtract-an-offset form was the problem: with a league-mean composite of 60, subtracting 40
+# left a mean weight of 20, so a 90th-percentile shooter (composite 81) carried 2.05x the weight of
+# an average one. Small-looking, but compounded over a season it gave the league's goal leader 17.7%
+# of his team's shots on goal against a real-NHL ~13.5%, which alone put him at 82 goals. Notably the
+# top-SIX forward share was already correct (48.9% vs ~48% real) -- the distortion was entirely in
+# how steeply the weight climbed WITHIN the top six.
+#
+# Pivot is the measured league-mean composite. Slope is calibrated against the goal leader's share of
+# team shots, not derived.
+SHOT_WEIGHT_PIVOT = 60.0
+SHOT_WEIGHT_SLOPE = 0.014
+SHOT_WEIGHT_MIN = 0.15    # a checking-line grinder still shoots sometimes
+
+# Defensemen are in the same shooter pool as forwards, and by headcount alone the two D on the ice
+# were taking 34.6% of shot attempts against a real ~26%. This scales their weight down; it does NOT
+# scale their shot QUALITY, which is handled separately and is the larger half of the problem (see
+# engine._D_ZONE_SELECT_WEIGHT).
+D_SHOT_WEIGHT_MULT = 0.62
+
 # Hitting / body checks (DEVPLAN.md Step 2.x "impactful ratings"): the engine had no hit mechanic
 # at all and the SkaterStatLine `hits` field was never incremented. Each shot-attempt cycle, the
 # checking (defending) team may throw a body check on the puck carrier, and the fore-checking
