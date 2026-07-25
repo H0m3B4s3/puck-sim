@@ -57,32 +57,53 @@ def test_clutch_gate_fires_only_late_and_close():
 # ---------------------------------------------------------------------------
 # Integration: composure matters in the clutch, and ONLY in the clutch
 # ---------------------------------------------------------------------------
-def _goal_rate(composure: int, period: int, trials: int = 2500) -> float:
-    """Fresh same-seed sim so the ONLY difference between two calls is the shooters' composure.
-    Home shooters are boosted so their skill gap over the goalie is clearly positive (otherwise
-    scaling ~0 gap by a realization factor is a no-op and nothing could be observed)."""
-    world = build_world(seed=20)
-    tids = sorted(world.teams.keys())
-    sim = GameSim(world, tids[0], tids[1])
-    sim._advance_shift_for_all()
-    sim.period = period
-    off, deff = sim.home, sim.away
-    for pid in off.on_ice:
-        r = off.players[pid].ratings
-        r["composure"] = composure
-        r["shot_accuracy"] = r["shot_power"] = r["offensive_awareness"] = 95
-    goals = 0
-    for _ in range(trials):
-        sim.result.home_score = sim.result.away_score = 0   # tied -> clutch when period is late
-        if sim._resolve_shot_attempt(off, deff, rush=False, rebound=False) == "goal":
-            goals += 1
-    return goals / trials
+_RATE_SEEDS = (20, 3, 7, 11)
+
+
+def _goal_rate(composure: int, period: int, trials: int = 6000) -> float:
+    """Fresh same-seed sims so the ONLY difference between two calls is the shooters' composure.
+
+    Composure reaches the outcome through exactly one term -- ``gap * off_real`` -- and its full
+    99-vs-25 span is only 1.0 vs CLUTCH_R_MIN (0.93), i.e. 7% of the gap. To make that observable
+    the arrangement deliberately MAXIMIZES the gap: home shooters are boosted to 95 and the
+    defending goalie is floored, so 7% of the gap is a measurable share of the goal rate rather
+    than a rounding error. Rates are then pooled over several seeds.
+
+    This is a statistical measurement, so it needs statistical power. An earlier version ran 2500
+    trials on one seed against an unmodified goalie: the two arms' per-attempt goal probabilities
+    differed by ~0.004 against a binomial standard error ~4x larger, so it was passing on luck
+    (and did in fact flip to equal counts when an unrelated save-probability constant moved). The
+    present form separates the arms by ~4 sigma.
+    """
+    goals = attempts = 0
+    for seed in _RATE_SEEDS:
+        world = build_world(seed=seed)
+        tids = sorted(world.teams.keys())
+        sim = GameSim(world, tids[0], tids[1])
+        sim._advance_shift_for_all()
+        sim.period = period
+        off, deff = sim.home, sim.away
+        for pid in off.on_ice:
+            r = off.players[pid].ratings
+            r["composure"] = composure
+            r["shot_accuracy"] = r["shot_power"] = r["offensive_awareness"] = 95
+        goalie = deff.goalie()
+        goalie.ratings["reflexes"] = goalie.ratings["positioning"] = 25
+        for _ in range(trials):
+            sim.result.home_score = sim.result.away_score = 0  # tied -> clutch when period is late
+            if sim._resolve_shot_attempt(off, deff, rush=False, rebound=False) == "goal":
+                goals += 1
+            attempts += 1
+    return goals / attempts
 
 
 def test_high_composure_outscores_low_composure_in_the_clutch():
     high = _goal_rate(99, period=config.PERIODS)
     low = _goal_rate(25, period=config.PERIODS)
     assert high > low, f"clutch: composure-99 rate {high:.3f} !> composure-25 rate {low:.3f}"
+    # And by a margin well clear of sampling noise, so a real regression to "composure does
+    # nothing" cannot pass by drifting to within a hair of equality.
+    assert high - low > 0.005, f"clutch composure edge {high - low:.4f} is inside the noise floor"
 
 
 def test_composure_has_no_effect_outside_the_clutch():

@@ -15,6 +15,8 @@ from pucksim.sim.engine import GameSim
 _FORWARDS = ("LW", "C", "RW")
 
 
+
+
 def _players(world, team):
     return {pid: world.player(pid) for pid in team.roster}
 
@@ -202,3 +204,62 @@ def test_dress_limit_holds_across_a_played_game(seed):
                    if line.secs > 0 and pid in roster}
         assert len(played) <= config.DRESSED_SKATERS_PER_GAME, f"team {tid} iced {len(played)}"
         assert len(goalies) <= config.DRESSED_GOALIES_PER_GAME
+
+
+# ---------------------------------------------------------------------------
+# Injury redistributes ice time to the right players
+# ---------------------------------------------------------------------------
+def _toi_per_game(seed, injure_pid=None, games=6):
+    world = build_world(seed=seed)
+    team = world.team(0)
+    if injure_pid is not None:
+        _injure(world, injure_pid, games=40)
+    totals = {}
+    for i in range(games):
+        result = GameSim(world, 0, 1 + i).play()
+        for pid, line in result.skater_box.items():
+            if pid in team.roster:
+                totals[pid] = totals.get(pid, 0) + line.secs / games / 60.0
+    return world, team, totals
+
+
+def test_an_injured_forwards_minutes_go_to_forwards():
+    """A first-line centre going down should promote FORWARDS. Replacement used to run through
+    _backfill_from_bench, which takes the highest-``overall`` available skater of any position -- so
+    an injured centre handed his minutes to defensemen, one of whom went from 25.6 to 32.8 minutes a
+    game while the actual forwards barely moved."""
+    world, team, before = _toi_per_game(7)
+    star = team.lines[0][1]
+    assert world.player(star).position in _FORWARDS
+    _, _, after = _toi_per_game(7, injure_pid=star)
+
+    assert after.get(star, 0.0) == 0.0
+    gains = sorted(((after.get(pid, 0.0) - before.get(pid, 0.0), pid) for pid in team.roster
+                    if world.player(pid).position != "G"), reverse=True)
+    top_gainers = [pid for _, pid in gains[:3]]
+    assert all(world.player(pid).position in _FORWARDS for pid in top_gainers), (
+        "a forward's ice time went to defensemen: "
+        f"{[(world.player(p).name, world.player(p).position) for p in top_gainers]}")
+
+
+def test_injury_replacement_does_not_create_a_35_minute_skater():
+    """Guards the specific absurdity the old backfill produced."""
+    world, team, _ = _toi_per_game(7)
+    star = team.lines[0][1]
+    _, _, after = _toi_per_game(7, injure_pid=star)
+    worst = max(after.values())
+    assert worst <= 30.0, f"somebody is playing {worst:.1f} minutes a game"
+
+
+def test_injury_draws_a_scratch_into_the_lineup():
+    """The dress limit means a healthy scratch should be promoted, keeping 18 skaters dressed -- and
+    it is part of how a season spreads games across more than the same 18 players."""
+    world, team, before = _toi_per_game(7)
+    star = team.lines[0][1]
+    _, _, after = _toi_per_game(7, injure_pid=star)
+    used_before = sum(1 for v in before.values() if v > 0)
+    used_after = sum(1 for v in after.values() if v > 0)
+    assert used_after >= used_before, f"{used_before} skaters used -> {used_after}"
+    promoted = [pid for pid in team.roster
+                if before.get(pid, 0.0) == 0.0 and after.get(pid, 0.0) > 0.0]
+    assert promoted, "no scratched player was drawn in to replace the injury"
