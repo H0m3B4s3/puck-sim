@@ -352,6 +352,125 @@ def test_pp_unit_shape_honors_each_coach_archetype():
     assert shapes == {3, 4}, f"expected both PP shapes across the league, saw {shapes}"
 
 
+def test_second_units_are_built_and_disjoint_from_the_first():
+    """A second unit exists to REST the first, so the two must not share players. (Sharing across
+    PP and PK is still fine and expected -- real teams double up two-way players there.)"""
+    world = build_world(seed=7)
+    for tid in sorted(world.teams.keys()):
+        team = world.team(tid)
+        assert len(team.pp_unit_2) == config.PP_UNIT_SIZE, f"team {tid} PP2 {team.pp_unit_2}"
+        assert len(team.pk_unit_2) == config.PK_UNIT_SIZE, f"team {tid} PK2 {team.pk_unit_2}"
+        assert not set(team.pp_unit_1) & set(team.pp_unit_2), f"team {tid} PP units overlap"
+        assert not set(team.pk_unit_1) & set(team.pk_unit_2), f"team {tid} PK units overlap"
+        assert set(team.pp_unit_2) <= set(team.roster)
+        assert set(team.pk_unit_2) <= set(team.roster)
+
+
+def test_second_pp_unit_is_weaker_than_the_first():
+    """Ordering check: the second unit takes the best REMAINING players, so it must rank below the
+    first on the same composite the builder sorts by. Guards against a future edit that fills the
+    units in the wrong order, which would silently invert every team's power play.
+
+    Compared WITHIN position group, not across the whole unit. Units are filled by slot (top N
+    forwards plus top N defensemen), and defensemen rank below forwards on an offensive composite --
+    so PP1's weakest member is normally a defenseman and PP2's strongest is a forward, which makes a
+    whole-unit comparison fail on correct data. Only "best forward left" and "best D left" are
+    meaningful orderings here.
+    """
+    from pucksim.models.team import _pp_offensive_value
+
+    world = build_world(seed=7)
+    for tid in sorted(world.teams.keys()):
+        team = world.team(tid)
+        for position_filter, label in ((lambda p: p.position != "D", "forwards"),
+                                       (lambda p: p.position == "D", "defensemen")):
+            first = [_pp_offensive_value(world.player(pid)) for pid in team.pp_unit_1
+                     if position_filter(world.player(pid))]
+            second = [_pp_offensive_value(world.player(pid)) for pid in team.pp_unit_2
+                      if position_filter(world.player(pid))]
+            if not first or not second:
+                continue
+            assert min(first) >= max(second), (
+                f"team {tid}: PP2 has a better {label[:-1]} than PP1's worst")
+
+
+def test_on_ice_group_for_state_uses_the_second_unit_when_asked():
+    world = build_world(seed=5)
+    team = world.team(sorted(world.teams.keys())[0])
+    normal_group = team.lines[0] + team.pairs[0]
+    group = ST.on_ice_group_for_state(team, config.STRENGTH_PP, normal_group=normal_group,
+                                      skaters_needed=config.PP_UNIT_SIZE, use_second_unit=True)
+    assert set(group) == set(team.pp_unit_2)
+
+
+def test_second_unit_request_falls_back_to_the_first_when_unset():
+    """A Team built before second units existed, or loaded from an older save, has an empty
+    pp_unit_2. Asking for the second unit must quietly use the first rather than emptying the ice."""
+    world = build_world(seed=5)
+    team = world.team(sorted(world.teams.keys())[0])
+    team.pp_unit_2 = []
+    normal_group = team.lines[0] + team.pairs[0]
+    group = ST.on_ice_group_for_state(team, config.STRENGTH_PP, normal_group=normal_group,
+                                      skaters_needed=config.PP_UNIT_SIZE, use_second_unit=True)
+    assert set(group) == set(team.pp_unit_1)
+
+
+def test_special_teams_time_splits_between_both_units():
+    """The whole point of 4b: unit 1 must NOT play every special-teams second. Counts which unit the
+    engine fields across a batch of real games and checks the realized split matches the configured
+    share. Before second units existed this was 100/0, which put a first-line forward at 25.7
+    minutes a night."""
+    world = build_world(seed=7)
+    counts = {"pp1": 0, "pp2": 0, "pk1": 0, "pk2": 0}
+    original = ST.on_ice_group_for_state
+
+    def counting(team, state, **kwargs):
+        second = kwargs.get("use_second_unit", False)
+        if state == config.STRENGTH_PP:
+            counts["pp2" if second else "pp1"] += 1
+        elif state in (config.STRENGTH_PK, config.STRENGTH_5V3):
+            counts["pk2" if second else "pk1"] += 1
+        return original(team, state, **kwargs)
+
+    import pucksim.sim.engine as engine_module
+    engine_module.ST.on_ice_group_for_state = counting
+    try:
+        for i in range(12):
+            GameSim(world, i % 32, (i + 13) % 32).play()
+    finally:
+        engine_module.ST.on_ice_group_for_state = original
+
+    pp_total = counts["pp1"] + counts["pp2"]
+    pk_total = counts["pk1"] + counts["pk2"]
+    assert pp_total > 30 and pk_total > 30, f"too few special-teams shifts to judge: {counts}"
+    pp1_share = counts["pp1"] / pp_total
+    pk1_share = counts["pk1"] / pk_total
+    assert abs(pp1_share - config.PP_UNIT_1_SHARE) < 0.08, f"PP1 share {pp1_share:.3f}"
+    assert abs(pk1_share - config.PK_UNIT_1_SHARE) < 0.08, f"PK1 share {pk1_share:.3f}"
+
+
+def test_unit_choice_is_stable_within_a_single_shift():
+    """A shift can re-resolve its strength state several times as penalties are drawn and expire.
+    The unit choice must be decided once and reused, or a shift would field one unit for part of
+    itself and the other for the rest -- a group no coach deployed -- and would also burn through
+    the rotation pattern several times faster than one step per shift."""
+    world = build_world(seed=7)
+    sim = GameSim(world, 0, 1)
+    state = sim.home
+    state.advance_shift(config.STRENGTH_PP, skaters_needed=config.PP_UNIT_SIZE)
+    first = list(state.on_ice)
+    for _ in range(5):
+        state.refresh_on_ice_for_strength_state(config.STRENGTH_PP,
+                                                skaters_needed=config.PP_UNIT_SIZE)
+        assert list(state.on_ice) == first, "unit flipped mid-shift"
+    # A new shift is allowed to (and eventually will) pick the other unit.
+    seen = set()
+    for _ in range(20):
+        state.advance_shift(config.STRENGTH_PP, skaters_needed=config.PP_UNIT_SIZE)
+        seen.add(tuple(sorted(state.on_ice)))
+    assert len(seen) >= 2, "unit never rotated across shifts"
+
+
 def test_special_teams_units_survive_a_full_offseason():
     """Nine separate places rebuilt a roster's lines after it changed -- world generation, trades,
     free agency, the draft, prospect call-ups and send-downs -- and none of them rebuilt the

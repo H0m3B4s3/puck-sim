@@ -139,12 +139,20 @@ Found during calibration, real but not yet worth a target band:
   Closing this properly is a feature (a real stoppage model), not a constant to retune, so no band
   is claimed for them yet.
 
-- **Only one power-play / penalty-kill unit exists.** `Team` has `pp_unit_1` and `pk_unit_1` and no
-  second unit, so the top group plays *100%* of every power play where a real team splits the time
-  roughly 65/35 across two units. That alone puts a top-line forward at ~25.7 minutes against an
-  NHL ceiling of ~23. Tracked as step 4b of the calibration round — note the fix belongs here and
-  **not** in `FORWARD_LINE_SHIFT_SHARES`: lowering even-strength shares to compensate would hide a
-  special-teams modeling gap inside a 5v5 number and make both wrong.
+- **First-line forward ice time still runs ~3 minutes high** (23.65 vs an 18–20 band) even after
+  second units brought it down from 25.7. The other three TOI tiers now pass. Two contributing
+  causes, neither of which is the even-strength share:
+  - **The same top forwards are on PP1 *and* PK1.** `_pk_defensive_value` ranks by the `defense`
+    composite, and an elite two-way forward tops both lists — so a first-liner collects even-strength
+    minutes, power-play minutes and penalty-kill minutes. Real coaches rarely put their leading
+    scorer on the top penalty-kill unit. Excluding PP1 forwards from PK1 selection is the likely fix.
+  - **Rosters carry 13 forwards and 7 defensemen and everyone dresses.** There is no scratch concept,
+    so injuries redistribute minutes onto the players already playing the most, and the rank-based
+    metric selects exactly those.
+
+  Resist "fixing" this by lowering `FORWARD_LINE_SHIFT_SHARES`: that buries a special-teams and
+  roster-depth problem inside a 5v5 number and makes both wrong. Verify any change against
+  single-game slot TOI in `tests/test_deployment.py`, which is unambiguous.
 
 **A rule this round learned the hard way:** any constant expressed *per shot-attempt cycle* is
 coupled to shot volume, and correcting volume rescales all of them silently. Hits were tuned at
