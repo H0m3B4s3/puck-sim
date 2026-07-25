@@ -366,7 +366,12 @@ def build_on_ice_cache(players: List[Player], chem_real: float = 1.0) -> OnIceCa
             # lower quality, handled by the shooter-aware zone mix in engine.py.
             weight *= config.D_SHOT_WEIGHT_MULT
         cache.shot_weights.append(max(config.SHOT_WEIGHT_MIN, weight))
-        cache.playmaking_weights.append(max(0.5, r.get("playmaking", 25) - 20))
+        # Same pivot/slope treatment as the shot weight, and for the same reason -- this was
+        # ``max(0.5, playmaking - 20)``, the subtract-an-offset shape whose over-amplification is
+        # documented at config.SHOT_WEIGHT_PIVOT. Consumed by engine._pick_assists, which until
+        # now recomputed its own copy inline and left this field dead.
+        play = 1.0 + (r.get("playmaking", 25) - config.ASSIST_WEIGHT_PIVOT) * config.ASSIST_WEIGHT_SLOPE
+        cache.playmaking_weights.append(max(config.ASSIST_WEIGHT_MIN, play))
     if players:
         cache.avg_morale_real = sum(morale_realization(p.morale) for p in players) / len(players)
         cache.def_value = sum(defensive_value(p) for p in players) / len(players)

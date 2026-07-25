@@ -296,6 +296,51 @@ Three things worth remembering:
 The residual gap to the NHL's ~830 skaters is trades, waiver churn and 23-man rosters rotating three
 healthy scratches rather than two — real, but a management-metagame feature rather than a constant.
 
+### Fixed 2026-07-25 — a quarter of all assists never existed
+
+Primary 0.80 and secondary 0.55 compound to **1.24 assists per goal** against a real ~1.70. Assists
+are most of a centre's point total, so this flattened the entire points leaderboard and was why the
+point leader read *low* (85) at the same time the goal leader read *high*. Set from the real
+unassisted-goal rate (~8% of goals): 0.92 and 0.85 compound to 1.70. Measured 1.69; the point leader
+moved to 103.
+
+`OnIceCache.playmaking_weights` was computed on every line change and **never read** —
+`_pick_assists` recomputed its own copy inline, in the `max(0.5, playmaking - 20)` form that
+`build_on_ice_cache` had already abandoned for shooting. Now consumed, in pivot/slope form.
+
+**The D-assist share is mostly structural, and the first fix for it made it worse.** The scorer is
+excluded from his own assist pool and forwards score ~83% of goals, so the pool is 2F+2D far more
+often than 3F+1D — about 45% D on headcount before any rating is consulted. Weighting the *primary*
+assist alone (on the theory that leaving the secondary untouched expressed the real asymmetry) moved
+D from 42.3% to **48.2%**: raising the rates had shifted the mix toward secondaries, 35% → 46% of all
+assists, so a primary-only lever was pulling on the shrinking half. Expressing the asymmetry as a
+*ratio* between two multipliers (0.60 primary, 0.80 secondary) instead of a multiplier and a zero
+controls the total while keeping the shape. Now ~35–44% across seeds against a real ~36%.
+
+The general lesson, which has now cost time twice this round: when a rate change moves the *mix*
+between two channels, a lever attached to only one of them changes strength as a side effect.
+
+**Two latent bugs surfaced by the RNG churn**, neither related to assists — both worth recording
+because the mechanism ("a stream shift changed which branch a game took, and the branch was wrong")
+will recur:
+
+- **A pulled goalie recovered like a resting skater.** `_apply_ice_time` skips the goalie by
+  matching `state.goalie_id`, which is `None` while he is pulled — so the pulled goalie stopped
+  being skipped and fell into the skater *rest* branch, decaying at the skater recovery constant.
+  A 60-second pull shed **39.6 fatigue down to 11.7**, handing a team that pulled its goalie a
+  materially fresher one for overtime. Now matched on `starter_goalie_id` as well.
+- **`test_engine`'s goalie-goals-against invariant did not account for the shootout decider.** A
+  shootout win awards a goal in the final score charged to nobody's save percentage, exactly like
+  an empty-net goal — which that test already handled. Correct behavior, incomplete assertion; it
+  only ever passed because seed 12 had not previously gone to a shootout.
+
+**And one more underpowered test**, the same failure mode as `test_clutch.py` earlier in this round:
+`test_post_power_play_double_shifting_is_rare` sampled ~15 post-PP shifts from 20 games and asserted
+a rate against a 15% threshold. At a true rate of 9.0% (measured over 233 samples) a 15-sample
+estimate clears that threshold about one run in twenty, and duly did on a change that merely shifted
+the RNG stream. Now sampled over 200 games. **Assert rates on samples big enough to carry them** —
+widening the band would have hidden the real 9%.
+
 ## Changing a band
 
 These bands are **not** placeholders in the sense the engine's first-pass tuning constants are.

@@ -2528,22 +2528,40 @@ class GameSim:
 
     def _pick_assists(self, offense: _TeamState, shooter: Player) -> Tuple[Optional[int], Optional[int]]:
         """Weighted (not deterministic-always-best) pick of a primary + optional secondary
-        assist from the rest of the on-ice skaters, favoring higher playmaking."""
-        others = [pid for pid in offense.on_ice if pid != shooter.pid]
-        if not others:
+        assist from the rest of the on-ice skaters, favoring higher playmaking.
+
+        Reads ``offense.cache.playmaking_weights``, which was computed on every line change and
+        never read by anything -- this method used to recompute its own copy inline, in the
+        subtract-an-offset form that ``build_on_ice_cache`` has since abandoned. One weight, one
+        owner.
+
+        Defensemen are weighted down on both picks, harder on the primary
+        (``config.D_PRIMARY_ASSIST_MULT`` vs ``D_SECONDARY_ASSIST_MULT``): a defenseman's assist
+        far more often comes from starting the breakout or putting a point shot on net for a
+        rebound -- second assists -- than from the final pass to a man in the slot.
+        """
+        cache = offense.cache
+        if cache is None:
+            return None, None      # nobody on the ice to credit; see _TeamState.cache
+        candidates = [(i, p.pid) for i, p in enumerate(cache.players) if p.pid != shooter.pid]
+        if not candidates:
             return None, None
-        weights = [max(0.5, offense.players[pid].rating("playmaking") - 20) for pid in others]
-        # ~80% of goals get a primary assist (real-hockey-ish base rate for MVP).
-        if not self.rng.chance(0.80):
+        if not self.rng.chance(config.PRIMARY_ASSIST_CHANCE):
             return None, None
-        idx = _weighted_index(self.rng, weights)
-        primary = others[idx]
-        remaining = [pid for pid in others if pid != primary]
-        if not remaining or not self.rng.chance(0.55):
+
+        def weights(pool, d_mult):
+            return [cache.playmaking_weights[i] * (d_mult if cache.players[i].position == "D"
+                                                   else 1.0)
+                    for i, _pid in pool]
+
+        primary = candidates[_weighted_index(
+            self.rng, weights(candidates, config.D_PRIMARY_ASSIST_MULT))][1]
+
+        remaining = [(i, pid) for i, pid in candidates if pid != primary]
+        if not remaining or not self.rng.chance(config.SECONDARY_ASSIST_CHANCE):
             return primary, None
-        remaining_weights = [max(0.5, offense.players[pid].rating("playmaking") - 20)
-                            for pid in remaining]
-        secondary = remaining[_weighted_index(self.rng, remaining_weights)]
+        secondary = remaining[_weighted_index(
+            self.rng, weights(remaining, config.D_SECONDARY_ASSIST_MULT))][1]
         return primary, secondary
 
     # -- coach line-juggling AI (DEVPLAN.md Step 2.8) --------------------------
@@ -2646,8 +2664,17 @@ class GameSim:
         for state in (self.home, self.away):
             on_ice_set = set(state.on_ice)
             for pid in state.players:
-                if pid == state.goalie_id:
-                    continue   # goalie ice time/fatigue handled separately below
+                if pid == state.goalie_id or pid == state.starter_goalie_id:
+                    # Goalie ice time/fatigue is handled separately below. Matching
+                    # ``starter_goalie_id`` as well as ``goalie_id`` matters while the goalie is
+                    # PULLED: ``goalie_id`` is None then, so the pulled goalie stopped being
+                    # skipped here and fell into the skater REST branch below -- decaying his
+                    # fatigue at the skater recovery constant. A 60-second pull shed ~70% of what
+                    # he had accumulated over three periods (measured 39.6 -> 11.7), so a team
+                    # that pulled its goalie got a materially fresher one back for overtime. He is
+                    # on the bench, but he is not a resting skater, and his fatigue is modeled as a
+                    # one-way ramp across 60 minutes (see FATIGUE_GAIN_PER_SEC_GOALIE).
+                    continue
                 if pid in on_ice_set:
                     self.result.skater_line(pid).secs += int(round(shift_secs))
                     state.fatigue[pid] = min(100.0, state.fatigue.get(pid, 0.0)
