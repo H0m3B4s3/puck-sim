@@ -141,6 +141,7 @@ explicit exclusions for later steps):
 """
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
@@ -196,8 +197,62 @@ SHOT_ATTEMPTS_PER_SHIFT_BOTH_TEAMS = 1.45
 # variance at all, and 0.35 was contributing avoidable noise to game-to-game shot totals on top of
 # the genuine binomial variance the process already has.
 SHOT_INTERVAL_SIGMA_FRACTION = 0.25
-FATIGUE_GAIN_PER_SEC = 0.028          # fatigue points gained per second of shift ice time
-FATIGUE_RECOVER_PER_SEC = 0.05        # fatigue points recovered per second on the bench
+# In-game fatigue, on a 0-100 scale (see ratings.fatigue_realization).
+#
+# The previous values (gain 0.028, recover 0.05) made the entire fatigue system INERT for skaters.
+# Break-even ice-time share solves gain*f == recover*(1-f), i.e. f == recover/(gain+recover); at
+# 0.028/0.05 that is 64%, so a player only accumulated fatigue if he was on the ice for more than
+# 64% of the game. Nobody is -- a first-pair defenseman plays ~40% -- so every skater sat at ~0
+# fatigue all game and fatigue_realization returned 1.0 on essentially every shot. The one player
+# who did tire was the goalie, who never leaves the ice and therefore never recovers.
+#
+# Recovery is EXPONENTIAL (a fraction of current fatigue per second), not linear. Linear recovery
+# cannot satisfy both things this model needs at once. To make a single shift matter, a 45-second
+# shift has to move fatigue tens of points; but with linear recovery, fatigue is in equilibrium only
+# at the one ice-time share where gain*f == recover*(1-f), and every player above that share
+# accumulates without bound and pins at the 100 ceiling. Tuned so a shift swings ~40 points, that
+# break-even lands near 23% -- below what a first-pair defenseman (~40%) or a first-line forward
+# plays, so exactly the players fatigue should differentiate all sat maxed out instead.
+#
+# Decaying a fraction of current fatigue fixes it: a tired player recovers faster than a fresh one,
+# so every ice-time share finds its own equilibrium and nobody pins. It is also the better
+# physiological model -- real recovery has a fast initial phase.
+#
+# With these values, measured steady state is roughly:
+#
+#   1st-pair D (~40% of the game):  ~18 at shift start, ~62 at shift end
+#   4th-line F (~19% of the game):  ~2  at shift start, ~42 at shift end
+#   2-minute power-play shift:      pinned at 100 (realization floor, a genuine cost)
+#
+# So fatigue now varies with deployment instead of being uniformly zero, which is what makes
+# double-shifting a top line straight after a power play a decision rather than a freebie.
+FATIGUE_GAIN_PER_SEC = 0.9            # fatigue points gained per second of shift ice time
+FATIGUE_RECOVERY_TAU_SECS = 60.0      # bench-time constant: fatigue decays by 1/e every TAU seconds
+
+# Goalies get their own absolute rate rather than a multiple of the skater rate. They never leave
+# the ice, so they never hit the recovery branch at all -- their fatigue is a one-way ramp across
+# the whole game, which means it must be scaled to a 60-minute exposure, not to a 45-second shift.
+# Deriving it from the skater rate (it used to be ``FATIGUE_GAIN_PER_SEC * 0.4``) coupled the two:
+# raising the skater rate 10x to make skater fatigue exist at all would have pinned every goalie at
+# the 100 ceiling by the middle of the first period. 0.011/sec lands a full-game starter near 40,
+# which is where the old numbers already had him -- the goalie side of the model was fine.
+FATIGUE_GAIN_PER_SEC_GOALIE = 0.011
+
+# Fatigue-aware deployment: when the rotation pattern's next line is gassed and a meaningfully
+# fresher one is sitting there, the coach rolls the fresh one instead.
+#
+# Without this, fatigue was purely a performance modifier and never an INPUT to deployment, so
+# nothing stopped a first line from going straight back out after its forwards had just killed two
+# minutes on the power play. Measured before: 27% of the 5v5 shifts immediately following a power
+# play reused 3 or more of the players who had just been on the PP unit. That is a coach nobody
+# would hire, and with fatigue inert (see above) it did not even cost anything.
+#
+# Deliberately a bounded override, not a free-for-all "always play the freshest line": the shift
+# shares in config are the coach's plan, and a plan that gets abandoned whenever anyone breathes
+# hard is not a plan. A line is only skipped when it is genuinely tired AND a clearly fresher
+# alternative exists, which in practice means right after special-teams duty.
+FATIGUE_DEFER_THRESHOLD = 45.0   # average fatigue above which a unit counts as gassed
+FATIGUE_DEFER_MARGIN = 15.0      # the alternative must be at least this much fresher to be used
 
 # Goalie "hot hand" streak-tracking cadence (DEVPLAN.md Step 2.2). ``goalie_hot_hand`` is a
 # small rolling counter (see _TeamState), NOT a probability/fraction itself -- it's fed through
@@ -698,10 +753,15 @@ class _TeamState:
         # straight through the lines. The pattern index advances by one per shift; which LINE that
         # lands on is what the shares control. Clamped against the live list length so a roster
         # whose line count changed after construction can never index out of range.
-        self._current_line_idx = (self._line_pattern[self._line_idx % len(self._line_pattern)]
-                                  % len(lines)) if lines else 0
-        self._current_pair_idx = (self._pair_pattern[self._pair_idx % len(self._pair_pattern)]
-                                  % len(pairs)) if pairs else 0
+        planned_line = (self._line_pattern[self._line_idx % len(self._line_pattern)]
+                        % len(lines)) if lines else 0
+        planned_pair = (self._pair_pattern[self._pair_idx % len(self._pair_pattern)]
+                        % len(pairs)) if pairs else 0
+        # ...then let the coach override it if that unit is gassed and a fresher one is available
+        # (see _freshest_alternative). This is what stops a first line going straight back out after
+        # its forwards just killed two minutes on the power play.
+        self._current_line_idx = self._freshest_alternative(lines, planned_line)
+        self._current_pair_idx = self._freshest_alternative(pairs, planned_pair)
         line = lines[self._current_line_idx] if lines else []
         pair = pairs[self._current_pair_idx] if pairs else []
         self._line_idx += 1
@@ -713,6 +773,44 @@ class _TeamState:
         if len(healthy_line) < len(line) or len(healthy_pair) < len(pair):
             group = self._backfill_from_bench(group, len(line) + len(pair))
         return group
+
+    def _unit_fatigue(self, unit: List[int]) -> float:
+        """Mean current fatigue of a line's/pair's available members (0 for an empty unit)."""
+        vals = [self.fatigue.get(pid, 0.0) for pid in unit if pid not in self.unavailable]
+        return sum(vals) / len(vals) if vals else 0.0
+
+    def _freshest_alternative(self, units: List[List[int]], planned_idx: int) -> int:
+        """The unit index to actually deploy, given the rotation pattern wanted ``planned_idx``.
+
+        Returns ``planned_idx`` unchanged unless that unit is genuinely gassed (mean fatigue above
+        ``FATIGUE_DEFER_THRESHOLD``) AND some other unit is at least ``FATIGUE_DEFER_MARGIN``
+        fresher, in which case the freshest one goes instead.
+
+        Both conditions matter. The threshold keeps the configured shift shares meaningful -- a coach
+        who reshuffles his plan every time somebody breathes hard does not have a plan. The margin
+        stops thrashing between two units that are equally tired. In practice the override fires
+        almost exclusively right after special-teams duty, which is exactly the case it exists for:
+        the power-play unit and the first line overlap heavily, so the pattern's next call is often
+        for players who just spent two minutes on the ice.
+
+        Ties break toward the lowest index, so the result stays deterministic and, all else equal,
+        favors the better line.
+        """
+        if len(units) < 2:
+            return planned_idx
+        planned_fatigue = self._unit_fatigue(units[planned_idx])
+        if planned_fatigue <= FATIGUE_DEFER_THRESHOLD:
+            return planned_idx
+        best_idx, best_fatigue = planned_idx, planned_fatigue
+        for idx, unit in enumerate(units):
+            if idx == planned_idx or not unit:
+                continue
+            fatigue = self._unit_fatigue(unit)
+            if fatigue < best_fatigue:
+                best_idx, best_fatigue = idx, fatigue
+        if planned_fatigue - best_fatigue >= FATIGUE_DEFER_MARGIN:
+            return best_idx
+        return planned_idx
 
     def _backfill_from_bench(self, group: List[int], target_size: int) -> List[int]:
         """Top ``group`` back up to ``target_size`` bodies from any healthy rostered skater not
@@ -2331,13 +2429,15 @@ class GameSim:
                     state.fatigue[pid] = min(100.0, state.fatigue.get(pid, 0.0)
                                              + shift_secs * FATIGUE_GAIN_PER_SEC)
                 else:
-                    state.fatigue[pid] = max(0.0, state.fatigue.get(pid, 0.0)
-                                             - shift_secs * FATIGUE_RECOVER_PER_SEC)
+                    # Exponential decay, not a flat subtraction -- see FATIGUE_RECOVERY_TAU_SECS
+                    # for why linear recovery pinned every high-ice-time player at the ceiling.
+                    state.fatigue[pid] = state.fatigue.get(pid, 0.0) * math.exp(
+                        -shift_secs / FATIGUE_RECOVERY_TAU_SECS)
             if state.goalie_id is not None:
                 self.result.goalie_line(state.goalie_id).secs += int(round(shift_secs))
                 state.fatigue[state.goalie_id] = min(
                     100.0, state.fatigue.get(state.goalie_id, 0.0)
-                    + shift_secs * FATIGUE_GAIN_PER_SEC * 0.4)   # goalies tire slower than skaters
+                    + shift_secs * FATIGUE_GAIN_PER_SEC_GOALIE)
 
     # -- in-game injuries (DEVPLAN.md Step 2.3) -------------------------------
     def _injury_check(self) -> None:
