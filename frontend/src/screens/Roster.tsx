@@ -22,6 +22,7 @@ import api, {
   PlayerSummary,
   LineSynergy,
   ManualLinesEditRequest,
+  ScratchStatus,
   TacticsUpdateRequest,
   ApiError,
 } from "../api";
@@ -82,7 +83,10 @@ function SynergyBadge({ synergy }: { synergy: LineSynergy | null }) {
 
 const columnHelper = createColumnHelper<PlayerSummary>();
 
-const rosterColumns = (onPlayer?: (pid: number) => void) => [
+const rosterColumns = (
+  onPlayer?: (pid: number) => void,
+  onToggleScratch?: (pid: number) => void,
+) => [
   columnHelper.accessor("name", {
     header: "Name",
     size: 180,
@@ -160,6 +164,44 @@ const rosterColumns = (onPlayer?: (pid: number) => void) => [
     header: "Injury Status",
     size: 150,
   }),
+  // Healthy scratches (20-player dress limit). Injured players get no toggle -- they are out
+  // regardless, and offering a control that does nothing is worse than offering none.
+  columnHelper.display({
+    id: "scratch",
+    header: "Scratch",
+    size: 110,
+    cell: (info) => {
+      const p = info.row.original;
+      if (p.injury_status) {
+        return <span style={{ color: "var(--color-muted)" }}>injured</span>;
+      }
+      const overridden = p.scratch_requested && !p.scratched;
+      return (
+        <button
+          className="btn btn-secondary"
+          onClick={() => onToggleScratch?.(p.pid)}
+          style={{
+            padding: "0.25rem 0.5rem",
+            fontSize: "0.8125rem",
+            color: overridden
+              ? "var(--color-accent-amber, #d97706)"
+              : p.scratched
+                ? "var(--color-accent-red, #dc2626)"
+                : undefined,
+          }}
+          title={
+            overridden
+              ? "You asked to sit this player, but injuries forced him into the lineup"
+              : p.scratched
+                ? "Sitting tonight -- click to dress"
+                : "Dressed -- click to scratch"
+          }
+        >
+          {overridden ? "forced in" : p.scratched ? "scratched" : "dressed"}
+        </button>
+      );
+    },
+  }),
 ];
 
 function RosterTable({
@@ -167,11 +209,15 @@ function RosterTable({
   selectedPlayers,
   onPlayerSelect,
   onPlayer,
+  onToggleScratch,
+  scratchStatus,
 }: {
   players: PlayerSummary[];
   selectedPlayers: Set<number>;
   onPlayerSelect: (playerId: number) => void;
   onPlayer?: (pid: number) => void;
+  onToggleScratch?: (pid: number) => void;
+  scratchStatus?: ScratchStatus | null;
 }) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: "overall", desc: true },
@@ -179,7 +225,7 @@ function RosterTable({
 
   const table = useReactTable({
     data: players,
-    columns: rosterColumns(onPlayer),
+    columns: rosterColumns(onPlayer, onToggleScratch),
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
@@ -188,9 +234,17 @@ function RosterTable({
 
   return (
     <Panel className="roster-table-container">
-      <h3 className="text-display" style={{ marginBottom: "1rem" }}>
+      <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
         Roster ({players.length} players)
       </h3>
+      {scratchStatus && (
+        <p style={{ marginBottom: "1rem", fontSize: "0.875rem", color: "var(--color-muted)" }}>
+          Dressing {scratchStatus.dressed_count} of {scratchStatus.dressed_limit} (
+          {scratchStatus.skaters_dressed} skaters, {scratchStatus.goalies_dressed} goalies).{" "}
+          {scratchStatus.scratched.length > 0 &&
+            `${scratchStatus.scratched.length} healthy scratch${scratchStatus.scratched.length === 1 ? "" : "es"}.`}
+        </p>
+      )}
       <div className="roster-table-scroll">
         <table className="roster-table">
           <thead>
@@ -219,6 +273,7 @@ function RosterTable({
               <tr
                 key={row.id}
                 className={`roster-row--draggable${selectedPlayers.has(row.original.pid) ? " selected" : ""}`}
+                style={row.original.scratched ? { opacity: 0.55 } : undefined}
                 draggable
                 onDragStart={(e) =>
                   setDragPayload(e, { pid: row.original.pid, from: null })
@@ -518,6 +573,7 @@ function LinesEditor({
   onPlaceInPair,
   onSetGoalie,
   onDropPlayer,
+  scratchStatus,
 }: {
   lines: PlayerSummary[][];
   lineSynergies: (LineSynergy | null)[];
@@ -529,6 +585,7 @@ function LinesEditor({
   onPlaceInPair: (pairIndex: number, slotIndex: number) => void;
   onSetGoalie: (which: "starter" | "backup") => void;
   onDropPlayer: (payload: DragPayload, target: SlotRef) => void;
+  scratchStatus?: ScratchStatus | null;
 }) {
   const canPlace = selectedPlayer !== null;
   return (
@@ -604,6 +661,96 @@ function LinesEditor({
           </div>
         </div>
       </div>
+
+      {scratchStatus && (
+        <div
+          className="scratched-section"
+          style={{ marginTop: "2rem", paddingTop: "1.5rem", borderTop: "1px solid var(--color-border)" }}
+        >
+          <h4 className="text-display" style={{ fontSize: "1.25rem", marginBottom: "0.5rem" }}>
+            Scratched
+          </h4>
+          <p style={{ fontSize: "0.875rem", color: "var(--color-muted)", marginBottom: "0.75rem" }}>
+            A game dresses {scratchStatus.dressed_limit} players ({scratchStatus.skaters_dressed}{" "}
+            skaters and {scratchStatus.goalies_dressed} goalies). Everyone below sits. Use the
+            Scratch column in the roster table above to choose who.
+          </p>
+
+          {scratchStatus.overridden.length > 0 && (
+            <p
+              style={{
+                fontSize: "0.875rem",
+                color: "var(--color-accent-amber, #d97706)",
+                marginBottom: "0.75rem",
+              }}
+            >
+              Injuries left too few healthy players, so{" "}
+              {scratchStatus.overridden.map((p) => p.name).join(", ")}{" "}
+              {scratchStatus.overridden.length === 1 ? "was" : "were"} dressed despite being
+              scratched.
+            </p>
+          )}
+
+          {(scratchStatus.short_skaters > 0 || scratchStatus.short_goalies > 0) && (
+            <p
+              style={{
+                fontSize: "0.875rem",
+                color: "var(--color-accent-red, #dc2626)",
+                marginBottom: "0.75rem",
+              }}
+            >
+              Roster too thin to dress a full lineup: short{" "}
+              {scratchStatus.short_skaters > 0 && `${scratchStatus.short_skaters} skater(s)`}
+              {scratchStatus.short_skaters > 0 && scratchStatus.short_goalies > 0 && " and "}
+              {scratchStatus.short_goalies > 0 && `${scratchStatus.short_goalies} goalie(s)`}.
+            </p>
+          )}
+
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {scratchStatus.scratched.length === 0 && (
+              <span style={{ color: "var(--color-muted)", fontSize: "0.9rem" }}>
+                Nobody scratched.
+              </span>
+            )}
+            {scratchStatus.scratched.map((p) => (
+              <span
+                key={p.pid}
+                className="line-slot__player"
+                style={{ fontSize: "0.875rem", padding: "0.25rem 0.6rem" }}
+                title={
+                  p.scratch_requested
+                    ? "You scratched this player"
+                    : "Auto-scratched: roster is over the dress limit"
+                }
+              >
+                {p.name} ({p.position} {p.overall})
+                {!p.scratch_requested && (
+                  <span style={{ color: "var(--color-muted)", marginLeft: "0.35rem" }}>auto</span>
+                )}
+              </span>
+            ))}
+          </div>
+
+          {scratchStatus.injured.length > 0 && (
+            <div style={{ marginTop: "1rem" }}>
+              <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.4rem" }}>
+                Injured (not a scratch)
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                {scratchStatus.injured.map((p) => (
+                  <span
+                    key={p.pid}
+                    className="line-slot__player"
+                    style={{ fontSize: "0.875rem", padding: "0.25rem 0.6rem", opacity: 0.75 }}
+                  >
+                    {p.name} ({p.position}) — {p.injury_status}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </Panel>
   );
 }
@@ -741,6 +888,35 @@ export function RosterScreen({
       setError(errorMsg);
     },
   });
+
+  // Mutation: set healthy scratches. Sends the FULL set each time (the endpoint is a replacement,
+  // not a patch), computed by toggling one pid against the current requested set. Invalidates both
+  // roster queries because the dressed/scratched flags live on the roster rows AND the lines
+  // response carries the scratch_status summary.
+  const scratchMutation = useMutation({
+    mutationFn: (scratches: number[]) => api.putScratches(scratches),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["roster"] });
+      queryClient.invalidateQueries({ queryKey: ["roster", "lines"] });
+      setError(null);
+    },
+    onError: (err) => {
+      const errorMsg = err instanceof ApiError ? err.message : "Failed to update scratches";
+      setError(errorMsg);
+    },
+  });
+
+  const toggleScratch = (pid: number) => {
+    const requested = new Set(
+      (rosterData?.players ?? []).filter((p) => p.scratch_requested).map((p) => p.pid),
+    );
+    if (requested.has(pid)) {
+      requested.delete(pid);
+    } else {
+      requested.add(pid);
+    }
+    scratchMutation.mutate([...requested]);
+  };
 
   // Mutation: update lines
   const updateLinesMutation = useMutation({
@@ -909,6 +1085,8 @@ export function RosterScreen({
         selectedPlayers={selectedPlayer ? new Set([selectedPlayer]) : new Set()}
         onPlayerSelect={(pid) => setSelectedPlayer((cur) => (cur === pid ? null : pid))}
         onPlayer={onPlayer}
+        onToggleScratch={toggleScratch}
+        scratchStatus={linesData.scratch_status}
       />
 
       <div style={{ marginTop: "2rem" }}>
@@ -923,6 +1101,7 @@ export function RosterScreen({
           onPlaceInPair={placeInPair}
           onDropPlayer={handleDropPlayer}
           onSetGoalie={setGoalie}
+          scratchStatus={linesData.scratch_status}
         />
         <div style={{ marginTop: "1.5rem", display: "flex", gap: "1rem" }}>
           <button

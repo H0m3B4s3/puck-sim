@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from pucksim import config
 from pucksim.config import HANDEDNESS_FIT_PENALTY, POSITION_FIT_PENALTY
 from pucksim.models.attributes import composite
 from pucksim.models.player import Player
@@ -80,6 +81,17 @@ class Team:
     pp_unit_2: List[int] = field(default_factory=list)
     pk_unit_2: List[int] = field(default_factory=list)
 
+    # Healthy scratches: players the user (or an AI GM) has explicitly chosen to sit. A standing
+    # preference on the Team, not a per-game decision -- it persists until changed, the same way
+    # lines/pairs do. Injured players are NOT listed here; unavailability from injury is derived
+    # from ``Player.available`` instead, so the two reasons a player doesn't dress stay distinct
+    # and a returning player doesn't silently become a scratch.
+    #
+    # This list is a REQUEST, not the final answer: ``dressed_lineup()`` resolves it against the
+    # 20-player limit and can override it when injuries would otherwise leave a team unable to
+    # field a legal lineup. Read that function, never this field, to know who actually played.
+    scratches: List[int] = field(default_factory=list)
+
     chemistry: Dict[str, float] = field(default_factory=dict)  # pair_key(a,b) -> shared secs
 
     # ``tactics`` (DEVPLAN.md Step 2.8): a real Tactics instance now (was an Optional[dict]
@@ -126,6 +138,8 @@ class Team:
         self.pk_unit_1 = [p for p in self.pk_unit_1 if p != pid]
         self.pp_unit_2 = [p for p in self.pp_unit_2 if p != pid]
         self.pk_unit_2 = [p for p in self.pk_unit_2 if p != pid]
+        # A player who leaves the roster is no longer a scratch -- he isn't ours to sit.
+        self.scratches = [p for p in self.scratches if p != pid]
         if self.goalie_starter == pid:
             self.goalie_starter = None
         if self.goalie_backup == pid:
@@ -185,6 +199,7 @@ class Team:
             "pk_unit_1": list(self.pk_unit_1),
             "pp_unit_2": list(self.pp_unit_2),
             "pk_unit_2": list(self.pk_unit_2),
+            "scratches": list(self.scratches),
             "goalie_starter": self.goalie_starter,
             "goalie_backup": self.goalie_backup,
             "chemistry": {k: round(v, 1) for k, v in self.chemistry.items()},
@@ -215,6 +230,9 @@ class Team:
             # unit-2 key, and every consumer already falls back to unit 1 when unit 2 is empty.
             pp_unit_2=list(d.get("pp_unit_2", [])),
             pk_unit_2=list(d.get("pk_unit_2", [])),
+            # Empty for a save written before scratches existed, which is correct: no explicit
+            # scratches means dressed_lineup() picks them by depth, the same as a fresh league.
+            scratches=list(d.get("scratches", [])),
             goalie_starter=d.get("goalie_starter"),
             goalie_backup=d.get("goalie_backup"),
             chemistry={k: float(v) for k, v in d.get("chemistry", {}).items()},
@@ -242,6 +260,134 @@ def team_salary(team: Team, players: Dict[int, Player]) -> int:
 
 def available_players(team: Team, players: Dict[int, Player]) -> List[Player]:
     return [p for p in roster_players(team, players) if p.available]
+
+
+# ---------------------------------------------------------------------------
+# Dressed lineup / healthy scratches -- the 20-player game-night limit
+# ---------------------------------------------------------------------------
+@dataclass
+class DressedLineup:
+    """Who actually dresses for one game, and why everyone else didn't.
+
+    ``dressed`` is the authoritative answer -- at most ``config.DRESSED_PLAYERS_PER_GAME`` ids,
+    split ``DRESSED_SKATERS_PER_GAME`` skaters and ``DRESSED_GOALIES_PER_GAME`` goalies. The other
+    three lists explain the remainder, kept separate because the reasons are not interchangeable:
+
+    * ``injured``   -- unavailable, not a choice.
+    * ``scratched`` -- healthy and sitting. Includes both the team's own explicit ``Team.scratches``
+      that were honored AND anyone auto-scratched to get down to the limit.
+    * ``promoted``  -- ids the team explicitly asked to scratch that had to play anyway, because
+      injuries left too few healthy bodies to dress a legal lineup. Surfaced so a UI can tell the
+      user their instruction was overridden rather than silently ignoring it.
+
+    ``short_skaters``/``short_goalies`` are how many bodies the team was UNABLE to supply even after
+    promoting every scratch -- a genuinely depleted roster. Non-zero means the game is played
+    short-handed rather than refusing to sim.
+    """
+
+    dressed: List[int] = field(default_factory=list)
+    scratched: List[int] = field(default_factory=list)
+    injured: List[int] = field(default_factory=list)
+    promoted: List[int] = field(default_factory=list)
+    short_skaters: int = 0
+    short_goalies: int = 0
+
+    @property
+    def dressed_set(self) -> set:
+        return set(self.dressed)
+
+
+def _lineup_slot_ids(team: Team) -> set:
+    """Every id currently written into a line, pair or special-teams unit.
+
+    Used as a DRESSING PRIORITY signal, not as the lineup itself: a player the coach has penciled
+    into a line should dress ahead of an equally-rated player who is not in the chart, because the
+    chart is the closest thing the model has to a statement of intent.
+    """
+    slotted = set()
+    for group in list(team.lines) + list(team.pairs):
+        slotted.update(group)
+    for unit in (team.pp_unit_1, team.pk_unit_1, team.pp_unit_2, team.pk_unit_2):
+        slotted.update(unit)
+    return slotted
+
+
+def dressed_lineup(team: Team, players: Dict[int, Player],
+                   must_dress: Optional[set] = None) -> DressedLineup:
+    """Resolve ``team``'s roster down to the ``config.DRESSED_PLAYERS_PER_GAME`` who dress.
+
+    Selection order, applied separately to skaters and goalies:
+
+    1. Drop injured players (``Player.available``) -- not a choice, and never counted as a scratch.
+    2. Prefer players NOT in ``team.scratches``. The team's explicit instruction wins whenever the
+       lineup can be filled without them.
+    3. Within each of those groups, prefer ``must_dress``, then players already in the line/pair/unit
+       chart, then higher ``overall``, then lower pid.
+    4. Take the first ``DRESSED_SKATERS_PER_GAME`` / ``DRESSED_GOALIES_PER_GAME``.
+
+    Step 3's final pid tiebreak exists so the result is deterministic: two equally-rated,
+    equally-slotted players must not swap places between runs, or the same seed would stop
+    reproducing the same game.
+
+    ``must_dress`` is for ids the caller has already committed to elsewhere -- specifically the
+    goalie sim/season.py's rest-based rotation picked to start. Without it, scratching a goalie who
+    the rotation then names as the starter would field a goalie who isn't dressed.
+
+    Auto-promotes explicit scratches when injuries leave too few healthy players, recording them in
+    ``promoted`` so the caller can say so. Never raises and never returns an unplayable lineup: a
+    roster too thin even after promoting everyone reports the shortfall and plays short.
+    """
+    must = set(must_dress or ())
+    slotted = _lineup_slot_ids(team)
+    requested_scratches = set(team.scratches)
+
+    injured: List[int] = []
+    skaters: List[Player] = []
+    goalies: List[Player] = []
+    for pid in team.roster:
+        player = players.get(pid)
+        if player is None:
+            continue
+        if not player.available:
+            injured.append(pid)
+            continue
+        (goalies if player.position == "G" else skaters).append(player)
+
+    def rank(player: Player):
+        # Sorted ascending, so every term is negated where "more" should mean "earlier".
+        return (
+            player.pid in requested_scratches and player.pid not in must,
+            -(player.pid in must),
+            -(player.pid in slotted),
+            -player.overall,
+            player.pid,
+        )
+
+    dressed: List[int] = []
+    scratched: List[int] = []
+    promoted: List[int] = []
+
+    def fill(pool: List[Player], limit: int) -> int:
+        pool.sort(key=rank)
+        taken = pool[:limit]
+        for player in taken:
+            dressed.append(player.pid)
+            if player.pid in requested_scratches and player.pid not in must:
+                promoted.append(player.pid)
+        scratched.extend(player.pid for player in pool[limit:])
+        return max(0, limit - len(taken))
+
+    short_skaters = fill(skaters, config.DRESSED_SKATERS_PER_GAME)
+    short_goalies = fill(goalies, config.DRESSED_GOALIES_PER_GAME)
+
+    return DressedLineup(
+        dressed=dressed,
+        scratched=scratched,
+        injured=injured,
+        promoted=promoted,
+        short_skaters=short_skaters,
+        short_goalies=short_goalies,
+    )
 
 
 # ---------------------------------------------------------------------------

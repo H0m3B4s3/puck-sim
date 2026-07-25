@@ -147,7 +147,7 @@ from typing import Dict, List, Optional, Tuple
 from pucksim import config
 from pucksim.models.coach import Coach, CoachProfile
 from pucksim.models.player import Player
-from pucksim.models.team import Team, available_players, lineup_familiarity_secs
+from pucksim.models.team import Team, dressed_lineup, lineup_familiarity_secs
 from pucksim.models.world import World
 from pucksim.sim import ratings as R
 from pucksim.sim import special_teams as ST
@@ -541,18 +541,30 @@ class _TeamState:
         self.is_home = is_home
         self.players: Dict[int, Player] = {pid: world.player(pid) for pid in team.roster}
 
-        # In-game-injury tracking (DEVPLAN.md Step 2.3). ``unavailable`` starts seeded with
-        # anyone ALREADY injured coming into this game -- via team.py's ``available_players()``
-        # filter (the same helper DEVPLAN.md's Step 2.3 assignment calls out to confirm/wire in),
-        # inverted to the roster ids NOT in that available set, since _TeamState needs a live set
-        # it can keep adding to mid-game, not a one-shot list -- so a player still recovering
-        # from a previous game's injury is never iced; ``_injury_check`` adds to this set for a
-        # freshly-injured player mid-game. Every rotation-pool consumer below (the line/pair
-        # round-robin, PP/PK unit selection, the pulled-goalie extra-attacker pick) filters
-        # through this set so an unavailable player never gets fielded, whether hurt before
-        # puck-drop or mid-shift.
-        available_ids = {p.pid for p in available_players(team, self.players)}
-        self.unavailable: set = {pid for pid in team.roster if pid not in available_ids}
+        # Who is NOT eligible to be fielded tonight. Two distinct reasons, resolved together by
+        # team.py's ``dressed_lineup()``:
+        #
+        #   * INJURED (DEVPLAN.md Step 2.3) -- unavailable, not a choice.
+        #   * NOT DRESSED -- healthy scratches. A game dresses at most
+        #     config.DRESSED_PLAYERS_PER_GAME (20: 18 skaters + 2 goalies), so a 23-man roster sits
+        #     three players. Before this existed every rostered player was eligible, which meant a
+        #     23-man roster effectively dressed 23 and an injury redistributed minutes onto whoever
+        #     was already playing the most (``_backfill_from_bench`` takes the highest-overall
+        #     body) -- inflating top-line ice time.
+        #
+        # A live set, not a one-shot list, because ``_injury_check`` keeps adding to it mid-game.
+        # Every rotation consumer below (the line/pair pattern, its bench backfill, PP/PK unit
+        # selection, the pulled-goalie extra attacker) already filters through this one set, so
+        # honoring the dress limit needed no changes to any of them -- it is the single seam.
+        #
+        # The starting goalie is forced into the dressed lineup: sim/season.py's rest-based rotation
+        # may name the backup, and scratching the goalie it just picked would field a goalie who
+        # isn't dressed.
+        self.dressed = dressed_lineup(
+            team, self.players,
+            must_dress={starter_override} if starter_override is not None else None,
+        )
+        self.unavailable: set = set(team.roster) - self.dressed.dressed_set
 
         # Rotation pointers -- now indices into a weighted deployment PATTERN rather than directly
         # into team.lines / team.pairs. The pattern gives line 1 a bigger share of shifts than line

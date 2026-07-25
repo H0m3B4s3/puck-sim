@@ -136,6 +136,27 @@ export interface PlayerSummary {
   injury_status: string | null;
   key_ratings: KeyRating[];
   contract: ContractSummary;
+  /** Healthy but sitting tonight under the 20-player dress limit. */
+  scratched: boolean;
+  /**
+   * The user ASKED for this player to sit. Differs from `scratched` when injuries left too few
+   * healthy bodies and the sim had to promote him back into the lineup.
+   */
+  scratch_requested: boolean;
+}
+
+/** Game-night lineup status under the 20-player dress limit (GET/PUT /roster/scratches). */
+export interface ScratchStatus {
+  dressed_count: number;
+  dressed_limit: number;
+  skaters_dressed: number;
+  goalies_dressed: number;
+  scratched: PlayerSummary[];
+  injured: PlayerSummary[];
+  /** Requested scratches the sim had to play anyway -- surfaced so the UI can say so. */
+  overridden: PlayerSummary[];
+  short_skaters: number;
+  short_goalies: number;
 }
 
 export interface LineSynergy {
@@ -224,6 +245,7 @@ export interface RosterLinesResponse {
   // existed, so treat an empty list as "not set" rather than assuming five players.
   pp_unit_2: SpecialTeamsUnit;
   pk_unit_2: SpecialTeamsUnit;
+  scratch_status: ScratchStatus | null;
 }
 
 export interface TacticsData {
@@ -722,6 +744,13 @@ export const api = {
   /** PUT /roster/lines -- manually edit lines and pairs. */
   updateRosterLines: (body: ManualLinesEditRequest) =>
     put<RosterLinesResponse>("/roster/lines", body),
+
+  /** GET /roster/scratches -- who dresses and who sits tonight. */
+  getScratches: () => get<ScratchStatus>("/roster/scratches"),
+
+  /** PUT /roster/scratches -- replace the full set of healthy scratches. */
+  putScratches: (scratches: number[]) =>
+    put<ScratchStatus>("/roster/scratches", { scratches }),
 
   /** GET /roster/tactics -- current tactics and coach summary. */
   getRosterTactics: () => get<RosterTacticsResponse>("/roster/tactics"),
