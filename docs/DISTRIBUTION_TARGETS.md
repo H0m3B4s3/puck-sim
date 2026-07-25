@@ -101,6 +101,33 @@ Printed for context, never asserted:
   ~13.5%.
 - `sog_stdev_per_team_game` — the raw spread behind `pct_team_games_under_15_sog`.
 
+## Known gaps not yet banded
+
+Found during calibration, real but not yet worth a target band:
+
+- **Block/miss split of non-on-goal attempts.** ~18% of shot attempts are blocked and ~29% miss,
+  against a real-NHL split closer to 25% blocked / 22% missed. Driven by `block_p` in
+  `engine.py::_resolve_shot_attempt`. Affects the `blocks` box-score stat only — it touches no
+  shots-on-goal, goal, or save-percentage metric, since both outcomes are equally "not on goal".
+  `tests/test_shot_blocking.py` asserts the block *share of attempts* (volume-independent) rather
+  than a per-game count, so this stays visible without coupling the test to shot volume.
+- **Rush share.** ~23% of attempts carry the rush bonus, which is in the real range, but rush is
+  currently a property of "first attempt of a shift" rather than of an actual zone entry. The rate
+  is right; the mechanism is a proxy.
+- **Stoppage-driven counting stats are all low**: ~18 faceoffs per game (NHL ~57), ~3 giveaways and
+  ~3 takeaways per team (NHL ~10 and ~7), ~5 PIM per team (NHL ~8). These are *pre-existing* and
+  were not introduced by the shot-volume correction — the engine models possession as a coin-flip
+  abstraction over shot-attempt cycles with no discrete turnover, whistle, goalie-freeze or
+  offensive-zone-faceoff events, so there is simply nothing for most real stoppages to come from.
+  Closing this properly is a feature (a real stoppage model), not a constant to retune, so no band
+  is claimed for them yet.
+
+**A rule this round learned the hard way:** any constant expressed *per shot-attempt cycle* is
+coupled to shot volume, and correcting volume rescales all of them silently. Hits were tuned at
+~22 per team per game and became 65 without a single line of the hit code changing. When touching
+volume again, audit every `*_PER_CYCLE` / `*_PER_ATTEMPT_*` constant, and prefer asserting such
+rates as a *share of attempts* rather than a count per game (see `tests/test_shot_blocking.py`).
+
 ## Changing a band
 
 These bands are **not** placeholders in the sense the engine's first-pass tuning constants are.
