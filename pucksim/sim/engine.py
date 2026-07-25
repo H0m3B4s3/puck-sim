@@ -273,6 +273,28 @@ REBOUND_CHANCE_BASE = 0.09
 MAX_REBOUND_CHAIN = 2                 # most immediate rebound looks off a single original shot
 SHIFT_SECONDS_JITTER = 8.0            # +/- gaussian spread around config.SHIFT_SECONDS_TARGET
 
+# Per-team shift clocks (2026-07-25). Play used to advance one shared "shift" at a time: a single
+# shift_secs was drawn and BOTH teams changed lines at that same boundary. That is mite hockey, where
+# a horn blows and everyone comes off. Real changes happen on the fly, per team and independently --
+# and crucially, a team that has lost possession in its own zone CANNOT get off the ice. The
+# attacking team swaps players at will while the defending unit is pinned out there getting more
+# tired: the "death shift".
+#
+# Play now advances in SEGMENTS instead. A segment runs until the next team is due for a change (or
+# the period ends), each team keeps its own shift clock, and a change is only granted when that team
+# is actually able to make one -- see GameSim._resolve_line_changes.
+SEGMENT_SECONDS_MIN = 6.0             # floor on a segment, so a team due-but-unable can't spin
+# Even a trapped unit eventually gets a whistle, an icing, or clears the zone. Without a hard cap a
+# team that keeps losing the possession roll could theoretically stay out for a whole period.
+SHIFT_SECONDS_MAX = 110.0
+# Chance a team that is due to change but does NOT have the puck manages one anyway: it clears the
+# zone, the puck goes to neutral ice, or there is a lull. Not every second without possession is a
+# defensive-zone lockdown -- treating it that way (a hard "no puck, no change" gate) stretched the
+# mean shift from the 45s target to 63s and made 43% of all shifts death shifts, which is far too
+# many. With this, most shifts land near their target and a right-skewed tail of genuinely trapped
+# ones remains, which is the real distribution.
+DEFENSIVE_CHANGE_CHANCE = 0.55
+
 # ---------------------------------------------------------------------------
 # In-game injuries (DEVPLAN.md Step 2.3). ``config.IN_GAME_INJURY_RATE`` is the shared
 # per-on-ice-player, per-shift base rate (already tuned to a "per shift" cadence, not HoopR's
@@ -462,7 +484,7 @@ _QUALITY_NEUTRAL = 0.5 * _ZONE_QUALITY_MEAN + 0.5 * _SHOT_TYPE_QUALITY_MEAN
 # season and read off the distribution report -- do not try to derive it, and do not tune it on a
 # short sample, which at this sensitivity is noisy enough to suggest cliffs a full season shows
 # are not there.
-SAVE_PROB_ANCHOR = 0.958
+SAVE_PROB_ANCHOR = 0.961
 
 # How much better/worse than average a look has to be to move the outcome. Unchanged in magnitude
 # from the original tuning -- only their centering (see _QUALITY_NEUTRAL) was wrong.
@@ -651,6 +673,17 @@ class _TeamState:
         self._shift_ordinal = 0
         self._st_choice_ordinal = -1
         self._st_use_second = False
+
+        # This team's own shift clock. ``shift_elapsed`` is how long the current on-ice unit has
+        # been out; ``shift_target`` is how long it intends to stay. They are per TEAM, not shared,
+        # so the two benches change independently -- and a unit that is due to change but pinned in
+        # its own zone simply keeps accumulating elapsed time (and fatigue) until it can get off.
+        self.shift_elapsed: float = 0.0
+        self.shift_target: float = config.SHIFT_SECONDS_TARGET
+        # Total shifts this team completed, and how many of those ran past their intended length
+        # because the team could not change -- a directly observable "death shift" counter.
+        self.shifts_completed: int = 0
+        self.trapped_shifts: int = 0
         self.on_ice: List[int] = []           # 5 (or 6, pulled-goalie) skaters, current shift
 
         # Line-juggling AI (DEVPLAN.md Step 2.8): the line-slot/pair-slot index actually used
@@ -1048,6 +1081,16 @@ class GameSim:
         # docstring. ``None`` only before the very first faceoff of the game is resolved.
         self._pending_faceoff: Optional[_TeamState] = None
 
+        # Which team currently has the puck. Instance state, not a local, because it has to survive
+        # across segment boundaries: a team that has possession when a segment ends still has it when
+        # the next begins, and possession is what decides which bench is allowed to change lines
+        # (see _can_change_lines -- the team pinned without the puck is the one that cannot get off).
+        # ``None`` only before the game's first faceoff resolves.
+        self._possession: Optional[_TeamState] = None
+        # Set when possession turns over or a faceoff is won, consumed by the next shot attempt: a
+        # rush chance belongs to a fresh zone ENTRY, not to the start of an arbitrary time segment.
+        self._rush_pending: bool = False
+
     # -- public API -----------------------------------------------------------
     def play(self) -> GameResult:
         """Play the whole game, driving the resumable generator to completion with no real
@@ -1295,6 +1338,66 @@ class GameSim:
         score_p = max(0.05, min(0.85, score_p))
         return self.rng.chance(score_p)
 
+    # -- per-team shift clocks -------------------------------------------------
+    def _draw_shift_target(self) -> float:
+        """How long a freshly-deployed unit intends to stay out, in seconds. Per team, per shift."""
+        return max(15.0, self.rng.gauss(config.SHIFT_SECONDS_TARGET, SHIFT_SECONDS_JITTER))
+
+    def _next_segment_length(self, clock: float) -> float:
+        """How far to advance play before re-checking line changes.
+
+        Runs to whichever bench is due first, so segments are naturally variable rather than a fixed
+        45-second horn. Floored at ``SEGMENT_SECONDS_MIN`` because a team can be past its target and
+        still unable to change (pinned in its own zone) -- without the floor, that team's "remaining"
+        would be zero or negative and the loop would spin without advancing the clock.
+        """
+        remaining = [max(0.0, state.shift_target - state.shift_elapsed)
+                     for state in (self.home, self.away)]
+        return max(SEGMENT_SECONDS_MIN, min(min(remaining), clock)) if clock > SEGMENT_SECONDS_MIN \
+            else clock
+
+    def _can_change_lines(self, state: _TeamState) -> bool:
+        """Whether ``state`` is able to change lines right now.
+
+        A stoppage lets anyone change -- that is what a faceoff is for. Otherwise only the team WITH
+        the puck can change on the fly; the team defending in its own zone is stuck out there, which
+        is the entire point of the death shift. The hard ``SHIFT_SECONDS_MAX`` escape hatch models
+        the whistle/icing/clear that eventually bails out even a badly trapped unit, and guarantees
+        the loop terminates.
+        """
+        if state.shift_elapsed >= SHIFT_SECONDS_MAX:
+            return True
+        if self._pending_faceoff is not None:
+            return True
+        if self._possession is state:
+            return True
+        # Without the puck, a change is possible but not guaranteed -- see DEFENSIVE_CHANGE_CHANCE.
+        return self.rng.chance(DEFENSIVE_CHANGE_CHANCE)
+
+    def _resolve_line_changes(self) -> None:
+        """Change lines for each bench that is both DUE and ABLE, independently.
+
+        Replaces the old ``_advance_shift_for_all()``, which advanced both teams' rotations at every
+        shift boundary regardless. A team that is due but pinned keeps its unit on the ice and its
+        ``shift_elapsed`` keeps climbing -- fatigue is time-based, so being trapped now costs
+        something real (see FATIGUE_GAIN_PER_SEC).
+        """
+        for state in (self.home, self.away):
+            if state.shift_elapsed < state.shift_target:
+                continue
+            if not self._can_change_lines(state):
+                continue
+            if state.shift_elapsed > state.shift_target + SEGMENT_SECONDS_MIN:
+                state.trapped_shifts += 1
+            state.shifts_completed += 1
+            game_state = self.strength.state_for(state.tid)
+            skaters = self.strength.skaters_on_ice_for(state.tid)
+            penalized = self.strength.penalized_player_ids(state.tid)
+            state.advance_shift(strength_state=game_state, skaters_needed=skaters,
+                                penalized_ids=penalized)
+            state.shift_elapsed = 0.0
+            state.shift_target = self._draw_shift_target()
+
     # -- period / shift loop ---------------------------------------------------
     def _play_period(self, length_secs: float, sudden_death: bool = False, is_regulation: bool = True):
         """Run shifts until ``length_secs`` of clock has elapsed (or, in sudden death, until a goal
@@ -1313,14 +1416,20 @@ class GameSim:
         # on-the-fly line change within one -- see _pending_attempt_gap).
         self._pending_attempt_gap = None
 
+        # Both benches start the period with a fresh unit and a fresh intended shift length.
+        for state in (self.home, self.away):
+            state.shift_elapsed = 0.0
+            state.shift_target = self._draw_shift_target()
+
         while clock > 0:
-            shift_secs = max(15.0, self.rng.gauss(config.SHIFT_SECONDS_TARGET, SHIFT_SECONDS_JITTER))
-            shift_secs = min(shift_secs, clock)
+            segment_secs = self._next_segment_length(clock)
             if is_regulation:
                 self._update_goalie_pulls(clock)
-            goal_scored = yield from self._play_shift(shift_secs)
-            clock -= shift_secs
-            self.game_secs += shift_secs
+            goal_scored = yield from self._play_shift(segment_secs)
+            clock -= segment_secs
+            self.game_secs += segment_secs
+            for state in (self.home, self.away):
+                state.shift_elapsed += segment_secs
             if goal_scored:
                 if sudden_death:
                     clock = 0.0   # sudden death ends immediately on a goal
@@ -1338,6 +1447,13 @@ class GameSim:
                 if clock > 0:
                     self._pending_faceoff = self._log_faceoff(FACEOFF_AFTER_GOAL)
 
+            # Line changes are resolved AFTER the segment, per team, and only for teams actually
+            # able to change (see _resolve_line_changes). This replaces the old unconditional
+            # _advance_shift_for_all() at the end of every shift, which changed both benches in
+            # lockstep whether or not either was due or able.
+            if clock > 0:
+                self._resolve_line_changes()
+
         # Regulation ends -- any pulled goalie returns for the next period/OT (a coach doesn't
         # carry an empty net into intermission; see _maybe_return_goalie's time-based fallback).
         if is_regulation:
@@ -1354,41 +1470,42 @@ class GameSim:
         self._log(EVENT_PERIOD_END, f"End of period {self.period}")
 
     def _play_shift(self, shift_secs: float):
-        """Resolve one shift: check for a drawn penalty, possession from the faceoff/rush, a
-        sequence of shot attempts (ticking the strength-state clock and reacting to mid-shift
-        strength-state expiry between attempts) until the shift clock elapses, a goal is scored,
-        or an icing/offside stoppage cuts the shift short, then apply ice-time/fatigue/injury
-        checks and rotate both teams' on-ice groups for next shift. Returns True (via
-        StopIteration value on `yield from` callers, or just the return value here) if a goal
-        was scored this shift. A generator only insofar as it yields at a goal stoppage (see
-        coach_session's docstring) -- for a shift with no goal it never yields.
+        """Resolve one SEGMENT of play: check for a drawn penalty, then a sequence of shot attempts
+        (ticking the strength-state clock and reacting to mid-shift strength-state expiry between
+        attempts) until the segment clock elapses, a goal is scored, or an icing/offside stoppage cuts
+        it short, then apply ice-time/fatigue/injury. Returns True (via StopIteration value on
+        `yield from` callers, or just the return value here) if a goal was scored. A generator only
+        insofar as it yields at a goal stoppage (see coach_session's docstring) -- for a segment with
+        no goal it never yields.
 
-        Faceoff-gated possession (DEVPLAN.md Step 2.3): the shift's starting offense/defense is
-        now read from ``self._pending_faceoff`` (the ``_TeamState`` that just won the faceoff
-        that opened this shift -- set by ``_play_period``/``_draw_penalty``/this method's own
-        icing/offside handling) instead of a raw ``rng.chance(0.5)`` coin flip. Falls back to a
-        neutral coin flip only if no faceoff has been resolved yet (shouldn't happen in normal
-        play -- every shift boundary in this engine follows a faceoff -- but defensive rather
-        than crashing on an unexpected ``None``).
+        A segment is NOT a shift. Line changes are no longer this method's business: they are resolved
+        per team, after the segment, by ``_play_period``/``_resolve_line_changes``, because the two
+        benches change independently and a pinned team may not be able to change at all. What used to
+        be one shared shift is now one-or-more segments per team shift.
+
+        Possession lives on ``self._possession`` rather than in a local, precisely because it has to
+        survive across segment boundaries -- a team that has the puck when a segment ends still has it
+        when the next one starts, and that is what decides who is allowed to change lines. A faceoff
+        (period start, after a goal, an icing/offside stoppage, a penalty) overrides it with the
+        winner; the ``rng.chance(0.5)`` fallback only fires if no faceoff has ever been resolved,
+        which shouldn't happen in normal play but is handled rather than crashing.
         """
-        self._check_for_penalties()
+        self._check_for_penalties(shift_secs)
 
         if self._pending_faceoff is not None:
-            offense, defense = (self._pending_faceoff,
-                               self.away if self._pending_faceoff is self.home else self.home)
-        else:
-            offense, defense = (self.home, self.away) if self.rng.chance(0.5) else (self.away, self.home)
+            self._possession = self._pending_faceoff
+            # A faceoff win is a fresh entry, so the next attempt can be a rush chance.
+            self._rush_pending = True
+        elif self._possession is None:
+            self._possession = self.home if self.rng.chance(0.5) else self.away
+            self._rush_pending = True
+        offense = self._possession
+        defense = self.away if offense is self.home else self.home
         self._pending_faceoff = None   # consumed -- the NEXT stoppage sets a fresh one
 
         elapsed = 0.0
         goal_scored = False
         stoppage = False   # set True by an icing/offside mid-shift stoppage -- ends the shift
-        # Only the first shot attempt of a shift can be a rush chance off the initial entry, and
-        # only some of those actually are -- most shifts open with established zone play or a puck
-        # battle (see RUSH_ATTEMPT_FRACTION). A puck-moving defending goalie can additionally cut
-        # the entry off before the rush develops (DEVPLAN.md Step 2.x); that check is second so a
-        # shift that was never a rush anyway doesn't spend an RNG draw on it.
-        rush = self.rng.chance(RUSH_ATTEMPT_FRACTION) and not self._goalie_negates_rush(defense)
         rebound = False   # set True for the attempt immediately following an unconverted on-goal shot
         while elapsed < shift_secs:
             # An interval left pending when the previous shift's clock expired resumes here
@@ -1426,8 +1543,19 @@ class GameSim:
                 self._pending_faceoff = self._log_faceoff(stoppage_type)
                 break
 
+            # A rush chance belongs to a fresh ZONE ENTRY, so ``_rush_pending`` is consumed by the
+            # first ATTEMPT after possession turns over or a faceoff is won -- not by the start of a
+            # segment. Segments are an arbitrary slice of continuous play and most of them contain no
+            # attempt at all, so consuming the flag per segment burned it on empty ones and collapsed
+            # the rush share from ~23% to 4.6%. Only some entries develop into a real rush
+            # (RUSH_ATTEMPT_FRACTION); a puck-moving defending goalie cuts off some of the rest
+            # (DEVPLAN.md Step 2.x), checked second so an entry that was never a rush anyway doesn't
+            # spend an RNG draw on it.
+            rush = (self._rush_pending
+                    and self.rng.chance(RUSH_ATTEMPT_FRACTION)
+                    and not self._goalie_negates_rush(defense))
+            self._rush_pending = False
             outcome = self._resolve_shot_attempt(offense, defense, rush=rush, rebound=False)
-            rush = False
             # A rebound is an IMMEDIATE extra look for the same team -- a scramble in front of the
             # net, not a fresh entry a full attempt-cycle later. Resolve it (and any short chain of
             # further rebounds) right now, bounded by MAX_REBOUND_CHAIN so a hot streak of saves
@@ -1447,21 +1575,29 @@ class GameSim:
             # ensuing possession battle toward the team that threw it (a forced turnover), which is
             # how checking/strength earn a real gameplay effect rather than being a counting stat.
             separated = self._resolve_hits(offense, defense)
-            # Otherwise possession may flip for the remainder of the shift (a turnover-ish flow
-            # abstraction -- MVP doesn't model discrete turnovers/zone-entries as separate events,
-            # per this step's scope).
+            # Otherwise possession may flip (a turnover-ish flow abstraction -- discrete
+            # turnovers/zone entries are still not modeled as separate events). The flip is written
+            # back to self._possession, not just to the locals, because possession has to survive the
+            # end of this segment: it decides which bench is allowed to change lines next, and a team
+            # that has lost the puck in its own zone is exactly the team that cannot get off.
             flip_p = config.HIT_TURNOVER_FLIP_P if separated else 0.5
             if self.rng.chance(flip_p):
                 offense, defense = defense, offense
+                self._possession = offense
+                self._rush_pending = True   # the new attacking team is entering the zone
 
         self._apply_ice_time(shift_secs)
-        self._injury_check()
-        # self._pending_faceoff is already correctly set for the NEXT shift by this point: an
+        self._injury_check(shift_secs)
+        # self._pending_faceoff is already correctly set for the NEXT segment by this point: an
         # icing/offside stoppage set it directly (see the loop above), a goal will get one from
-        # _play_period's post-goal branch, and a clock-expiry shift with no stoppage leaves it
-        # None until the next period/OT boundary's own _log_faceoff call sets it -- no action
-        # needed here in any case.
-        self._advance_shift_for_all()
+        # _play_period's post-goal branch, and a clock-expiry segment with no stoppage leaves it
+        # None -- which is what tells _can_change_lines that play is live and only the team with the
+        # puck may change.
+        #
+        # Line changes are deliberately NOT advanced here any more. _play_period calls
+        # _resolve_line_changes() after this returns, which changes only the benches that are both
+        # due and able. Calling _advance_shift_for_all() here (the old behavior) is what made both
+        # teams change in lockstep on a shared horn.
         return goal_scored
 
     def _goalie_negates_rush(self, defense: _TeamState) -> bool:
@@ -1592,21 +1728,28 @@ class GameSim:
         self._refresh_on_ice_for_all()
 
     # -- penalties / strength state ---------------------------------------------
-    def _check_for_penalties(self) -> None:
-        """Roll both teams' current on-ice group for a drawn penalty at the start of a shift
-        (special_teams.roll_for_penalty, scaled by discipline + coach aggression). At most one
-        penalty per team per shift is checked here -- a simple, clearly-provisional cadence
-        (DEVPLAN.md flags exact tuning as an open item), not a per-attempt penalty check.
+    def _check_for_penalties(self, segment_secs: float) -> None:
+        """Roll both teams' current on-ice group for a drawn penalty over ``segment_secs`` of play
+        (special_teams.roll_for_penalty, scaled by discipline + coach aggression).
+
+        The underlying probability is expressed PER SHIFT (config.PENALTY_BASE_PROB_PER_SHIFT), so it
+        is scaled by ``segment_secs / config.SHIFT_SECONDS_TARGET`` here. Play now advances in
+        variable-length segments rather than fixed shifts, and rolling once per segment at the
+        unscaled per-shift probability would inflate the penalty rate by however many segments a
+        shift happens to take. A penalty is a continuous-time hazard, so time-proportional is also
+        the more correct model, not just the compatible one.
 
         ``self.playoff_penalty_multiplier`` (DEVPLAN.md Step 2.6's "Playoff officiating/
         discipline mode" design note) is threaded straight through to
         ``roll_for_penalty``/``penalty_probability_for_shift`` -- a strict 1.0 no-op for every
         non-playoff game, only < 1.0 for a playoff game under "realistic" mode (see
         ``GameSim.__init__``)."""
+        time_scale = segment_secs / config.SHIFT_SECONDS_TARGET
         for state in (self.home, self.away):
             on_ice_players = [state.players[pid] for pid in state.on_ice if pid in state.players]
             if ST.roll_for_penalty(self.rng, on_ice_players, state.coach_profile,
-                                   playoff_multiplier=self.playoff_penalty_multiplier):
+                                   playoff_multiplier=self.playoff_penalty_multiplier,
+                                   time_scale=time_scale):
                 self._draw_penalty(state, on_ice_players)
 
     def _draw_penalty(self, offending: _TeamState, on_ice_players: List[Player]) -> None:
@@ -1654,10 +1797,15 @@ class GameSim:
         return False
 
     def _advance_shift_for_all(self) -> None:
-        """Advance BOTH teams' normal round-robin rotation to the next line/pair and set the
-        on-ice group for the upcoming shift. Call this exactly once per real shift boundary
-        (game start, and once at the end of every ``_play_shift``) -- see
-        ``_TeamState.advance_shift``'s docstring for why this must not be called mid-shift."""
+        """Put an opening unit on the ice for BOTH teams. GAME START ONLY.
+
+        This used to also run at the end of every shift, which is exactly what made both benches
+        change in lockstep on a shared horn. Mid-game changes now go through
+        ``_resolve_line_changes``, which advances each team's rotation independently and only when
+        that team is both due and able to change. Do not call this from the period loop again.
+
+        See ``_TeamState.advance_shift``'s docstring for why it must not be called mid-shift.
+        """
         for state in (self.home, self.away):
             game_state = self.strength.state_for(state.tid)
             skaters = self.strength.skaters_on_ice_for(state.tid)
@@ -2440,11 +2588,16 @@ class GameSim:
                     + shift_secs * FATIGUE_GAIN_PER_SEC_GOALIE)
 
     # -- in-game injuries (DEVPLAN.md Step 2.3) -------------------------------
-    def _injury_check(self) -> None:
-        """Roll every currently-on-ice SKATER (both teams) for an in-game injury, once per
-        shift -- HoopR's ``_injury_check`` sport-agnostic shape (per-on-court/on-ice-player,
-        per-possession/per-shift roll), ported to hockey's shift-based cadence rather than
-        basketball's possession-based one (see this module's docstring). Goalies are
+    def _injury_check(self, segment_secs: float) -> None:
+        """Roll every currently-on-ice SKATER (both teams) for an in-game injury over
+        ``segment_secs`` of play -- HoopR's ``_injury_check`` sport-agnostic shape
+        (per-on-court/on-ice-player, per-possession/per-shift roll), ported to hockey's shift-based
+        cadence rather than basketball's possession-based one (see this module's docstring).
+
+        ``config.IN_GAME_INJURY_RATE`` is a PER-SHIFT rate, so it is scaled by
+        ``segment_secs / config.SHIFT_SECONDS_TARGET``: play advances in variable-length segments
+        now, and rolling once per segment at the per-shift rate would multiply season-long injuries
+        by however many segments a shift takes. Goalies are
         deliberately excluded (matches HoopR's own scope -- that function only ever iterates
         skater-equivalents; a goalie-injury/backup-swap interaction would cross into Step 2.2's
         goalie-rotation territory, out of bounds for this step).
@@ -2455,14 +2608,15 @@ class GameSim:
         into ``self.result.injuries`` for ``sim/season.py``'s ``_apply_result`` to apply onto
         ``Player.injury`` once the game is over.
         """
+        time_scale = segment_secs / config.SHIFT_SECONDS_TARGET
         for state in (self.home, self.away):
             for pid in list(state.on_ice):
                 player = state.players.get(pid)
                 if player is None or pid in state.unavailable:
                     continue
-                rate = config.IN_GAME_INJURY_RATE * (1.0 + (INJURY_STAMINA_ANCHOR
-                                                            - player.rating("stamina", 70))
-                                                      * INJURY_STAMINA_SLOPE)
+                rate = config.IN_GAME_INJURY_RATE * time_scale * (
+                    1.0 + (INJURY_STAMINA_ANCHOR - player.rating("stamina", 70))
+                    * INJURY_STAMINA_SLOPE)
                 if self.rng.chance(max(0.0, rate)):
                     games, severity = self._injury_severity()
                     self.result.injuries.append((pid, games, "in-game injury", severity))

@@ -162,24 +162,39 @@ Found during calibration, real but not yet worth a target band:
   does. So a line's realized even-strength time is its share of the ~66 even-strength shifts, not of
   all ~80. Any share retuning has to account for that rather than assuming share × 61 minutes.
 
-- **Shifts are a shared 45-second horn.** `_play_period` draws ONE `shift_secs` and `_play_shift`
-  changes BOTH teams' lines at the same boundary. Real hockey changes on the fly, per team and
-  independently: a team dominating possession swaps players a couple at a time, while the defending
-  unit is pinned in its own zone and cannot get off — the "death shift". Modeling this needs the
-  period loop restructured around per-team shift clocks with the defending team's change *gated* on
-  escaping the zone. Fatigue had to become real first (below), or being trapped out there would cost
-  nothing. Tracked as the remaining piece of step 4d.
-
-  Note for whoever does it: `PENALTY_BASE_PROB_PER_SHIFT` and `IN_GAME_INJURY_RATE` are both
-  *per-shift* rates. Changing what a shift is rescales both — the same coupling that silently
-  tripled the hit rate when shot volume was corrected. Make them time-proportional rather than
-  per-iteration.
-
 - **Staggered individual line changes** (as opposed to per-team whole-unit changes) are a deliberate
   follow-up, not an oversight. Real changes send players out a couple at a time so a line drifts
   apart and re-forms. Doing it properly means on-ice groups stop being line+pair concatenations,
   which touches chemistry, line synergy and the PP/PK unit logic — worth its own step once per-team
   clocks are calibrated.
+
+### Fixed 2026-07-25 — the shared 45-second horn
+
+Play used to advance one shared "shift" at a time: `_play_period` drew ONE `shift_secs` and
+`_play_shift` changed **both** teams' lines at that same boundary. That is mite hockey, where a horn
+blows and everyone comes off. Play now advances in variable-length **segments** — a segment runs
+until the next bench is due — with each team keeping its own shift clock and a change granted only
+when that team is actually able to make one.
+
+Three things this surfaced that are worth remembering:
+
+- **"No puck, no change" is too strict.** The first version gated a change purely on possession, and
+  it stretched the mean shift from the 45s target to **63s** with 43% of all shifts running long.
+  Not every second without the puck is a defensive-zone lockdown — a team usually clears, or the puck
+  goes to neutral ice. `DEFENSIVE_CHANGE_CHANCE` (0.55) restores a 48s mean with an 11% tail of
+  genuinely trapped shifts, which is the real distribution: most shifts normal, a right-skewed tail.
+- **A rush belongs to a zone entry, not to a clock boundary.** The pending-rush flag was first
+  consumed at the start of each segment, but most segments contain no shot attempt at all, so the
+  flag was burned on empty ones and the rush share collapsed from ~23% to **4.6%**. It is now
+  consumed by the first *attempt* after possession turns over.
+- **Both per-shift hazard rates had to become time-proportional.** `PENALTY_BASE_PROB_PER_SHIFT` and
+  `IN_GAME_INJURY_RATE` are per-*shift*; rolling them once per segment unscaled would have multiplied
+  both by however many segments a shift takes. Verified after: PIM/team/game 5.4 against 5.2 before
+  the change. This is the third time this coupling has bitten in one round (hits, blocks, now these).
+
+The death shift now costs something real, which is the whole point: a unit past its intended shift
+length carries **21 more fatigue points** than one within it (65.6 vs 44.6, realization 0.934 vs
+0.955), so being pinned in your own zone measurably degrades you.
 
 ### Fixed 2026-07-25 — recorded because the failure mode recurs
 

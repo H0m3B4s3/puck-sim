@@ -112,12 +112,20 @@ def penalty_probability_for_shift(on_ice_players: List[Player],
 
 
 def roll_for_penalty(rng, on_ice_players: List[Player], coach_profile: CoachProfile, *,
-                      playoff_multiplier: float = 1.0) -> bool:
+                      playoff_multiplier: float = 1.0, time_scale: float = 1.0) -> bool:
     """Convenience wrapper: roll the rng against penalty_probability_for_shift's result.
 
-    ``playoff_multiplier`` passes straight through -- see that function's docstring."""
-    return rng.chance(penalty_probability_for_shift(
-        on_ice_players, coach_profile, playoff_multiplier=playoff_multiplier))
+    ``playoff_multiplier`` passes straight through -- see that function's docstring.
+
+    ``time_scale`` scales the per-shift probability to however much play the caller is resolving.
+    The engine advances in variable-length segments rather than fixed shifts, so it passes
+    ``segment_secs / config.SHIFT_SECONDS_TARGET``; a caller resolving exactly one shift's worth
+    leaves it at 1.0. Without it, rolling once per segment at the full per-shift probability would
+    inflate the penalty rate by however many segments a shift takes.
+    """
+    probability = penalty_probability_for_shift(
+        on_ice_players, coach_profile, playoff_multiplier=playoff_multiplier)
+    return rng.chance(max(0.0, min(1.0, probability * time_scale)))
 
 
 def pick_offending_player(rng, on_ice_players: List[Player]) -> Optional[Player]:
