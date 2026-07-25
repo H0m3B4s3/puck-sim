@@ -162,23 +162,60 @@ Found during calibration, real but not yet worth a target band:
   does. So a line's realized even-strength time is its share of the ~66 even-strength shifts, not of
   all ~80. Any share retuning has to account for that rather than assuming share × 61 minutes.
 
-- **In-game fatigue is inert for skaters, and is never an input to deployment.** Two separate
-  problems found 2026-07-25:
-  - `FATIGUE_GAIN_PER_SEC = 0.028` against `FATIGUE_RECOVER_PER_SEC = 0.05`. Break-even is
-    `0.028·f = 0.05·(1−f)`, i.e. a player only accumulates fatigue if he is on the ice for **more
-    than 64% of the game**. No skater is — a first-pair defenseman plays ~40%. So every skater sits
-    at ~0 fatigue all game and `fatigue_realization` returns 1.0 on essentially every shot. The
-    peak of 40 measured in a game belongs to a *goalie*, who never leaves the ice and therefore
-    never recovers. For a four-line rotation at 25% ice time, equilibrium needs
-    `gain = 3 × recover`; the ratio is currently inverted at `gain = 0.56 × recover`.
-  - Even with real fatigue, nothing reads it when choosing a line. `build_deployment_pattern` is a
-    fixed allocation, so a first-line forward who just played two minutes of power play can be sent
-    straight back out for a 5v5 shift. There is no cost to double-shifting and no way for a coach to
-    say "line 1 is gassed, roll line 3."
+- **Shifts are a shared 45-second horn.** `_play_period` draws ONE `shift_secs` and `_play_shift`
+  changes BOTH teams' lines at the same boundary. Real hockey changes on the fly, per team and
+  independently: a team dominating possession swaps players a couple at a time, while the defending
+  unit is pinned in its own zone and cannot get off — the "death shift". Modeling this needs the
+  period loop restructured around per-team shift clocks with the defending team's change *gated* on
+  escaping the zone. Fatigue had to become real first (below), or being trapped out there would cost
+  nothing. Tracked as the remaining piece of step 4d.
 
-  Both are prerequisites for the per-team/possession-gated shift model: a "death shift" where the
-  defending team cannot change has no consequence at all if being stuck out there does not tire
-  anyone.
+  Note for whoever does it: `PENALTY_BASE_PROB_PER_SHIFT` and `IN_GAME_INJURY_RATE` are both
+  *per-shift* rates. Changing what a shift is rescales both — the same coupling that silently
+  tripled the hit rate when shot volume was corrected. Make them time-proportional rather than
+  per-iteration.
+
+- **Staggered individual line changes** (as opposed to per-team whole-unit changes) are a deliberate
+  follow-up, not an oversight. Real changes send players out a couple at a time so a line drifts
+  apart and re-forms. Doing it properly means on-ice groups stop being line+pair concatenations,
+  which touches chemistry, line synergy and the PP/PK unit logic — worth its own step once per-team
+  clocks are calibrated.
+
+### Fixed 2026-07-25 — recorded because the failure mode recurs
+
+**In-game fatigue was inert for skaters and was never an input to deployment.** Two separate bugs:
+
+- `FATIGUE_GAIN_PER_SEC = 0.028` against `FATIGUE_RECOVER_PER_SEC = 0.05`. Linear break-even sits at
+  `recover / (gain + recover)` = **64% ice time**, and no skater plays that much — a first-pair
+  defenseman plays ~40%. So every skater sat at ~0 fatigue all game and `fatigue_realization`
+  returned 1.0 on essentially every shot. The one player who did tire was the *goalie*, who never
+  leaves the ice and therefore never reaches the recovery branch.
+- Nothing read fatigue when choosing a line, so a first line could go straight back out after its
+  forwards had just killed two minutes on the power play. Measured: **27% of the 5v5 shifts
+  immediately following a power play reused 3 or more of the players who had just been on the PP
+  unit**, at no cost given the above.
+
+The fix that matters beyond the constants: **recovery had to become exponential.** Linear recovery
+cannot satisfy both requirements at once — tuned so a 45-second shift moves fatigue enough to
+matter, break-even lands near 23%, and *every* player above that share accumulates without bound and
+pins at the 100 ceiling. That flattens exactly the differences fatigue exists to create. Decaying a
+fraction of current fatigue per second gives each ice-time share its own equilibrium, and is better
+physiology besides. Measured after:
+
+| | TOI | fatigue at shift start | at shift end | realization at end |
+|---|---|---|---|---|
+| 1st-pair D | 25.7 | 29.3 | 67.9 | 0.932 |
+| 1st-line W | 20.6 | 19.6 | 58.0 | 0.942 |
+| 4th-line F | 9.1 | 1.2 | 42.0 | 0.958 |
+| goalie | 60 | — | 39.6 | — |
+
+Nobody pinned; post-PP reuse of 3+ PP players fell to 7%; the fatigue override fires on 7.3% of line
+selections, so the configured shift shares remain the coach's plan.
+
+The goalie rate also had to be **decoupled** from the skater rate (it was `FATIGUE_GAIN_PER_SEC *
+0.4`). Goalies never recover in-game, so their fatigue is a one-way ramp scaled to 60 minutes, not to
+a 45-second shift — raising the skater rate 10x to make skater fatigue exist would otherwise have
+pinned every goalie before the first intermission.
 
 **A rule this round learned the hard way:** any constant expressed *per shot-attempt cycle* is
 coupled to shot volume, and correcting volume rescales all of them silently. Hits were tuned at
