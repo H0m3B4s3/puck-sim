@@ -166,9 +166,12 @@ def test_penalty_kill_units_are_still_full_size():
 # End to end
 # ---------------------------------------------------------------------------
 def test_defensemen_take_a_realistic_share_of_shots_and_convert_far_worse():
+    """Sampled over 150 games. Ten games yield only ~155 defense shots on goal, and at a true 6.5%
+    conversion that estimate swings across the whole 5-9% range run to run -- it duly read 9.0% on
+    a change that only shifted the RNG stream. At 150 games (~2200 D shots) it reads 6.5%."""
     world = build_world(seed=7)
     d_sog = f_sog = d_goals = f_goals = 0
-    for i in range(10):
+    for i in range(150):
         result = GameSim(world, i % 32, (i + 9) % 32).play()
         for pid, line in result.skater_box.items():
             if world.player(pid).position == "D":

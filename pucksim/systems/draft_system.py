@@ -158,7 +158,8 @@ def setup_draft(world: World, rounds: int = DRAFT_ROUNDS,
     num_teams = len(world.teams)
     size = pool_size if pool_size is not None else _default_pool_size()
 
-    pool = generate_prospect_pool(world.rng, world.new_pid, size=size)
+    pool = generate_prospect_pool(world.rng, world.new_pid, size=size,
+                                  used_names=world.used_player_names)
     for p in pool:
         world.add_player(p)
     pool_ids = [p.pid for p in pool] + reentry_candidates(world)

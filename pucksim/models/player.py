@@ -111,6 +111,13 @@ class Player:
     role: Optional[str] = None
 
     secondary_position: Optional[str] = None
+    # Where he's from, as a `gen/namegen.NATIONALITY_WEIGHTS` code ("CAN", "CAN-QC", "SWE", ...).
+    # Set at generation, where it is drawn BEFORE the name and picks which pool both halves of the
+    # name come from -- the old flat pools drew first and last independently and produced men called
+    # "Miro Gagnon". Carries no gameplay effect in v1; it exists so the name is coherent and so a
+    # roster/UI can say something true about a player. Defaults to "CAN" so saves written before the
+    # field existed load unchanged (the same treatment `shoots` and `role` get).
+    nationality: str = "CAN"
     shoots: str = "L"                    # "L" or "R" -- shot/stick handedness.
     # Distinct from `position`: two players can both be "D" but shoot opposite
     # hands, which matters for pairing (a lefty/righty D pair covers the blue
@@ -264,6 +271,7 @@ class Player:
             "age": self.age,
             "position": self.position,
             "secondary_position": self.secondary_position,
+            "nationality": self.nationality,
             "shoots": self.shoots,
             "ratings": dict(self.ratings),
             "potential": self.potential,
@@ -301,6 +309,7 @@ class Player:
             age=d["age"],
             position=position,
             secondary_position=d.get("secondary_position"),
+            nationality=d.get("nationality", "CAN"),
             shoots=d.get("shoots", "L"),
             ratings=ratings,
             potential=d.get("potential", RATING_MIN),

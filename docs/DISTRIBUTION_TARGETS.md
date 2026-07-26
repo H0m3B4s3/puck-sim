@@ -341,6 +341,89 @@ estimate clears that threshold about one run in twenty, and duly did on a change
 the RNG stream. Now sampled over 200 games. **Assert rates on samples big enough to carry them** —
 widening the band would have hidden the real 9%.
 
+### Fixed 2026-07-26 — the name pool read as a current NHL roster
+
+Not a distribution metric, but the third of the three playtest reports this round addressed, and it
+records a rule worth keeping.
+
+223 first / 289 last names in two flat tuples, drawn independently, against 700+ players per league.
+Now 792 first / 2632 last across 12 nationality pools — **205,000+ coherent combinations** — with
+nationality drawn *first* so both halves of a name come from the same pool. The old independent
+draws produced men called "Miro Gagnon" and "Jean-Sebastien Ovechkin"; a league now reads
+"Heikki Ojala", "Jesper Bergsten", "Manuel Schreiber".
+
+**The purge rule is distinctiveness, not overlap**, and that distinction is the whole point. The old
+pools carried an explicit block commented "recognizable hockey name seed set" — McDavid, Crosby,
+Draisaitl, Ovechkin, Pastrnak, Selanne, Chara — which is what made generated teams look like a
+shuffled real NHL. All of those are gone. What is deliberately *not* attempted is eliminating all
+overlap with real NHL surnames, because that goal is incoherent: the common surnames of every hockey
+nation have someone in the league, and removing every one of them leaves pools of nothing but rare
+names, which reads *more* artificial. A name is out if it reads as a reference to one specific real
+person (`McDavid`, `Kaprizov`, `Lemieux`, and also `Coolidge`, `Kafka`, `Earnhardt`); it stays if it
+reads as an ordinary name someone real happens to have (`Smith`, `Tremblay`, `Roy`, `Novak`).
+
+Applying that rule caught a mistake in the first pass: the five most common Swedish surnames
+(Andersson, Johansson, Karlsson, Nilsson, Eriksson) had all been dropped along with the marquee
+names, which is exactly the over-correction the rule exists to prevent. Restored, with a test that
+now fails if someone "fixes" them out again.
+
+Two determinism choices worth knowing about:
+
+- Draws use `pool[int(rng.random() * len(pool))]`, not `rng.choice(pool)`. `random.choice` consumes
+  a variable number of bits by sequence length, so under it adding a *single name* shifted the whole
+  downstream RNG stream — ratings, ages, everything, since they share one `Rng`. Future name
+  additions are now stream-neutral. This round's restructuring shifts old seeds regardless; that is
+  a one-time cost paid to stop paying it.
+- `World.used_player_names` is derived, maintained in `add_player` (the single seam every generator
+  funnels through) and **rebuilt on load rather than serialized**, so it cannot drift out of sync
+  with `players` the way a persisted copy could, and old saves get a correct one free. Duplicate
+  full names in a generated league: 0, from 3.
+
+### Fixed 2026-07-26 — a team finished an offseason with three defensemen
+
+Found by the name-pool change, which shifted the RNG stream and moved which roster a seed produced.
+After one simulated offseason a team held **17 forwards and 3 defensemen** — twenty skaters, a legal
+headcount, and only two defense pairs (the second of them a single player). It surfaced as a
+four-man power-play unit; had it not, three defensemen would have played roughly forty minutes each
+for a season.
+
+`offseason.fill_rosters` was position-aware for goalies versus skaters and its docstring explained
+exactly why — "filling by *just add the best available free agent regardless of position* would
+never notice, since skater free agents vastly outnumber goalie free agents". The same sentence is
+true one level down: forward free agents outnumber defense free agents about two to one, so a team
+that lost blueliners got refilled with forwards. `config.FORWARDS_MIN`/`DEFENSEMEN_MIN` now gate
+`fill_rosters` and `enforce_roster_max` the same way `GOALIES_MIN` does. Every team now finishes an
+offseason with 6–10 defensemen.
+
+**`systems/callups.py` had the identical gap**, written three steps earlier in this same round: it
+triggered on total headcount only, so 15 forwards and 5 defensemen — twenty healthy skaters — looked
+perfectly fine to it. A position group below its own floor is now a trigger in its own right. That
+required fixing the send-down half too: a recall for a position shortfall pushes the roster over
+`SKATERS_MAX`, and an unrestricted send-down would hand back the man just recalled and do it again
+the next day forever. Restricted to groups with slack above their floor, it gives back a forward and
+settles.
+
+The lesson is not "check positions" but something narrower and more useful: **when a rule protects a
+whole by a minimum, check whether the whole has parts that need their own.** Goalies-vs-skaters was
+already understood here; forwards-vs-defensemen is the same shape and was missed in three separate
+places.
+
+The first version of the `fill_rosters` half was itself wrong, and instructively so. `fill_rosters`
+only ever *adds*, and `enforce_roster_max` runs immediately before it — so a team sitting at twenty
+skaters with five defensemen had a hole it could not fill by adding, and filling anyway put three
+teams one over `ROSTER_MAX` (which in turn broke the hard cap, since the extra bodies carry salary).
+A position floor on a full roster is a **swap**, not an addition: waive the worst surplus forward,
+sign the defenseman, exactly as a real GM does. Verified stable over three consecutive simulated
+seasons — every team legal, no short special-teams units, no cap breaches.
+
+**A fourth underpowered test**, same failure mode as the three before it:
+`test_defensemen_take_a_realistic_share_of_shots_and_convert_far_worse` sampled 10 games — about 155
+defense shots on goal — and asserted a conversion ratio. At a true 6.5% that estimate swings across
+5–9% run to run, and it duly read 9.0% on a change that only moved the RNG stream. At 150 games
+(~2200 D shots) it reads 6.5% and the ratio is a stable 0.70. Four times in one round is a pattern
+worth stating plainly: **a rate assertion needs a sample sized for the rate, and the fix is always
+more samples, never a wider band.**
+
 ## Changing a band
 
 These bands are **not** placeholders in the sense the engine's first-pass tuning constants are.
