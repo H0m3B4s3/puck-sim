@@ -82,11 +82,22 @@ A short follow-up round then added the manager-facing half: **call up** a signed
 the minors still counts a sheltered slice against the cap, so it's a real anchor), and a deeper
 draft class so undrafted players can develop their way into the league.
 
-940 backend tests pass; a full 82-game season plus a complete playoff bracket runs cleanly
-end-to-end, both headlessly and through the web app. Note the suite takes roughly twelve minutes —
-several tests sim multiple full seasons back to back. See [DEVPLAN.md](DEVPLAN.md) for the full
-step-by-step plan and status notes, including a handful of known non-blocking loose ends (search
-that file for "Known" and "not yet wired").
+A playtest calibration round then rebuilt the numbers underneath all of it. Team-level scoring had
+always been NHL-realistic while every layer beneath it was not: the sim ran ~45% of real shot volume
+and compensated with a ~2.3x inflated conversion rate, so goals per game came out right and
+individual totals were absurd — an 82-goal defenseman, single-digit-shot games, a quarter of all
+assists simply missing. Six systems turned out to be **inert or inverted rather than mistuned**, and
+every one was silent: power-play units were never built for any team, zone selection was weighted
+*by danger* so the crease was the commonest shot location, no skater could accumulate fatigue, and
+both teams changed lines on a shared horn. See
+[docs/DISTRIBUTION_TARGETS.md](docs/DISTRIBUTION_TARGETS.md) — that round's real deliverable is the
+instrument, not the constants.
+
+1111 backend tests pass (plus one deliberate `xfail`, a documented roster-depth gap); a full 82-game
+season plus a complete playoff bracket runs cleanly end-to-end, both headlessly and through the web
+app. **Note the suite takes roughly twenty minutes** — several tests sim multiple full seasons back
+to back. See [DEVPLAN.md](DEVPLAN.md) for the full step-by-step plan and status notes, including a
+handful of known non-blocking loose ends (search that file for "Known" and "not yet wired").
 
 ## Run the web app
 
@@ -146,3 +157,16 @@ python testkit/run_season.py --seed 1 --playoffs --standings-rule three_two_one_
 
 python testkit/run_season.py --help   # full option list
 ```
+
+Every run prints a **league distribution report** after the standings and scoring leaders: shot
+volume, shooting/save percentage, assists per goal, the defense share of scoring, leaderboard
+concentration and ice time by deployment slot, each against its target band with a PASS/FAIL marker.
+The bands live in `testkit/distribution.py` and the reasoning behind every one — including the fixes
+that produced them and the first diagnoses that were wrong — is in
+[docs/DISTRIBUTION_TARGETS.md](docs/DISTRIBUTION_TARGETS.md).
+
+**Read that document before changing any calibration constant.** It also records the two standing
+rules the round left behind: any constant expressed *per shot-attempt cycle* is coupled to shot
+volume and gets silently rescaled when volume changes, and a band is never widened to make a failing
+run pass — moving one requires the reasoning in the same commit. `tests/test_distribution.py` locks
+the whole table in, asserting the mean across the four seeds the bands were calibrated against.

@@ -331,11 +331,14 @@ The v1 stand-in (PR #61) was a *status*, not a place: a drafted player was unsig
 1. Concrete skater vs. goalie rating list — Step 1.4's first sub-task.
 2. Exact strength-state probability tuning — Step 2.1, provisional values, iterate post-launch.
 3. Resumable-generator-over-HTTP vs. simpler web session pattern — Step 2.9, recommend simpler for now.
-4. xG model weighting — Step 1.12 establishes event-context shape only; real tuning pass scheduled once a large simulated shot corpus exists (v1-late/v2-early).
+4. xG model weighting — Step 1.12 establishes event-context shape only; real tuning pass scheduled once a large simulated shot corpus exists (v1-late/v2-early). **Partly addressed 2026-07-26:** `_expected_goals` now reuses the save-probability shape with a zero skill gap, so xG tracks actual goals per position instead of drifting — see docs/DISTRIBUTION_TARGETS.md. The corpus-driven weighting pass is still open.
 5. Default standings rule for new leagues — "Standard," reversible/config-only (Step 1.1).
 6. `scripts/` vs `testkit/` naming — decided: `testkit/` (Step 0.1).
 7. Single `Player` dataclass vs. `Skater`/`Goalie` split — Step 1.6's first sub-task; recommend single dataclass.
 8. Playoff seeding (conference vs. league-wide) and draft order (straight vs. lottery) — both defaulted to the real-NHL-shaped choice (Steps 2.5/2.6), provisional.
+9. **Roster depth is ~120 skaters short of the NHL** (~721 play a game against ~830) — the largest known distribution gap. Needs in-season trades and waiver claims (Step 3.1 territory). Banded and `xfail`ed with a named cause in `tests/test_distribution.py` rather than softened; closing it will also drop the raw ≥20/30/40/50-goal counts by ~15%, which is the confound that made those unusable as bands. See docs/DISTRIBUTION_TARGETS.md (2026-07-26).
+10. **The scoring composite saturates at the 99 rating ceiling** — 23 forwards sit at composite ≥90, so the sim cannot distinguish the league's best finisher from its tenth-best and their goal totals cluster where the NHL's separate. No shot-weight lever reaches it: the compression is in the *input*, not the curve. Thinning the upper tail of player generation touches team strength, contracts, trades and awards — a ratings round, not a calibration constant.
+11. **Staggered individual line changes** — play advances in variable-length segments with per-team shift clocks (2026-07-25), but a change still swaps a whole unit. Real changes send players out a couple at a time. Doing it properly means on-ice groups stop being line+pair concatenations, which touches chemistry, line synergy and the PP/PK unit logic. Now actionable: the per-team clocks it was waiting on are calibrated and banded.
 
 ## Critical HoopR reference files (highest-value to read before implementing)
 

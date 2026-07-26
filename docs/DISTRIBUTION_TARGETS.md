@@ -192,6 +192,13 @@ Found during calibration, real but not yet worth a target band:
   curve. Fixing it means thinning the upper tail of player generation, which touches team strength,
   contracts, trades and awards — a ratings round, not a calibration constant.
 
+## Fix log
+
+Chronological, newest last. Each entry records what was wrong, the measurement that showed it, and —
+where the first attempt failed — what the wrong diagnosis was and why. The wrong diagnoses are the
+point: several of them were wrong in ways that recur, and reading them is cheaper than repeating
+them.
+
 ### Fixed 2026-07-25 — the shared 45-second horn
 
 Play used to advance one shared "shift" at a time: `_play_period` drew ONE `shift_secs` and
