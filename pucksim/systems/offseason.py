@@ -32,6 +32,8 @@ from typing import Dict, List, Optional, Tuple
 
 from pucksim.config import (
     CAP_GROWTH_RATE,
+    DEFENSEMEN_MIN,
+    FORWARDS_MIN,
     GOALIES_MAX,
     GOALIES_MIN,
     MINIMUM_SALARY,
@@ -203,6 +205,15 @@ def _skaters(world: World, pids) -> List[int]:
     return [pid for pid in pids if not world.players[pid].is_goalie]
 
 
+def _defensemen(world: World, pids) -> List[int]:
+    return [pid for pid in pids if world.players[pid].position == "D"]
+
+
+def _forwards(world: World, pids) -> List[int]:
+    return [pid for pid in pids
+            if not world.players[pid].is_goalie and world.players[pid].position != "D"]
+
+
 def enforce_roster_max(world: World) -> None:
     """Waive the lowest-rated players from any team over the roster maximum, INCLUDING any
     team whose overall headcount is legal but whose GOALIE sub-count alone exceeds
@@ -235,11 +246,20 @@ def enforce_roster_max(world: World) -> None:
         while len(team.roster) > ROSTER_MAX:
             goalies = _goalies(world, team.roster)
             skaters = _skaters(world, team.roster)
+            forwards = _forwards(world, team.roster)
+            defensemen = _defensemen(world, team.roster)
             candidates: List[int] = []
             if len(goalies) > GOALIES_MIN:
                 candidates.extend(goalies)
+            # Bug #1's reasoning goes one level deeper than goalie-vs-skater: waiving the worst
+            # skater outright can cut a team to five defensemen, and a team that cannot ice three
+            # pairs is exactly as illegal as one with a single goalie. Only offer a group that has
+            # slack above its OWN floor, and require the overall skater count to have slack too.
             if len(skaters) > SKATERS_MIN:
-                candidates.extend(skaters)
+                if len(forwards) > FORWARDS_MIN:
+                    candidates.extend(forwards)
+                if len(defensemen) > DEFENSEMEN_MIN:
+                    candidates.extend(defensemen)
             if not candidates:
                 # Every position group is already pinned at its own minimum -- can't legally
                 # shrink further even though total roster size is still over ROSTER_MAX (a
@@ -255,7 +275,13 @@ def enforce_roster_max(world: World) -> None:
             worst = min(_goalies(world, team.roster), key=lambda pid: world.players[pid].overall)
             world.release_player(worst)
         while len(_skaters(world, team.roster)) > SKATERS_MAX:
-            worst = min(_skaters(world, team.roster), key=lambda pid: world.players[pid].overall)
+            forwards = _forwards(world, team.roster)
+            defensemen = _defensemen(world, team.roster)
+            trimmable = ((forwards if len(forwards) > FORWARDS_MIN else [])
+                         + (defensemen if len(defensemen) > DEFENSEMEN_MIN else []))
+            if not trimmable:
+                break   # both groups pinned at their floors; see the roster-max loop above
+            worst = min(trimmable, key=lambda pid: world.players[pid].overall)
             world.release_player(worst)
 
 
@@ -302,10 +328,52 @@ def fill_rosters(world: World) -> None:
         return (_sign_best(team, pool_filter)
                 or _sign_best(team, pool_filter, allow_reserved=True))
 
+    def _make_room(team, keep_group: str) -> bool:
+        """Ensure there is a roster spot to sign into, waiving a surplus player if not.
+
+        Only reached by the two POSITION-GROUP loops below, and only because they can run on a
+        roster that is already full: `enforce_roster_max` caps the team at ROSTER_MAX/SKATERS_MAX
+        immediately before this function runs, so a team sitting at twenty skaters with only five
+        defensemen has a hole it cannot fill by adding. This function is what turns that into the
+        swap a real GM makes -- waive the worst forward, sign the defenseman -- rather than
+        signing anyway and finishing the offseason one over the legal maximum, which is exactly
+        what the first version of this fix did.
+
+        ``keep_group`` is the group being filled, so it is never itself raided.
+        """
+        if (len(team.roster) < ROSTER_MAX
+                and len(_skaters(world, team.roster)) < SKATERS_MAX):
+            return True
+        surplus: List[int] = []
+        if len(_goalies(world, team.roster)) > GOALIES_MIN:
+            surplus.extend(_goalies(world, team.roster))
+        forwards = _forwards(world, team.roster)
+        defensemen = _defensemen(world, team.roster)
+        if keep_group != "F" and len(forwards) > FORWARDS_MIN:
+            surplus.extend(forwards)
+        if keep_group != "D" and len(defensemen) > DEFENSEMEN_MIN:
+            surplus.extend(defensemen)
+        if not surplus:
+            return False
+        world.release_player(min(surplus, key=lambda pid: world.players[pid].overall))
+        return True
+
     for team in world.team_list():
         while len(_goalies(world, team.roster)) < GOALIES_MIN:
             if not _fill(team, lambda p: p.is_goalie):
                 break   # no goalies left in the league at all -- nothing more this can do
+        # Position groups BEFORE the raw skater count, and for the same reason goalies come
+        # before both: a team at SKATERS_MIN in headcount can still be unable to ice three
+        # defense pairs, and filling by "best available skater" never notices because forward
+        # free agents outnumber defense ones about two to one. See config.DEFENSEMEN_MIN for the
+        # 17-forwards-and-3-defensemen roster that this was found on.
+        while len(_defensemen(world, team.roster)) < DEFENSEMEN_MIN:
+            if not _make_room(team, "D") or not _fill(team, lambda p: p.position == "D"):
+                break
+        while len(_forwards(world, team.roster)) < FORWARDS_MIN:
+            if not _make_room(team, "F") or not _fill(
+                    team, lambda p: not p.is_goalie and p.position != "D"):
+                break
         while len(_skaters(world, team.roster)) < SKATERS_MIN:
             if not _fill(team, lambda p: not p.is_goalie):
                 break

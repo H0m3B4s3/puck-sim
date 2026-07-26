@@ -64,7 +64,7 @@ code, and ``systems/legacy.py`` is the sole owner of each dict's internal shape)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from pucksim.config import (
     DEFAULT_PLAYOFF_DISCIPLINE_MODE,
@@ -90,6 +90,12 @@ class World:
     players: Dict[int, Player] = field(default_factory=dict)
     schedule: List[Game] = field(default_factory=list)
     free_agents: List[int] = field(default_factory=list)      # pids with no team
+
+    # Every player name handed out so far, so `gen/namegen.random_name` can re-roll a collision
+    # (see `add_player`, which maintains this). DERIVED, not authoritative -- deliberately not
+    # serialized: `from_dict` rebuilds it from the loaded players, so it can never drift out of
+    # sync with `players` the way a persisted copy could, and old saves get a correct one free.
+    used_player_names: Set[str] = field(default_factory=set)
 
     draft_class: Optional[DraftClass] = None
 
@@ -183,8 +189,13 @@ class World:
         ``free_agents`` -- this keeps the free-agent list accurate for players
         constructed already-unsigned (e.g. undrafted prospects), without
         requiring callers to separately call ``release_player()``.
+
+        Every generation path in the codebase funnels through here, which is why this is also
+        where the used-name set is maintained: generators are handed ``used_player_names`` so a
+        draft class or free-agent wave doesn't hand out a name the league already has.
         """
         self.players[player.pid] = player
+        self.used_player_names.add(player.name)
         if player.team_id is None and player.pid not in self.free_agents:
             self.free_agents.append(player.pid)
 
@@ -278,6 +289,8 @@ class World:
         world.day = d.get("day", 0)
         world.teams = {int(t): Team.from_dict(td) for t, td in d.get("teams", {}).items()}
         world.players = {int(p): Player.from_dict(pd) for p, pd in d.get("players", {}).items()}
+        # Rebuilt rather than loaded -- see the field's comment.
+        world.used_player_names = {pl.name for pl in world.players.values()}
         world.schedule = [Game.from_dict(gd) for gd in d.get("schedule", [])]
         world.free_agents = list(d.get("free_agents", []))
         dc = d.get("draft_class")

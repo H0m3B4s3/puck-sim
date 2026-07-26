@@ -351,7 +351,7 @@ def _build_roster(world: World, team: Team) -> None:
         age = _random_age(rng)
         target = _random_target_overall(rng)
         player = generate_skater(world.new_pid(), rng, age, target, position=position,
-                                  cap=world.salary_cap)
+                                  cap=world.salary_cap, used_names=world.used_player_names)
         world.add_player(player)
         world.sign_player(player.pid, team.tid)
 
@@ -359,7 +359,7 @@ def _build_roster(world: World, team: Team) -> None:
         age = _random_age(rng)
         target = _random_target_overall(rng)
         player = generate_skater(world.new_pid(), rng, age, target, position="D",
-                                  cap=world.salary_cap)
+                                  cap=world.salary_cap, used_names=world.used_player_names)
         world.add_player(player)
         world.sign_player(player.pid, team.tid)
 
@@ -369,7 +369,8 @@ def _build_roster(world: World, team: Team) -> None:
         # distribution's center up slightly relative to skaters is
         # unnecessary for MVP -- reuse the same distribution for simplicity.
         target = _random_target_overall(rng)
-        goalie = generate_goalie(world.new_pid(), rng, age, target, cap=world.salary_cap)
+        goalie = generate_goalie(world.new_pid(), rng, age, target, cap=world.salary_cap,
+                                  used_names=world.used_player_names)
         world.add_player(goalie)
         world.sign_player(goalie.pid, team.tid)
 
@@ -426,7 +427,8 @@ def _seed_farm_systems(world: World) -> None:
         # AHL roster: older prospects, signed to two-way ELCs so they land in the pro tier.
         for i in range(INITIAL_AHL_PROSPECTS):
             player = generate_prospect(world.new_pid(), world.rng, _farm_position(world.rng, i),
-                                       age=world.rng.randint(lo_age, hi_age), overall_bonus=bonus)
+                                       age=world.rng.randint(lo_age, hi_age), overall_bonus=bonus,
+                                       used_names=world.used_player_names)
             world.add_player(player)
             prospects.enter_development(player, DEV_TIER_AHL, world.season_year,
                                         rights_tid=team.tid)
@@ -439,7 +441,8 @@ def _seed_farm_systems(world: World) -> None:
         # overage path, which is realistic).
         for i in range(INITIAL_JUNIOR_PROSPECTS):
             player = generate_prospect(world.new_pid(), world.rng, _farm_position(world.rng, i),
-                                       overall_bonus=bonus)
+                                       overall_bonus=bonus,
+                                       used_names=world.used_player_names)
             world.add_player(player)
             prospects.place_in_development(world, player, team.tid)
 
@@ -458,9 +461,11 @@ def _seed_free_agents(world: World) -> None:
     def _emit(target: int, age: int, position: str) -> None:
         pid = world.new_pid()
         if position == "G":
-            player = generate_goalie(pid, world.rng, age, target, cap=world.salary_cap)
+            player = generate_goalie(pid, world.rng, age, target, cap=world.salary_cap,
+                                      used_names=world.used_player_names)
         else:
-            player = generate_skater(pid, world.rng, age, target, position=position)
+            player = generate_skater(pid, world.rng, age, target, position=position,
+                                      used_names=world.used_player_names)
         player.contract = Contract.free_agent()   # playergen prices one; a FA has none
         world.add_player(player)
 

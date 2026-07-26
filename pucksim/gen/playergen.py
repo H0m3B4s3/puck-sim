@@ -47,7 +47,7 @@ high-overall goalie happens to also roll a high gk_consistency independently.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from pucksim.config import (GEN_SALARY_NOISE_MAX, GEN_SALARY_NOISE_MIN, MAX_CONTRACT_YEARS,
                              MINIMUM_SALARY, ROOKIE_CONTRACT_YEARS, SALARY_CAP_BASE)
@@ -510,7 +510,8 @@ def _generated_contract(rng: Rng, player: Player, cap: int) -> Contract:
 
 def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
                      position: Optional[str] = None,
-                     cap: int = SALARY_CAP_BASE) -> Player:
+                     cap: int = SALARY_CAP_BASE,
+                     used_names: Optional[Set[str]] = None) -> Player:
     """Generate one skater (non-goalie) Player at a given age/target overall.
 
     Picks a position from ``SKATER_POSITIONS`` if not given, an archetype
@@ -528,9 +529,11 @@ def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
     ratings = _build_calibrated_ratings(rng, position, target_overall, ALL_RATINGS, archetype)
     final_ovr = overall(position, ratings)
 
+    name, nationality = random_name(rng, used_names)
     player = Player(
         pid=pid,
-        name=random_name(rng),
+        name=name,
+        nationality=nationality,
         age=age,
         position=position,
         ratings=ratings,
@@ -548,7 +551,8 @@ def generate_skater(pid: int, rng: Rng, age: int, target_overall: int,
 
 
 def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int,
-                     cap: int = SALARY_CAP_BASE) -> Player:
+                     cap: int = SALARY_CAP_BASE,
+                     used_names: Optional[Set[str]] = None) -> Player:
     """Generate one goalie Player at a given age/target overall.
 
     Same shape as ``generate_skater`` but over ``ALL_GOALIE_RATINGS`` and the
@@ -568,9 +572,11 @@ def generate_goalie(pid: int, rng: Rng, age: int, target_overall: int,
     _apply_gk_consistency_rarity_gate(rng, ratings, overall(position, ratings))
     final_ovr = overall(position, ratings)
 
+    name, nationality = random_name(rng, used_names)
     goalie = Player(
         pid=pid,
-        name=random_name(rng),
+        name=name,
+        nationality=nationality,
         age=age,
         position=position,
         ratings=ratings,

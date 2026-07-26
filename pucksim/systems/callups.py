@@ -46,12 +46,12 @@ from pucksim import config
 from pucksim.models.world import World
 from pucksim.systems import prospects as P
 
-# How many skaters a full lineup wants at each position group: four forward lines and three
-# defense pairs. Derived from the same lineup shape ``models/team.py`` builds, so a team is
-# judged short at the group that is actually short rather than on headcount alone -- calling
-# up a defenseman does not help a team that is down to nine forwards.
-FORWARDS_WANTED = 12
-DEFENSE_WANTED = 6
+# A full lineup is four forward lines and three defense pairs; ``config.FORWARDS_MIN`` and
+# ``config.DEFENSEMEN_MIN`` are those numbers, shared with ``offseason.fill_rosters``, which had the
+# same gap this module now guards against (see DEFENSEMEN_MIN's comment for the 17-forwards-and-3-
+# defensemen roster that found it).
+FORWARDS_WANTED = config.FORWARDS_MIN
+DEFENSE_WANTED = config.DEFENSEMEN_MIN
 
 # A ceiling on churn per team per day. A team hit by a bus needs several bodies, but an
 # unbounded loop would empty a farm system into an NHL roster in one evening if some future
@@ -74,18 +74,23 @@ def _healthy_skaters(world: World, tid: int) -> Tuple[List[int], List[int]]:
 def _position_needed(forwards: List[int], defense: List[int]) -> Optional[str]:
     """Which position group to call up for, or ``None`` if the team can dress a legal lineup.
 
-    Total headcount is the gate (a team with 13 forwards and 5 defensemen can still dress 18
-    and play, if awkwardly), but WHICH group is short decides who gets the call.
+    Two independent triggers, and the second was missing at first. Total headcount below the
+    dressed limit is the obvious one. But a team can be at full headcount and still unable to ice
+    a lineup: 15 forwards and 5 defensemen is twenty skaters and only two and a half pairs. That
+    shape is exactly what ``offseason.fill_rosters`` used to produce, and a total-only trigger
+    sailed straight past it -- so a group below its own floor is a call-up trigger in its own
+    right, whatever the total says.
     """
-    if len(forwards) + len(defense) >= config.DRESSED_SKATERS_PER_GAME:
-        return None
+    short_total = len(forwards) + len(defense) < config.DRESSED_SKATERS_PER_GAME
     if len(defense) < DEFENSE_WANTED:
         return "D"
     if len(forwards) < FORWARDS_WANTED:
         return "F"
-    # Both groups are nominally full yet the total is still short -- only reachable if the
-    # lineup constants are ever retuned so 12+6 no longer sums to the dressed count. Take a
-    # forward, the position a lineup carries more of.
+    if not short_total:
+        return None
+    # Both groups are at their floors yet the total is still short -- only reachable if the lineup
+    # constants are retuned so 12+6 no longer sums to the dressed count. Take a forward, the
+    # position a lineup carries more of.
     return "F"
 
 
@@ -169,8 +174,15 @@ def run_send_downs(world: World, exclude_tid: Optional[int] = None) -> List[Tupl
             forwards, defense = _healthy_skaters(world, team.tid)
             if len(forwards) + len(defense) <= config.SKATERS_MAX:
                 break
+            # Only from a group with slack above its own floor. Without this the two halves of
+            # this module fight each other: a team at 5 D and 15 forwards gets a defenseman
+            # recalled (21 skaters), and an unrestricted send-down would immediately return the
+            # worst man on the roster -- often that same defenseman -- and call him up again the
+            # next day forever. Restricted, it gives back a forward and settles at 6 D and 14.
+            trimmable = ((forwards if len(forwards) > FORWARDS_WANTED else [])
+                         + (defense if len(defense) > DEFENSE_WANTED else []))
             # Worst first: send down the man a real team would send down.
-            candidates = sorted(forwards + defense, key=lambda p: world.players[p].overall)
+            candidates = sorted(trimmable, key=lambda p: world.players[p].overall)
             for pid in candidates:
                 if P.best_tier(world.players[pid]) is None:
                     continue

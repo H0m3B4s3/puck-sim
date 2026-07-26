@@ -95,9 +95,11 @@ export function PlayerModal({
           )}
         </div>
 
-        {/* Bio line: age, shoots, salary, team, injury */}
+        {/* Bio line: age, nationality, shoots, salary, team, injury */}
         <div style={{ fontSize: "0.9rem", color: "var(--color-muted)", marginBottom: "0.5rem" }}>
-          Age {player.age} · {player.shoots} · {formatSalary(player.salary)} × {player.years_remaining}y
+          Age {player.age}
+          {player.nationality_name && ` · ${player.nationality_name}`}
+          {" · "}{player.shoots} · {formatSalary(player.salary)} × {player.years_remaining}y
           {player.years_remaining > 0 && ` · ${player.two_way ? "two-way" : "one-way"}`}
           {player.team_abbrev && ` · ${player.team_abbrev}`}
           {player.team_name && ` (${player.team_name})`}

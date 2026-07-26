@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from pucksim.config import BURY_CAP_SHELTER
+from pucksim.gen.namegen import NATIONALITY_NAMES
 from pucksim.models.attributes import RATING_GROUPS, GOALIE_RATING_GROUPS
 from pucksim.models.player import Player
 from pucksim.models.world import World
@@ -45,6 +46,8 @@ class PlayerDetailDTO(BaseModel):
     age: int
     position: str
     secondary_position: Optional[str] = None
+    nationality: str = "CAN"
+    nationality_name: str = "Canada"
     shoots: str
     is_goalie: bool
     overall: int
@@ -267,6 +270,8 @@ def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDeta
         age=player.age,
         position=player.position,
         secondary_position=player.secondary_position,
+        nationality=player.nationality,
+        nationality_name=NATIONALITY_NAMES.get(player.nationality, player.nationality),
         shoots=player.shoots,
         is_goalie=player.is_goalie,
         overall=player.overall,

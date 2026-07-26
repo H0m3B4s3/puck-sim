@@ -389,6 +389,8 @@ export interface PlayerDetailDTO {
   age: number;
   position: string;
   secondary_position: string | null;
+  nationality: string;
+  nationality_name: string;
   shoots: string;
   is_goalie: boolean;
   overall: number;

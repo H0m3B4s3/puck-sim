@@ -35,23 +35,62 @@ def _injure(world, tid, count, severity="major", games=30):
 # ---------------------------------------------------------------------------
 # The trigger
 # ---------------------------------------------------------------------------
+def _injure_position(world, tid, count, forwards):
+    """Knock out ``count`` of ``tid``'s forwards (or defensemen). Returns the pids injured."""
+    wanted = (lambda p: p.position != "D") if forwards else (lambda p: p.position == "D")
+    hurt = [pid for pid in _skaters(world, tid) if wanted(world.player(pid))][:count]
+    for pid in hurt:
+        world.player(pid).injury = Injury("knee", 30, "major")
+    return hurt
+
+
 def test_no_callup_while_the_team_can_still_dress_a_legal_lineup():
-    """Two injuries on a 20-skater roster still leaves 18. A team does not burn a prospect's
-    development to sit him in the press box."""
+    """World gen carries 13 forwards and 7 defensemen, so there is exactly one spare at each
+    position. One forward down still leaves the twelve a four-line lineup needs, and a team does
+    not burn a prospect's development to sit him in the press box."""
     world = build_world(seed=7)
-    _injure(world, 0, 2)
+    _injure_position(world, 0, 1, forwards=True)
     before = len(world.team(0).roster)
     assert C.run_callups(world) == []
     assert len(world.team(0).roster) == before
 
 
-def test_a_third_injury_triggers_a_callup():
+def test_a_second_forward_injury_triggers_a_callup():
+    """Eleven forwards cannot ice four lines, so the recall fires even though 19 skaters is well
+    clear of the 18-man dress requirement -- the position floor is a trigger in its own right."""
     world = build_world(seed=7)
-    _injure(world, 0, 3)
+    _injure_position(world, 0, 2, forwards=True)
+    forwards, defense = C._healthy_skaters(world, 0)
+    assert len(forwards) + len(defense) >= config.DRESSED_SKATERS_PER_GAME, "total is not short"
     moves = C.run_callups(world)
     assert [tid for tid, _ in moves] == [0]
+    assert len(C._healthy_skaters(world, 0)[0]) >= C.FORWARDS_WANTED
+
+
+def test_a_position_group_below_its_floor_triggers_even_at_full_headcount():
+    """The trigger that was missing at first. ``offseason.fill_rosters`` used to produce rosters
+    like 17 forwards and 3 defensemen -- twenty skaters, and two and a half defense pairs. A
+    total-headcount-only trigger sails straight past that."""
+    world = build_world(seed=7)
+    _injure_position(world, 0, 2, forwards=False)      # 7 D -> 5, total still 18
     forwards, defense = C._healthy_skaters(world, 0)
     assert len(forwards) + len(defense) >= config.DRESSED_SKATERS_PER_GAME
+    assert len(defense) < C.DEFENSE_WANTED
+    moves = C.run_callups(world)
+    assert moves, "a two-pair defense corps should have drawn a recall"
+
+
+def test_callups_and_send_downs_do_not_oscillate():
+    """A recall for a position shortfall pushes the roster over SKATERS_MAX, so the send-down half
+    fires on the same roster. If it were unrestricted it would return the man just recalled and do
+    it again forever; restricted to groups with slack, it gives back a forward instead."""
+    world = build_world(seed=7)
+    _injure_position(world, 0, 2, forwards=False)
+    for _day in range(6):
+        C.run_daily_roster_moves(world)
+    forwards, defense = C._healthy_skaters(world, 0)
+    assert len(defense) >= C.DEFENSE_WANTED, f"settled at {len(defense)} defensemen"
+    assert len(forwards) + len(defense) <= config.SKATERS_MAX
 
 
 def test_callup_fills_the_position_group_that_is_actually_short():

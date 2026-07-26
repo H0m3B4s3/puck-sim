@@ -246,7 +246,8 @@ def open_international_market(world: World, count: int = None) -> List[int]:
     from pucksim.gen.prospectgen import generate_international_free_agents
 
     imports = generate_international_free_agents(
-        world.rng, world.new_pid, **({"count": count} if count is not None else {}))
+        world.rng, world.new_pid, used_names=world.used_player_names,
+        **({"count": count} if count is not None else {}))
     for player in imports:
         world.add_player(player)
     return [p.pid for p in imports]

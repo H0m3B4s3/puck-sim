@@ -33,7 +33,7 @@ is eligible for once he's drafted.
 """
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 
 from pucksim.config import DEFAULT_LEAGUE_ORIGIN, ROOKIE_AGE_RANGE
 from pucksim.gen.playergen import generate_goalie, generate_skater
@@ -256,7 +256,8 @@ def _pre_draft_bio(rng: Rng, player: Player) -> Dict:
 
 
 def generate_prospect(pid: int, rng: Rng, position: str = None, *,
-                       age: int = None, overall_bonus: int = 0) -> Player:
+                       age: int = None, overall_bonus: int = 0,
+                       used_names: Optional[Set[str]] = None) -> Player:
     """Generate one draft-eligible prospect Player.
 
     Delegates entirely to ``playergen.generate_skater``/``generate_goalie`` for
@@ -280,9 +281,10 @@ def generate_prospect(pid: int, rng: Rng, position: str = None, *,
                                    min(90, _random_prospect_target_overall(rng) + overall_bonus))))
 
     if position == "G":
-        player = generate_goalie(pid, rng, age, target_overall)
+        player = generate_goalie(pid, rng, age, target_overall, used_names=used_names)
     else:
-        player = generate_skater(pid, rng, age, target_overall, position=position)
+        player = generate_skater(pid, rng, age, target_overall, position=position,
+                                  used_names=used_names)
 
     # playergen prices a contract onto every player it makes, because its main caller
     # (leaguegen) is building an already-running league where everyone is signed. A draft
@@ -305,7 +307,8 @@ def generate_prospect(pid: int, rng: Rng, position: str = None, *,
     return player
 
 
-def generate_prospect_pool(rng: Rng, new_pid, size: int = PROSPECT_POOL_SIZE) -> List[Player]:
+def generate_prospect_pool(rng: Rng, new_pid, size: int = PROSPECT_POOL_SIZE,
+                            used_names: Optional[Set[str]] = None) -> List[Player]:
     """Generate a full draft class's worth of undrafted prospects.
 
     ``new_pid`` is a zero-arg callable (typically ``World.new_pid``) so id
@@ -323,10 +326,12 @@ def generate_prospect_pool(rng: Rng, new_pid, size: int = PROSPECT_POOL_SIZE) ->
 
     prospects: List[Player] = []
     for _ in range(n_goalies):
-        prospects.append(generate_prospect(new_pid(), rng, position="G"))
+        prospects.append(generate_prospect(new_pid(), rng, position="G",
+                                           used_names=used_names))
     for i in range(n_skaters):
         position = SKATER_POSITIONS[i % len(SKATER_POSITIONS)]
-        prospects.append(generate_prospect(new_pid(), rng, position=position))
+        prospects.append(generate_prospect(new_pid(), rng, position=position,
+                                           used_names=used_names))
 
     rng.shuffle(prospects)
     return prospects
@@ -358,7 +363,8 @@ _IMPORT_OVERALL_SIGMA = 7.0
 INTERNATIONAL_FA_PER_SEASON = 8
 
 
-def generate_international_free_agent(pid: int, rng: Rng, position: str = None) -> Player:
+def generate_international_free_agent(pid: int, rng: Rng, position: str = None,
+                                       used_names: Optional[Set[str]] = None) -> Player:
     """One European pro entering the league as an unrestricted free agent.
 
     Same generation pipeline as everyone else (``playergen``), differing only in age band,
@@ -370,24 +376,28 @@ def generate_international_free_agent(pid: int, rng: Rng, position: str = None) 
     target = int(round(max(40, min(90, rng.gauss(_IMPORT_OVERALL_MU, _IMPORT_OVERALL_SIGMA)))))
 
     if position == "G":
-        player = generate_goalie(pid, rng, age, target)
+        player = generate_goalie(pid, rng, age, target, used_names=used_names)
     else:
-        player = generate_skater(pid, rng, age, target, position=position)
+        player = generate_skater(pid, rng, age, target, position=position,
+                                  used_names=used_names)
 
     player.league_origin = "europe"
     return player
 
 
 def generate_international_free_agents(rng: Rng, new_pid,
-                                        count: int = INTERNATIONAL_FA_PER_SEASON
+                                        count: int = INTERNATIONAL_FA_PER_SEASON,
+                                        used_names: Optional[Set[str]] = None
                                         ) -> List[Player]:
     """A season's worth of imports. Goalie share matches the draft pool's."""
     players: List[Player] = []
     n_goalies = 1 if rng.chance(count * PROSPECT_GOALIE_FRACTION) else 0
     for _ in range(n_goalies):
-        players.append(generate_international_free_agent(new_pid(), rng, position="G"))
+        players.append(generate_international_free_agent(new_pid(), rng, position="G",
+                                                         used_names=used_names))
     for i in range(count - n_goalies):
         position = SKATER_POSITIONS[i % len(SKATER_POSITIONS)]
-        players.append(generate_international_free_agent(new_pid(), rng, position=position))
+        players.append(generate_international_free_agent(new_pid(), rng, position=position,
+                                                         used_names=used_names))
     rng.shuffle(players)
     return players

@@ -31,6 +31,24 @@ GOALIES_MAX = 3
 ROSTER_MIN = SKATERS_MIN + GOALIES_MIN   # 20
 ROSTER_MAX = SKATERS_MAX + GOALIES_MAX   # 23
 
+# Skaters are NOT fungible either, and treating them as though they were was a real bug. A lineup
+# is four forward lines and three defense pairs, so a legal roster needs at least twelve forwards
+# and six defensemen -- being at SKATERS_MIN in raw headcount says nothing about whether the team
+# can ice three pairs.
+#
+# `offseason.fill_rosters` signed "the best available skater" to reach SKATERS_MIN, and because
+# forward free agents outnumber defense free agents roughly two to one, a team that lost blueliners
+# to retirement got refilled with forwards. Measured after one offseason: a team finished with 17
+# forwards and 3 DEFENSEMEN -- `auto_build_lines` could only build two pairs (the second of them a
+# single player), which in turn left its power-play unit a man short, which is how this was found.
+# Three defensemen would then have played roughly 40 minutes each, all season.
+#
+# This is the same reasoning `fill_rosters` already documented one level up for goalies ("filling by
+# just add the best available free agent regardless of position would never notice"), applied to the
+# distinction it had missed. `systems/callups.py` shares these numbers.
+FORWARDS_MIN = 12
+DEFENSEMEN_MIN = 6
+
 # How many players actually DRESS for a game, as opposed to being under contract. The NHL limit is
 # 20: 18 skaters (conventionally 12 forwards and 6 defensemen) plus 2 goalies. Everyone else is a
 # healthy scratch.
