@@ -395,6 +395,7 @@ class PlayerSummaryDTO(BaseModel):
     shoots: str
     secondary_position: Optional[str] = None
     archetype: Optional[str] = None      # generation-template name, for flavor/UI
+    is_rare_archetype: bool = False      # whether archetype is one of the rare "generational talent" archetypes
     role: Optional[str] = None           # coarse sim role slug (attributes.ROLE_*)
     role_label: Optional[str] = None     # display label for `role`
     injury_status: Optional[str] = None
@@ -456,6 +457,8 @@ def player_summary(player: Player, *, scratched: bool = False,
     a property of a player *on a team*, which this function has no access to. Only the roster
     endpoints, which resolve a ``DressedLineup`` first, pass them.
     """
+    from pucksim.models.attributes import is_rare_archetype
+
     injury_status = None
     if player.is_injured:
         injury_status = f"{player.injury.description} ({player.injury.games_remaining} games)"
@@ -471,6 +474,7 @@ def player_summary(player: Player, *, scratched: bool = False,
         shoots=player.shoots,
         secondary_position=player.secondary_position,
         archetype=player.archetype,
+        is_rare_archetype=is_rare_archetype(player.archetype),
         role=player.role,
         role_label=role_label(player.role),
         injury_status=injury_status,

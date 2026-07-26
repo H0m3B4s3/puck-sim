@@ -230,6 +230,21 @@ export function Pill({ children, color }: { children: ReactNode; color?: string 
   );
 }
 
+// --- RareArchetypeBadge: indicator for rare/generational talent archetypes --
+
+export function RareArchetypeBadge({ archetype, isRare }: { archetype: string | null; isRare: boolean }) {
+  if (!isRare || !archetype) return null;
+  return (
+    <span
+      title={`Rare archetype: ${archetype} -- a generational talent`}
+      style={{ marginLeft: "0.35rem", fontSize: "0.9em" }}
+      aria-label="Rare archetype"
+    >
+      ⭐
+    </span>
+  );
+}
+
 // --- useToast: toast notification system (ported from HoopR) --
 
 export function useToast() {

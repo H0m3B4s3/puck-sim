@@ -251,3 +251,33 @@ def test_goalie_archetype_skews_reference_only_real_goalie_ratings():
     for archetype in attr.GOALIE_ARCHETYPES + attr.RARE_GOALIE_ARCHETYPES:
         for rating in archetype.skews:
             assert rating in valid, f"{archetype.name}: unknown goalie rating {rating!r}"
+
+
+# ---------------------------------------------------------------------------
+# Rare archetype detection
+# ---------------------------------------------------------------------------
+def test_is_rare_archetype_detects_rare_archetypes():
+    """Test that is_rare_archetype correctly identifies rare archetype names."""
+    # Test with a known rare archetype
+    assert attr.is_rare_archetype("Two-Way Driver") is True
+    assert attr.is_rare_archetype("Elite Sniper") is True
+    assert attr.is_rare_archetype("Unicorn Defenseman") is True
+
+
+def test_is_rare_archetype_rejects_common_archetypes():
+    """Test that is_rare_archetype correctly rejects common (non-rare) archetype names."""
+    # Test with known common archetypes
+    assert attr.is_rare_archetype("Sniper") is False
+    assert attr.is_rare_archetype("Power Forward") is False
+    assert attr.is_rare_archetype("Shutdown Defenseman") is False
+
+
+def test_is_rare_archetype_rejects_none():
+    """Test that is_rare_archetype returns False for None."""
+    assert attr.is_rare_archetype(None) is False
+
+
+def test_is_rare_archetype_rejects_unknown_names():
+    """Test that is_rare_archetype returns False for unknown archetype names."""
+    assert attr.is_rare_archetype("Unknown Archetype") is False
+    assert attr.is_rare_archetype("") is False

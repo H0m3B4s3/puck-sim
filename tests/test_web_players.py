@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from pucksim.models.attributes import is_rare_archetype
 from pucksim.web.app import app
 from pucksim.web.session import SESSION_COOKIE_NAME
 
@@ -352,3 +353,52 @@ def test_player_detail_rating_labels_formatted_correctly(client):
         for label in labels:
             assert "_" not in label
             assert "gk" not in label.lower()
+
+
+# ---------------------------------------------------------------------------
+# Rare archetype indicator
+# ---------------------------------------------------------------------------
+def test_is_rare_archetype_field_is_populated_in_player_detail(client):
+    """PlayerDetailDTO includes is_rare_archetype field that matches the archetype."""
+    # Create a career
+    resp = client.post("/career/new", json={"seed": 42})
+    assert resp.status_code == 200
+
+    # Get user team's roster to find a player
+    roster_resp = client.get("/roster")
+    assert roster_resp.status_code == 200
+    roster = roster_resp.json()
+    assert len(roster["players"]) > 0
+
+    # Check a player
+    player = roster["players"][0]
+    detail_resp = client.get(f"/players/{player['pid']}")
+    assert detail_resp.status_code == 200
+    detail = detail_resp.json()
+
+    # Verify is_rare_archetype field exists and matches the backend logic
+    assert "is_rare_archetype" in detail
+    if detail["archetype"]:
+        expected = is_rare_archetype(detail["archetype"])
+        assert detail["is_rare_archetype"] == expected
+
+
+def test_is_rare_archetype_field_is_populated_in_roster_summaries(client):
+    """PlayerSummaryDTO in roster includes is_rare_archetype field."""
+    # Create a career
+    resp = client.post("/career/new", json={"seed": 42})
+    assert resp.status_code == 200
+
+    # Get user team's roster
+    roster_resp = client.get("/roster")
+    assert roster_resp.status_code == 200
+    roster = roster_resp.json()
+    assert len(roster["players"]) > 0
+
+    # Check that all players have the is_rare_archetype field
+    for player in roster["players"]:
+        assert "is_rare_archetype" in player
+        assert isinstance(player["is_rare_archetype"], bool)
+        if player["archetype"]:
+            expected = is_rare_archetype(player["archetype"])
+            assert player["is_rare_archetype"] == expected
