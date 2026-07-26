@@ -379,7 +379,11 @@ SHOT_WEIGHT_MIN = 0.15    # a checking-line grinder still shoots sometimes
 # were taking 34.6% of shot attempts against a real ~26%. This scales their weight down; it does NOT
 # scale their shot QUALITY, which is handled separately and is the larger half of the problem (see
 # engine._D_ZONE_SELECT_WEIGHT).
-D_SHOT_WEIGHT_MULT = 0.62
+# Lowered 0.62 -> 0.58 in the 2026-07-26 joint calibration, alongside pushing the D zone mix
+# further to the perimeter (engine._D_ZONE_SELECT_WEIGHT). Together they took D from 18.0% of all
+# goals to ~15.4%, and the shots they gave back to forwards put the goal leader's share of team
+# SOG at 13.3% against a real ~13.5%.
+D_SHOT_WEIGHT_MULT = 0.58
 
 # How often a goal is assisted (engine._pick_assists). The two rates compound: total assists per
 # goal is PRIMARY + PRIMARY * SECONDARY, so 0.92 + 0.92*0.85 = 1.70, the real-NHL figure.
