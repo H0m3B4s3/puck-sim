@@ -62,13 +62,38 @@ TARGETS: Dict[str, Tuple[float, float]] = {
     # -- credit distribution ----------------------------------------------------------------
     "assists_per_goal": (1.62, 1.76),
     "d_goal_share_pct": (11.0, 16.0),
+    # -- roster depth -----------------------------------------------------------------------
+    # How many skaters appear in a game at all. NHL seasons use ~830, against 32 x 20 = 640
+    # rostered: the balance is call-ups, waiver claims and in-season trades. This is banded
+    # because it is a first-class property of a league, and because it CONFOUNDS every absolute
+    # count below -- see the note on the leaderboard block.
+    "skaters_with_gp": (760, 880),
     # -- individual leaderboard shape -------------------------------------------------------
+    #
+    # Banded on SHARES, not on absolute counts, and that choice was forced by measurement.
+    #
+    # The counts (>= 50/40/30/20 goals) are arithmetically confounded by `skaters_with_gp`: a
+    # league's goals are divided among however many skaters played, so the same distribution SHAPE
+    # produces different counts at different depths. Measured directly -- 7800 goals over 706
+    # skaters is 11.0 each against the NHL's 8000 over 830, or 9.6. Applying that 15% difference to
+    # our own measured rank curve (60/51/47/37/29/22 at ranks 1/5/10/25/50/100) gives
+    # 51/43/40/31/25/19, which lands EVERY count inside the bands they used to fail. The counts
+    # were measuring the depth gap a second time, in a place where it read as a shape problem, and
+    # no shape lever could fix them: sweeping the shot-weight slope up made them worse (>= 40 rose
+    # 21.8 -> 24.3), and sweeping it down bought the top tiers only by dumping goals into >= 20.
+    #
+    # Shares of league goals are depth-independent and measure the actual property -- how
+    # concentrated scoring is. They were already correct when the counts were failing badly (top 32
+    # at 20.7% against a real 21%, top 100 at 47.1% against 48%), which is what first showed the
+    # counts were reading the wrong thing.
+    #
+    # The counts are still PRINTED, as diagnostics, because they are what a player actually sees on
+    # a leaderboard. They are read alongside `skaters_with_gp`, not instead of it.
     "goal_leader": (50, 66),
     "point_leader": (100, 135),
-    "skaters_ge_50_goals": (0, 6),
-    "skaters_ge_40_goals": (6, 18),
-    "skaters_ge_30_goals": (28, 48),
-    "skaters_ge_20_goals": (90, 125),
+    "leader_goal_share_pct": (0.70, 1.10),
+    "top32_goal_share_pct": (18.0, 24.0),
+    "top100_goal_share_pct": (43.0, 52.0),
     # -- deployment -------------------------------------------------------------------------
     "toi_f1_min": (18.0, 20.0),
     "toi_f4_min": (10.0, 12.0),
@@ -80,6 +105,10 @@ TARGETS: Dict[str, Tuple[float, float]] = {
 # not targets in their own right (median goals depends heavily on how many 13th forwards a league
 # carries, and the leader's shot share is a diagnostic for WHY the goal leader is where he is).
 _UNBANDED = (
+    "skaters_ge_50_goals",
+    "skaters_ge_40_goals",
+    "skaters_ge_30_goals",
+    "skaters_ge_20_goals",
     "median_skater_goals",
     "top_shooter_shot_share_pct",
     "sog_stdev_per_team_game",
@@ -104,6 +133,10 @@ _LABELS: Dict[str, str] = {
     "toi_f4_min": "TOI: 4th line F (min)",
     "toi_d1_min": "TOI: 1st pair D (min)",
     "toi_d3_min": "TOI: 3rd pair D (min)",
+    "skaters_with_gp": "skaters who played a game",
+    "leader_goal_share_pct": "leader share of league goals (%)",
+    "top32_goal_share_pct": "top 32 scorers' share (%)",
+    "top100_goal_share_pct": "top 100 scorers' share (%)",
     "median_skater_goals": "median skater goals",
     "top_shooter_shot_share_pct": "leader's share of team SOG (%)",
     "sog_stdev_per_team_game": "SOG / team / game (stdev)",
@@ -135,6 +168,10 @@ class LeagueDistribution:
     skaters_ge_40_goals: int = 0
     skaters_ge_30_goals: int = 0
     skaters_ge_20_goals: int = 0
+    skaters_with_gp: int = 0
+    leader_goal_share_pct: float = 0.0
+    top32_goal_share_pct: float = 0.0
+    top100_goal_share_pct: float = 0.0
     median_skater_goals: float = 0.0
     top_shooter_shot_share_pct: float = 0.0
     toi_f1_min: float = 0.0
@@ -234,6 +271,17 @@ def measure(world: World) -> LeagueDistribution:
     dist.skaters_ge_30_goals = sum(1 for g in goals if g >= 30)
     dist.skaters_ge_20_goals = sum(1 for g in goals if g >= 20)
     dist.point_leader = max(p.season.points for p in skaters)
+
+    # Depth, and the depth-INDEPENDENT concentration measures that are banded in its place -- see
+    # the leaderboard block in TARGETS for why absolute counts could not be. A share of league
+    # goals says the same thing about how concentrated scoring is whether the league used 640
+    # skaters or 830.
+    dist.skaters_with_gp = len(skaters)
+    total_goals = sum(goals)
+    if total_goals:
+        dist.leader_goal_share_pct = 100.0 * goals[0] / total_goals
+        dist.top32_goal_share_pct = 100.0 * sum(goals[:32]) / total_goals
+        dist.top100_goal_share_pct = 100.0 * sum(goals[:100]) / total_goals
 
     by_goals = sorted(skaters, key=lambda p: (p.season.g, p.season.points), reverse=True)
     dist.goal_leaders = [

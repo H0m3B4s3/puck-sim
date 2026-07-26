@@ -188,9 +188,15 @@ from pucksim.systems.development import GoalieFormState, apply_goalie_form
 # That produced a 4.6 standard deviation on a 13.5 mean, i.e. single-digit-shot games as routine
 # events rather than tail ones. See docs/DISTRIBUTION_TARGETS.md for the full before/after.
 #
-# 1.45 puts the mean interval at ~31s, comfortably inside the shift rather than beyond it, and
+# 1.52 puts the mean interval at ~30s, comfortably inside the shift rather than beyond it, and
 # targets ~55 shot attempts (Corsi) per team per game.
-SHOT_ATTEMPTS_PER_SHIFT_BOTH_TEAMS = 1.45
+#
+# Raised from 1.45 in the 2026-07-26 joint calibration. Goals per game needed to come up ~5%, and
+# there are two ways to buy that -- more shots or a higher conversion rate. Shots is the coherent
+# one: at 28.4 SOG the required shooting percentage would have been 10.8%, sitting on its band
+# ceiling, while the NHL reaches the same goal rate at ~30 shots and ~10.2%. Volume was the term
+# that was low, so volume is the term that moved.
+SHOT_ATTEMPTS_PER_SHIFT_BOTH_TEAMS = 1.52
 
 # Gaussian spread of the interval around its mean, as a fraction of that mean. Lowered from 0.35:
 # with the mean now well inside the shift, a wide spread is no longer needed to produce any
@@ -461,13 +467,18 @@ _SHOT_TYPE_SELECT_WEIGHT = {
 # Doing it as a frequency shift rather than a flat "penalize D shots" multiplier keeps the whole model
 # coherent: the same lower quality flows into on_goal_p (point shots get blocked more, which is true),
 # save_p, AND xG, so expected goals still tracks actual goals instead of drifting for one position.
+# Pushed further to the perimeter in the joint calibration pass: defensemen were converting at
+# 6.5% against a real ~4.5%, while their share of shot ATTEMPTS was already right (~27% vs ~26%).
+# A conversion gap with correct volume is a shot-QUALITY statement, so it is fixed here in the
+# frequency mix rather than by penalizing D shots directly -- which keeps xG coherent per position.
+# Mean selection-weighted quality: 0.420 -> 0.389, against 0.520 for forwards.
 _D_ZONE_SELECT_WEIGHT = {
-    "crease": 0.01, "slot": 0.05,
-    "high_slot": 0.13, "circle": 0.16,
-    "point": 0.48, "bad_angle": 0.17,
+    "crease": 0.005, "slot": 0.025,
+    "high_slot": 0.10, "circle": 0.13,
+    "point": 0.565, "bad_angle": 0.175,
 }
 _D_SHOT_TYPE_SELECT_WEIGHT = {
-    "one_timer": 0.13, "tip": 0.02, "wrist": 0.42, "backhand": 0.03, "slap": 0.40,
+    "one_timer": 0.10, "tip": 0.015, "wrist": 0.40, "backhand": 0.025, "slap": 0.46,
 }
 
 # Selection-weighted mean quality of each pool, i.e. sum(select_weight * quality). Precomputed so
@@ -513,7 +524,7 @@ _QUALITY_NEUTRAL = 0.5 * _ZONE_QUALITY_MEAN + 0.5 * _SHOT_TYPE_QUALITY_MEAN
 # season and read off the distribution report -- do not try to derive it, and do not tune it on a
 # short sample, which at this sensitivity is noisy enough to suggest cliffs a full season shows
 # are not there.
-SAVE_PROB_ANCHOR = 0.948
+SAVE_PROB_ANCHOR = 0.938
 
 # How much better/worse than average a look has to be to move the outcome. Unchanged in magnitude
 # from the original tuning -- only their centering (see _QUALITY_NEUTRAL) was wrong.
