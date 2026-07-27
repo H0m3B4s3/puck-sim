@@ -589,6 +589,7 @@ export interface AdvancePlayoffsResponse extends PlayoffsStateDTO {
 export interface PreDraftResponse {
   resumed: boolean;
   retired: number;
+  resigned: number;
   new_fas: number;
   inducted: Array<Record<string, unknown>>;
   milestones: Array<Record<string, unknown>>;

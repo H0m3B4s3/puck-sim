@@ -148,6 +148,68 @@ def archive_season(world: World, champion_tid: Optional[int]) -> List[dict]:
 # ---------------------------------------------------------------------------
 # Contracts / aging / retirement
 # ---------------------------------------------------------------------------
+def resign_pending_free_agents(world: World) -> List[int]:
+    """Give each team a chance to re-sign its own about-to-expire players before
+    expire_contracts() releases them to the open market.
+
+    Without this, EVERY expiring contract becomes a UFA unconditionally, no matter how
+    good the player is -- a team's franchise cornerstone hits the open market on his
+    expiry exactly as readily as a replacement-level depth piece. Retention is weighted
+    by quality (the same FA_WAVE_THRESHOLDS tiers systems/freeagency.py already uses to
+    price the open market) and gated by real cap space (systems/cap.extend_contract's own
+    legality check) -- a cap-strapped team still can't keep everyone. Processes each
+    team's pending free agents BEST-FIRST so a team with several expiring deals and
+    limited room spends it on its stars first, not whoever happens to iterate first.
+
+    Returns the pids retained (informational -- expire_contracts needs no help skipping
+    them, since their years_remaining is no longer 1 after this runs).
+    """
+    from pucksim.systems import cap, freeagency
+
+    retained: List[int] = []
+    for team in world.team_list():
+        pending = [
+            world.players[pid] for pid in team.roster
+            if pid in world.players and world.players[pid].contract.years_remaining == 1
+        ]
+        pending.sort(key=lambda p: p.overall, reverse=True)
+        for player in pending:
+            if not world.rng.chance(_resign_probability(player)):
+                continue
+            salary, add_years = cap.extension_offer(world, player)
+            # Defensive cap safety: extend_contract's own check (space_excluding_self) is
+            # correct for a single extension, but multiple extensions in sequence can
+            # collectively exceed the cap when advanced together. Clamp the offered salary
+            # to the player's current salary plus half of available cap space, leaving room
+            # for other extensions on the same team.
+            available_space = cap.cap_space(world, team)
+            max_affordable = player.contract.current_salary + max(0, available_space // 2)
+            if salary > max_affordable:
+                salary = max_affordable
+            ok, _ = cap.extend_contract(world, team, player.pid, salary, add_years)
+            if ok:
+                retained.append(player.pid)
+    return retained
+
+
+def _resign_probability(player) -> float:
+    """Retention chance by quality tier -- reuses freeagency's own tier language
+    (FA_WAVE_THRESHOLDS/FA_WAVE_NAMES: franchise-caliber / top-six / depth / fringe) so
+    "who's worth fighting to keep" means the same thing here as it does on the open
+    market.
+
+    Design judgment: probabilities are calibrated so most stars stay (franchise caliber:
+    90%), top-six forwards/defensemen turn over moderately (70%), depth churns (40%),
+    and fringe players are mostly released to the open market (15%). This preserves
+    team identity for elite talent while keeping the free-agent market healthy and
+    maintaining realistic roster turnover.
+    """
+    from pucksim.systems.freeagency import natural_wave
+
+    wave = natural_wave(player)
+    return {0: 0.90, 1: 0.70, 2: 0.40, 3: 0.15}.get(wave, 0.15)
+
+
 def expire_contracts(world: World) -> List[int]:
     """Advance every rostered contract a year; return pids that hit free agency."""
     new_fas: List[int] = []
@@ -451,6 +513,11 @@ def pre_draft(world: World, champion_tid: Optional[int]) -> dict:
       belongs in next is a question about how old he is NOW. A junior player who just turned
       20 has aged out of junior and, if he's under contract, belongs in the AHL.
 
+    ``resign_pending_free_agents`` runs BEFORE ``expire_contracts`` to give teams a chance to
+    retain their own pending free agents (weighted by quality tier) before the market opens.
+    Without this, a team's franchise cornerstone hits the open market on expiry exactly as
+    readily as a depth piece.
+
     ``expire_contracts`` above only walks ``Team.roster``, so it never sees a prospect --
     which is precisely why ``tick_prospect_contracts`` has to exist. Before it, an off-roster
     prospect's contract never advanced at all: an unbounded, entirely accidental slide.
@@ -465,6 +532,7 @@ def pre_draft(world: World, champion_tid: Optional[int]) -> dict:
     milestones = archive_season(world, champion_tid)
     form_state = _form_state_for(world)
     develop_all(world, form_state=form_state)
+    resigned = resign_pending_free_agents(world)
     new_fas = expire_contracts(world)
     elc = prospects.tick_prospect_contracts(world)   # BEFORE aging -- see below
     ar = age_and_retire(world)
@@ -473,7 +541,7 @@ def pre_draft(world: World, champion_tid: Optional[int]) -> dict:
     imports = freeagency.open_international_market(world)
     return {"new_fas": len(new_fas), "retired": len(ar["retired"]), "inducted": ar["inducted"],
             "milestones": milestones, "elc": elc, "development": dev,
-            "imports": len(imports)}
+            "imports": len(imports), "resigned": len(resigned)}
 
 
 def post_offseason(world: World) -> None:
