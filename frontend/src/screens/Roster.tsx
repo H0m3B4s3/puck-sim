@@ -48,7 +48,7 @@ function RoleBadge({ label }: { label: string | null }) {
 
 // --- Reusable Sortable Table Component ---
 
-function SortableTable<T>({
+export function SortableTable<T>({
   data,
   columns,
   defaultSort,

@@ -551,6 +551,16 @@ export interface LeaderboardResponse {
   rows: LeaderboardRow[];
 }
 
+export interface LeaguePlayer extends PlayerSummary {
+  team_id: number | null;
+  team_abbrev: string;
+  team_color: string;
+}
+
+export interface LeaguePlayersResponse {
+  players: LeaguePlayer[];
+}
+
 // --- Playoffs endpoints DTOs -------------------------------------------------
 
 export interface PlayoffsStateDTO {
@@ -843,6 +853,9 @@ export const api = {
 
   /** GET /league/leaders -- current season leaders by category. */
   getLeaders: () => get<LeadersResponse>("/league/leaders"),
+
+  /** GET /league/players -- every player in the league with current-season stats. */
+  getLeaguePlayers: () => get<LeaguePlayersResponse>("/league/players"),
 
   /** GET /league/history -- archived seasons with awards. */
   getHistory: () => get<HistoryResponse>("/league/history"),
