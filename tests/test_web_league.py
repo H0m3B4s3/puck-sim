@@ -348,3 +348,87 @@ def test_leaders_at_0_gp_does_not_error(client):
     # Some or all categories may be empty, but endpoint should not crash
     assert "categories" in body
     assert len(body["categories"]) == 6
+
+
+# ---------------------------------------------------------------------------
+# GET /league/players -- every player in the league with current-season stats
+# ---------------------------------------------------------------------------
+def test_league_players_returns_all_players(client):
+    """League players endpoint returns every player in the world."""
+    client.post("/career/new", json={"seed": 42})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+
+    # Get world to count players
+    world = session_store.get(sid)
+    total_players = len(world.players)
+
+    resp = client.get("/league/players")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "players" in body
+    assert len(body["players"]) == total_players
+
+
+def test_league_players_has_team_context(client):
+    """Each player in league players response has team_id, team_abbrev, team_color."""
+    client.post("/career/new", json={"seed": 42})
+
+    resp = client.get("/league/players")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert len(body["players"]) > 0
+
+    for player in body["players"]:
+        assert "team_id" in player
+        assert "team_abbrev" in player
+        assert "team_color" in player
+        assert "season_stats" in player
+        assert "name" in player
+        assert "pid" in player
+
+
+def test_league_players_free_agents_have_fa_abbrev(client):
+    """Free agents in league players response show team_abbrev='FA'."""
+    client.post("/career/new", json={"seed": 42})
+    sid = client.cookies[SESSION_COOKIE_NAME]
+
+    # Check if test world has any free agents
+    world = session_store.get(sid)
+    has_fa = any(p.team_id is None for p in world.players.values())
+
+    if has_fa:
+        resp = client.get("/league/players")
+        assert resp.status_code == 200
+
+        body = resp.json()
+        fa_players = [p for p in body["players"] if p["team_abbrev"] == "FA"]
+        assert len(fa_players) > 0
+
+
+def test_league_players_includes_season_stats(client):
+    """Each player has season_stats populated."""
+    client.post("/career/new", json={"seed": 42})
+
+    resp = client.get("/league/players")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    for player in body["players"]:
+        assert "season_stats" in player
+        assert isinstance(player["season_stats"], dict)
+
+
+def test_league_players_on_fresh_world(client):
+    """League players endpoint works on a fresh world with no games played."""
+    client.post("/career/new", json={"seed": 42})
+
+    resp = client.get("/league/players")
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "players" in body
+    # All players should have empty or zero season stats
+    for player in body["players"]:
+        assert "season_stats" in player

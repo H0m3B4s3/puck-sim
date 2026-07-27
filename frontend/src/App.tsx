@@ -32,6 +32,7 @@ import { ProspectsScreen } from "./screens/Prospects";
 import { PlayoffsScreen } from "./screens/Playoffs";
 import { OffseasonScreen } from "./screens/Offseason";
 import { LeadersScreen } from "./screens/Leaders";
+import { LeagueStatsScreen } from "./screens/LeagueStats";
 import { HistoryScreen } from "./screens/History";
 import { TradeScreen } from "./screens/Trade";
 import { SaveLoadScreen } from "./screens/SaveLoad";
@@ -243,6 +244,7 @@ export default function App() {
     { label: "Schedule", path: "/schedule" },
     { label: "Box Score", path: "/box-score" },
     { label: "Leaders", path: "/leaders" },
+    { label: "League Stats", path: "/league-stats" },
     { label: "Trades", path: "/trades" },
     { label: "Transactions", path: "/transactions" },
     { label: "History", path: "/history" },
@@ -337,6 +339,8 @@ export default function App() {
         return <BoxScore onPlayer={setOpenPid} toast={toast} initialGid={boxScoreGid} currentDay={world.day} />;
       case "/leaders":
         return <LeadersScreen world={world} onPlayer={setOpenPid} toast={toast} />;
+      case "/league-stats":
+        return <LeagueStatsScreen onPlayer={setOpenPid} toast={toast} />;
       case "/trades":
         return <TradeScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       case "/transactions":

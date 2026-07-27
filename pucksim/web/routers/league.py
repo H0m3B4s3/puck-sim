@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from pucksim.models.world import World
 from pucksim.systems import legacy
 from pucksim.web.session import get_world
+from pucksim.web.serializers import PlayerSummaryDTO, player_summary
 
 router = APIRouter(prefix="/league", tags=["league"])
 
@@ -99,6 +100,18 @@ class LeagueLeaderboardsResponseDTO(BaseModel):
     category: str
     categories: List[str]
     rows: List[dict]
+
+
+class LeaguePlayerDTO(PlayerSummaryDTO):
+    """A player entry for league-wide browsing -- extends PlayerSummaryDTO with team context."""
+    team_id: Optional[int]
+    team_abbrev: str
+    team_color: str
+
+
+class LeaguePlayersResponseDTO(BaseModel):
+    """Response for GET /league/players."""
+    players: List[LeaguePlayerDTO]
 
 
 # ---------------------------------------------------------------------------
@@ -374,3 +387,23 @@ def get_leaderboards(category: str = "pts", world: World = Depends(get_world)) -
         categories=list(legacy.LEADERBOARD_CATEGORIES),
         rows=rows,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /league/players -- every player in the league (current-season view)
+# ---------------------------------------------------------------------------
+@router.get("/players", response_model=LeaguePlayersResponseDTO)
+def get_league_players(world: World = Depends(get_world)) -> LeaguePlayersResponseDTO:
+    """Every player in the league (rostered or free agent) with current-season stats and
+    team context -- the full-roster complement to /league/leaders' top-10-only view."""
+    players = []
+    for p in world.players.values():
+        tid, abbrev, color = _get_player_team_info(world, p.pid)
+        base = player_summary(p)
+        players.append(LeaguePlayerDTO(
+            **base.model_dump(),
+            team_id=tid,
+            team_abbrev=abbrev,
+            team_color=color
+        ))
+    return LeaguePlayersResponseDTO(players=players)
