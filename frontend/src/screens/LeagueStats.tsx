@@ -298,7 +298,7 @@ export function LeagueStatsScreen({
 
       {/* Skaters table */}
       {skaters.length > 0 && (
-        <Panel className="league-stats-table-container">
+        <Panel className="roster-table-container">
           <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
             Skaters ({skaters.length})
           </h3>
@@ -312,7 +312,7 @@ export function LeagueStatsScreen({
 
       {/* Goalies table */}
       {goalies.length > 0 && (
-        <Panel className="league-stats-table-container" style={{ marginTop: "2rem" }}>
+        <Panel className="roster-table-container" style={{ marginTop: "2rem" }}>
           <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
             Goalies ({goalies.length})
           </h3>
