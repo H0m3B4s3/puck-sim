@@ -391,12 +391,12 @@ function BenchTable({
   });
 
   return (
-    <Panel className="bench-table-container">
+    <Panel className="roster-table-container">
       <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
         Available Players ({players.length})
       </h3>
-      <div className="bench-table-scroll">
-        <table className="bench-table">
+      <div className="roster-table-scroll">
+        <table className="roster-table">
           <thead>
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
@@ -422,7 +422,7 @@ function BenchTable({
             {table.getRowModel().rows.map((row) => (
               <tr
                 key={row.id}
-                className={`bench-row--draggable${selectedPlayers.has(row.original.pid) ? " selected" : ""}`}
+                className={`roster-row--draggable${selectedPlayers.has(row.original.pid) ? " selected" : ""}`}
                 style={row.original.scratched ? { opacity: 0.55 } : undefined}
                 draggable
                 onDragStart={(e) =>
