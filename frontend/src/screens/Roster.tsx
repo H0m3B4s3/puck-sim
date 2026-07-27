@@ -250,15 +250,21 @@ const contractColumns = (
     header: "Overall",
     size: 80,
   }),
-  columnHelper.accessor((row) => formatMoney(row.contract.current_salary), {
+  columnHelper.accessor((row) => row.contract.current_salary, {
     id: "salary",
     header: "Salary",
     size: 100,
+    // Sort/display split: sort on the raw dollar amount, render the abbreviated
+    // string. Sorting on formatMoney()'s "$X.YM" output would compare lexicographically
+    // ("$10.2M" < "$2.0M" as strings), which is exactly wrong for a tab whose whole point
+    // is ranking players by contract value.
+    cell: (info) => formatMoney(info.getValue()),
   }),
-  columnHelper.accessor((row) => `${row.contract.years_remaining}yr`, {
+  columnHelper.accessor((row) => row.contract.years_remaining, {
     id: "contract_years",
     header: "Contract",
     size: 90,
+    cell: (info) => `${info.getValue()}yr`,
   }),
   columnHelper.accessor("injury_status", {
     header: "Injury Status",
@@ -373,21 +379,17 @@ const goaltenderSeasonStatsColumns = (onPlayer?: (pid: number) => void) => [
     header: "OTL",
     size: 60,
   }),
-  columnHelper.accessor((row) => {
-    const sv_pct = (row.season_stats as any).save_pct;
-    return sv_pct ? ((sv_pct as number) * 100).toFixed(1) + "%" : ".0%";
-  }, {
+  columnHelper.accessor((row) => ((row.season_stats as any).save_pct as number) || 0, {
     id: "ss_save_pct",
     header: "SV%",
     size: 70,
+    cell: (info) => (info.getValue() * 100).toFixed(1) + "%",
   }),
-  columnHelper.accessor((row) => {
-    const gaa = (row.season_stats as any).gaa;
-    return gaa ? ((gaa as number).toFixed(2)) : "0.00";
-  }, {
+  columnHelper.accessor((row) => ((row.season_stats as any).gaa as number) || 0, {
     id: "ss_gaa",
     header: "GAA",
     size: 70,
+    cell: (info) => info.getValue().toFixed(2),
   }),
   columnHelper.accessor((row) => (row.season_stats as any).shutouts || 0, {
     id: "ss_shutouts",
