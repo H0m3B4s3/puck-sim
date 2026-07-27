@@ -27,6 +27,7 @@ import { Transactions } from "./screens/Transactions";
 import { StandingsScreen } from "./screens/Standings";
 import { ScheduleScreen } from "./screens/Schedule";
 import { RosterScreen } from "./screens/Roster";
+import { LinesScreen } from "./screens/Lines";
 import { ProspectsScreen } from "./screens/Prospects";
 import { PlayoffsScreen } from "./screens/Playoffs";
 import { OffseasonScreen } from "./screens/Offseason";
@@ -236,6 +237,7 @@ export default function App() {
   const baseNavItems = [
     { label: "Home", path: "/" },
     { label: "Roster", path: "/roster" },
+    { label: "Lines", path: "/lines" },
     { label: "Prospects", path: "/prospects" },
     { label: "Standings", path: "/standings" },
     { label: "Schedule", path: "/schedule" },
@@ -323,6 +325,8 @@ export default function App() {
         return <HomeScreen world={world} onPlayer={setOpenPid} toast={toast} />;
       case "/roster":
         return <RosterScreen onPlayer={setOpenPid} toast={toast} />;
+      case "/lines":
+        return <LinesScreen onPlayer={setOpenPid} toast={toast} />;
       case "/prospects":
         return <ProspectsScreen onPlayer={setOpenPid} toast={toast} />;
       case "/standings":
