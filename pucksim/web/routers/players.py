@@ -16,7 +16,7 @@ from pucksim.models.attributes import RATING_GROUPS, GOALIE_RATING_GROUPS, is_ra
 from pucksim.models.player import Player
 from pucksim.models.world import World
 from pucksim.systems.legacy import resume as compute_resume
-from pucksim.web.serializers import role_label
+from pucksim.web.serializers import role_label, season_stats_summary
 from pucksim.web.session import get_world
 
 router = APIRouter(prefix="/players", tags=["players"])
@@ -133,36 +133,6 @@ def _build_rating_groups_dto(player) -> Dict[str, List[RatingEntryDTO]]:
     return result
 
 
-def _build_season_stats_dto(player) -> dict:
-    """Build season_stats DTO from player.season."""
-    if player.is_goalie:
-        # Goalie stats
-        return {
-            "gp": player.season.gp,
-            "wins": player.season.wins,
-            "losses": player.season.losses,
-            "otl": player.season.otl,
-            "save_pct": round(player.season.save_pct, 3),
-            "gaa": round(player.season.gaa, 2),
-            "shutouts": player.season.shutouts,
-            "shots_faced": player.season.shots_faced,
-            "saves": player.season.saves,
-        }
-    else:
-        # Skater stats
-        return {
-            "gp": player.season.gp,
-            "g": player.season.g,
-            "a": player.season.a,
-            "pts": player.season.points,
-            "ppg": round(player.season.points / player.season.gp, 2) if player.season.gp else 0.0,
-            "sog": player.season.sog,
-            "hits": player.season.hits,
-            "blocks": player.season.blocks,
-            "pim": player.season.pim,
-            "plus_minus": player.season.plus_minus,
-            "fo_pct": round(player.season.fo_pct, 2) if player.season.gp else 0.0,
-        }
 
 
 def _build_playoff_stats_dto(player) -> Optional[dict]:
@@ -296,7 +266,7 @@ def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDeta
         two_way=player.contract.two_way,
         bury_cap_hit=(0 if player.contract.two_way
                       else max(0, player.contract.current_salary - BURY_CAP_SHELTER)),
-        season_stats=_build_season_stats_dto(player),
+        season_stats=season_stats_summary(player),
         playoff_stats=_build_playoff_stats_dto(player),
         rating_groups=_build_rating_groups_dto(player),
         career=list(player.career),

@@ -137,6 +137,7 @@ export interface PlayerSummary {
   injury_status: string | null;
   key_ratings: KeyRating[];
   contract: ContractSummary;
+  season_stats: Record<string, unknown>;
   /** Healthy but sitting tonight under the 20-player dress limit. */
   scratched: boolean;
   /**

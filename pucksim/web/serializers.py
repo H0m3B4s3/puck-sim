@@ -385,6 +385,43 @@ def role_label(role: Optional[str]) -> Optional[str]:
     return ROLE_LABELS.get(role, role.replace("_", " ").title())
 
 
+def season_stats_summary(player: Player) -> dict:
+    """Build season_stats summary from player.season (skater or goalie, same logic used by detail endpoint).
+
+    Returns a dict with position-appropriate keys:
+    - Skater: gp, g, a, pts, ppg, sog, hits, blocks, pim, plus_minus, fo_pct
+    - Goalie: gp, wins, losses, otl, save_pct, gaa, shutouts, shots_faced, saves
+    """
+    if player.is_goalie:
+        # Goalie stats
+        return {
+            "gp": player.season.gp,
+            "wins": player.season.wins,
+            "losses": player.season.losses,
+            "otl": player.season.otl,
+            "save_pct": round(player.season.save_pct, 3),
+            "gaa": round(player.season.gaa, 2),
+            "shutouts": player.season.shutouts,
+            "shots_faced": player.season.shots_faced,
+            "saves": player.season.saves,
+        }
+    else:
+        # Skater stats
+        return {
+            "gp": player.season.gp,
+            "g": player.season.g,
+            "a": player.season.a,
+            "pts": player.season.points,
+            "ppg": round(player.season.points / player.season.gp, 2) if player.season.gp else 0.0,
+            "sog": player.season.sog,
+            "hits": player.season.hits,
+            "blocks": player.season.blocks,
+            "pim": player.season.pim,
+            "plus_minus": player.season.plus_minus,
+            "fo_pct": round(player.season.fo_pct, 2) if player.season.gp else 0.0,
+        }
+
+
 class PlayerSummaryDTO(BaseModel):
     """A player entry for roster lists -- id, name, position, ratings, and contract."""
     pid: int
@@ -401,6 +438,7 @@ class PlayerSummaryDTO(BaseModel):
     injury_status: Optional[str] = None
     key_ratings: List[KeyRatingDTO] = []
     contract: ContractSummaryDTO
+    season_stats: dict = {}              # season stat line (gp, g, a, pts... or gp, wins, save_pct...)
     # Game-night status (20-player dress limit). ``scratched`` means healthy but sitting;
     # ``scratch_requested`` means the user asked for it, which can differ from ``scratched`` when
     # injuries forced a promotion. Both default False so the many callers that build a summary
@@ -483,6 +521,7 @@ def player_summary(player: Player, *, scratched: bool = False,
             current_salary=player.contract.current_salary,
             years_remaining=player.contract.years_remaining,
         ),
+        season_stats=season_stats_summary(player),
     )
 
 

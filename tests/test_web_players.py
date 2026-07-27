@@ -402,3 +402,52 @@ def test_is_rare_archetype_field_is_populated_in_roster_summaries(client):
         if player["archetype"]:
             expected = is_rare_archetype(player["archetype"])
             assert player["is_rare_archetype"] == expected
+
+
+def test_roster_includes_season_stats(client):
+    """Roster endpoint includes season_stats for each player (skater and goalie shapes)."""
+    # Create a career
+    resp = client.post("/career/new", json={"seed": 42})
+    assert resp.status_code == 200
+
+    # Get user team's roster
+    roster_resp = client.get("/roster")
+    assert roster_resp.status_code == 200
+    roster = roster_resp.json()
+    assert len(roster["players"]) > 0
+
+    # Find a skater and a goalie
+    skater = next((p for p in roster["players"] if p["position"] != "G"), None)
+    goalie = next((p for p in roster["players"] if p["position"] == "G"), None)
+
+    # Check skater season_stats
+    if skater:
+        assert "season_stats" in skater
+        season_stats = skater["season_stats"]
+        # Skater should have these keys
+        assert "gp" in season_stats
+        assert "g" in season_stats
+        assert "a" in season_stats
+        assert "pts" in season_stats
+        assert "ppg" in season_stats
+        assert "sog" in season_stats
+        assert "hits" in season_stats
+        assert "blocks" in season_stats
+        assert "pim" in season_stats
+        assert "plus_minus" in season_stats
+        assert "fo_pct" in season_stats
+
+    # Check goalie season_stats
+    if goalie:
+        assert "season_stats" in goalie
+        season_stats = goalie["season_stats"]
+        # Goalie should have these keys
+        assert "gp" in season_stats
+        assert "wins" in season_stats
+        assert "losses" in season_stats
+        assert "otl" in season_stats
+        assert "save_pct" in season_stats
+        assert "gaa" in season_stats
+        assert "shutouts" in season_stats
+        assert "shots_faced" in season_stats
+        assert "saves" in season_stats

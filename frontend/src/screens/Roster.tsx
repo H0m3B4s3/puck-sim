@@ -17,7 +17,7 @@ import {
   flexRender,
   createColumnHelper,
 } from "@tanstack/react-table";
-import type { SortingState } from "@tanstack/react-table";
+import type { SortingState, ColumnDef } from "@tanstack/react-table";
 
 import api, {
   PlayerSummary,
@@ -46,15 +46,77 @@ function RoleBadge({ label }: { label: string | null }) {
   );
 }
 
-// --- Roster Table Component ---
+// --- Reusable Sortable Table Component ---
+
+function SortableTable<T>({
+  data,
+  columns,
+  defaultSort,
+  rowStyle,
+}: {
+  data: T[];
+  columns: ColumnDef<T, any>[];
+  defaultSort: SortingState;
+  rowStyle?: (row: T) => React.CSSProperties | undefined;
+}) {
+  const [sorting, setSorting] = useState<SortingState>(defaultSort);
+
+  const table = useReactTable({
+    data,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
+  return (
+    <div className="roster-table-scroll">
+      <table className="roster-table">
+        <thead>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <tr key={headerGroup.id}>
+              {headerGroup.headers.map((header) => (
+                <th
+                  key={header.id}
+                  style={{ width: `${header.getSize()}px` }}
+                  onClick={header.column.getToggleSortingHandler()}
+                  className={header.column.getCanSort() ? "sortable-header" : ""}
+                >
+                  {flexRender(header.column.columnDef.header, header.getContext())}
+                  {header.column.getIsSorted() &&
+                    ` ${header.column.getIsSorted() === "desc" ? "↓" : "↑"}`}
+                </th>
+              ))}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {table.getRowModel().rows.map((row) => (
+            <tr
+              key={row.id}
+              style={rowStyle?.(row.original)}
+            >
+              {row.getVisibleCells().map((cell) => (
+                <td key={cell.id} style={{ width: `${cell.column.getSize()}px` }}>
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// --- Column Definitions ---
 
 const columnHelper = createColumnHelper<PlayerSummary>();
 
-const rosterColumns = (
-  onPlayer?: (pid: number) => void,
-  onToggleScratch?: (pid: number) => void,
-) => [
-  columnHelper.accessor("name", {
+// Name column helper (shared across all tabs)
+function nameColumn(onPlayer?: (pid: number) => void) {
+  return columnHelper.accessor("name", {
     header: "Name",
     size: 180,
     cell: (info) => (
@@ -78,7 +140,15 @@ const rosterColumns = (
         <RareArchetypeBadge archetype={info.row.original.archetype} isRare={info.row.original.is_rare_archetype} />
       </>
     ),
-  }),
+  });
+}
+
+// Ratings Tab Columns
+const ratingsColumns = (
+  onPlayer?: (pid: number) => void,
+  onToggleScratch?: (pid: number) => void,
+) => [
+  nameColumn(onPlayer),
   columnHelper.accessor("position", {
     header: "Pos",
     size: 60,
@@ -120,22 +190,10 @@ const rosterColumns = (
     header: "Shoots",
     size: 70,
   }),
-  columnHelper.accessor((row) => formatMoney(row.contract.current_salary), {
-    id: "salary",
-    header: "Salary",
-    size: 100,
-  }),
-  columnHelper.accessor((row) => `${row.contract.years_remaining}yr`, {
-    id: "contract_years",
-    header: "Contract",
-    size: 90,
-  }),
   columnHelper.accessor("injury_status", {
     header: "Injury Status",
     size: 150,
   }),
-  // Healthy scratches (20-player dress limit). Injured players get no toggle -- they are out
-  // regardless, and offering a control that does nothing is worse than offering none.
   columnHelper.display({
     id: "scratch",
     header: "Scratch",
@@ -174,6 +232,170 @@ const rosterColumns = (
   }),
 ];
 
+// Contract Tab Columns
+const contractColumns = (
+  onPlayer?: (pid: number) => void,
+  onToggleScratch?: (pid: number) => void,
+) => [
+  nameColumn(onPlayer),
+  columnHelper.accessor("position", {
+    header: "Pos",
+    size: 60,
+  }),
+  columnHelper.accessor("age", {
+    header: "Age",
+    size: 60,
+  }),
+  columnHelper.accessor("overall", {
+    header: "Overall",
+    size: 80,
+  }),
+  columnHelper.accessor((row) => formatMoney(row.contract.current_salary), {
+    id: "salary",
+    header: "Salary",
+    size: 100,
+  }),
+  columnHelper.accessor((row) => `${row.contract.years_remaining}yr`, {
+    id: "contract_years",
+    header: "Contract",
+    size: 90,
+  }),
+  columnHelper.accessor("injury_status", {
+    header: "Injury Status",
+    size: 150,
+  }),
+  columnHelper.display({
+    id: "scratch",
+    header: "Scratch",
+    size: 110,
+    cell: (info) => {
+      const p = info.row.original;
+      if (p.injury_status) {
+        return <span style={{ color: "var(--color-muted)" }}>injured</span>;
+      }
+      const overridden = p.scratch_requested && !p.scratched;
+      return (
+        <button
+          className="btn btn-secondary"
+          onClick={() => onToggleScratch?.(p.pid)}
+          style={{
+            padding: "0.25rem 0.5rem",
+            fontSize: "0.8125rem",
+            color: overridden
+              ? "var(--color-accent-amber, #d97706)"
+              : p.scratched
+                ? "var(--color-accent-red, #dc2626)"
+                : undefined,
+          }}
+          title={
+            overridden
+              ? "You asked to sit this player, but injuries forced him into the lineup"
+              : p.scratched
+                ? "Sitting tonight -- click to dress"
+                : "Dressed -- click to scratch"
+          }
+        >
+          {overridden ? "forced in" : p.scratched ? "scratched" : "dressed"}
+        </button>
+      );
+    },
+  }),
+];
+
+// Season Stats Columns for Skaters
+const skaterSeasonStatsColumns = (onPlayer?: (pid: number) => void) => [
+  nameColumn(onPlayer),
+  columnHelper.accessor("position", {
+    header: "Pos",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).gp || 0, {
+    id: "ss_gp",
+    header: "GP",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).g || 0, {
+    id: "ss_g",
+    header: "G",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).a || 0, {
+    id: "ss_a",
+    header: "A",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).pts || 0, {
+    id: "ss_pts",
+    header: "PTS",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).plus_minus || 0, {
+    id: "ss_plus_minus",
+    header: "+/-",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).sog || 0, {
+    id: "ss_sog",
+    header: "SOG",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).pim || 0, {
+    id: "ss_pim",
+    header: "PIM",
+    size: 60,
+  }),
+];
+
+// Season Stats Columns for Goalies
+const goaltenderSeasonStatsColumns = (onPlayer?: (pid: number) => void) => [
+  nameColumn(onPlayer),
+  columnHelper.accessor("position", {
+    header: "Pos",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).gp || 0, {
+    id: "ss_gp",
+    header: "GP",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).wins || 0, {
+    id: "ss_wins",
+    header: "W",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).losses || 0, {
+    id: "ss_losses",
+    header: "L",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).otl || 0, {
+    id: "ss_otl",
+    header: "OTL",
+    size: 60,
+  }),
+  columnHelper.accessor((row) => {
+    const sv_pct = (row.season_stats as any).save_pct;
+    return sv_pct ? ((sv_pct as number) * 100).toFixed(1) + "%" : ".0%";
+  }, {
+    id: "ss_save_pct",
+    header: "SV%",
+    size: 70,
+  }),
+  columnHelper.accessor((row) => {
+    const gaa = (row.season_stats as any).gaa;
+    return gaa ? ((gaa as number).toFixed(2)) : "0.00";
+  }, {
+    id: "ss_gaa",
+    header: "GAA",
+    size: 70,
+  }),
+  columnHelper.accessor((row) => (row.season_stats as any).shutouts || 0, {
+    id: "ss_shutouts",
+    header: "SO",
+    size: 60,
+  }),
+];
+
 function RosterTable({
   players,
   onPlayer,
@@ -185,19 +407,6 @@ function RosterTable({
   onToggleScratch?: (pid: number) => void;
   scratchStatus?: ScratchStatus | null;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "overall", desc: true },
-  ]);
-
-  const table = useReactTable({
-    data: players,
-    columns: rosterColumns(onPlayer, onToggleScratch),
-    state: { sorting },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-  });
-
   return (
     <Panel className="roster-table-container">
       <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
@@ -211,45 +420,87 @@ function RosterTable({
             `${scratchStatus.scratched.length} healthy scratch${scratchStatus.scratched.length === 1 ? "" : "es"}.`}
         </p>
       )}
-      <div className="roster-table-scroll">
-        <table className="roster-table">
-          <thead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    style={{ width: `${header.getSize()}px` }}
-                    onClick={header.column.getToggleSortingHandler()}
-                    className={
-                      header.column.getCanSort() ? "sortable-header" : ""
-                    }
-                  >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                    {header.column.getIsSorted() &&
-                      ` ${header.column.getIsSorted() === "desc" ? "↓" : "↑"}`}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row) => (
-              <tr
-                key={row.id}
-                style={row.original.scratched ? { opacity: 0.55 } : undefined}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} style={{ width: `${cell.column.getSize()}px` }}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <SortableTable
+        data={players}
+        columns={ratingsColumns(onPlayer, onToggleScratch)}
+        defaultSort={[{ id: "overall", desc: true }]}
+        rowStyle={(row) => row.scratched ? { opacity: 0.55 } : undefined}
+      />
     </Panel>
+  );
+}
+
+function ContractTable({
+  players,
+  onPlayer,
+  onToggleScratch,
+  scratchStatus,
+}: {
+  players: PlayerSummary[];
+  onPlayer?: (pid: number) => void;
+  onToggleScratch?: (pid: number) => void;
+  scratchStatus?: ScratchStatus | null;
+}) {
+  return (
+    <Panel className="roster-table-container">
+      <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
+        Roster ({players.length} players)
+      </h3>
+      {scratchStatus && (
+        <p style={{ marginBottom: "1rem", fontSize: "0.875rem", color: "var(--color-muted)" }}>
+          Dressing {scratchStatus.dressed_count} of {scratchStatus.dressed_limit} (
+          {scratchStatus.skaters_dressed} skaters, {scratchStatus.goalies_dressed} goalies).{" "}
+          {scratchStatus.scratched.length > 0 &&
+            `${scratchStatus.scratched.length} healthy scratch${scratchStatus.scratched.length === 1 ? "" : "es"}.`}
+        </p>
+      )}
+      <SortableTable
+        data={players}
+        columns={contractColumns(onPlayer, onToggleScratch)}
+        defaultSort={[{ id: "salary", desc: true }]}
+        rowStyle={(row) => row.scratched ? { opacity: 0.55 } : undefined}
+      />
+    </Panel>
+  );
+}
+
+function SeasonStatsTables({
+  players,
+  onPlayer,
+}: {
+  players: PlayerSummary[];
+  onPlayer?: (pid: number) => void;
+}) {
+  const skaters = players.filter((p) => p.position !== "G");
+  const goalies = players.filter((p) => p.position === "G");
+
+  return (
+    <>
+      {skaters.length > 0 && (
+        <Panel className="roster-table-container">
+          <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
+            Skaters ({skaters.length} players)
+          </h3>
+          <SortableTable
+            data={skaters}
+            columns={skaterSeasonStatsColumns(onPlayer)}
+            defaultSort={[{ id: "ss_pts", desc: true }]}
+          />
+        </Panel>
+      )}
+      {goalies.length > 0 && (
+        <Panel className="roster-table-container" style={{ marginTop: "2rem" }}>
+          <h3 className="text-display" style={{ marginBottom: "0.5rem" }}>
+            Goalies ({goalies.length} players)
+          </h3>
+          <SortableTable
+            data={goalies}
+            columns={goaltenderSeasonStatsColumns(onPlayer)}
+            defaultSort={[{ id: "ss_wins", desc: true }]}
+          />
+        </Panel>
+      )}
+    </>
   );
 }
 
@@ -345,6 +596,7 @@ export function RosterScreen({
   const queryClient = useQueryClient();
 
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"ratings" | "stats" | "contract">("ratings");
 
   // Fetch roster
   const {
@@ -458,12 +710,70 @@ export function RosterScreen({
         </Panel>
       )}
 
-      <RosterTable
-        players={rosterData.players}
-        onPlayer={onPlayer}
-        onToggleScratch={toggleScratch}
-        scratchStatus={scratchData}
-      />
+      <Panel style={{ marginBottom: "2rem" }}>
+        <h2 className="text-display">Roster</h2>
+
+        {/* Tab Navigation */}
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            marginTop: "1.5rem",
+            borderBottom: "2px solid var(--color-border)",
+            flexWrap: "wrap",
+          }}
+        >
+          {[
+            { id: "ratings", label: "Ratings" },
+            { id: "stats", label: "Season Stats" },
+            { id: "contract", label: "Contract" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              style={{
+                padding: "0.75rem 1rem",
+                background: "none",
+                border: "none",
+                borderBottom:
+                  activeTab === tab.id
+                    ? "3px solid var(--color-accent-red)"
+                    : "none",
+                color: activeTab === tab.id ? "var(--color-text)" : "var(--color-muted)",
+                fontWeight: activeTab === tab.id ? 600 : 500,
+                cursor: "pointer",
+                fontSize: "1rem",
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </Panel>
+
+      {/* Tab Content */}
+      {activeTab === "ratings" && (
+        <RosterTable
+          players={rosterData.players}
+          onPlayer={onPlayer}
+          onToggleScratch={toggleScratch}
+          scratchStatus={scratchData}
+        />
+      )}
+      {activeTab === "contract" && (
+        <ContractTable
+          players={rosterData.players}
+          onPlayer={onPlayer}
+          onToggleScratch={toggleScratch}
+          scratchStatus={scratchData}
+        />
+      )}
+      {activeTab === "stats" && (
+        <SeasonStatsTables
+          players={rosterData.players}
+          onPlayer={onPlayer}
+        />
+      )}
 
       <div style={{ marginTop: "2rem" }}>
         <TacticsPanel
