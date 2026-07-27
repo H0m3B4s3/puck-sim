@@ -3,7 +3,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./api";
-import { Modal, FaceoffDotSpinner } from "./ui";
+import { Modal, FaceoffDotSpinner, RareArchetypeBadge } from "./ui";
 
 // Helper: get overall rating color (25–99 scale)
 function ratingColor(rating: number): string {
@@ -90,6 +90,7 @@ export function PlayerModal({
             <>
               {" · "}
               <span style={{ color: "var(--color-text)" }}>{player.archetype}</span>
+              <RareArchetypeBadge archetype={player.archetype} isRare={player.is_rare_archetype} />
               {player.role_label && !player.is_goalie && ` (${player.role_label})`}
             </>
           )}

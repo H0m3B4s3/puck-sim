@@ -403,6 +403,17 @@ for _arch in RARE_ARCHETYPES:
 
 
 # ---------------------------------------------------------------------------
+# Rare archetype detection
+# ---------------------------------------------------------------------------
+RARE_ARCHETYPE_NAMES = {a.name for a in RARE_ARCHETYPES}
+
+
+def is_rare_archetype(name: Optional[str]) -> bool:
+    """Whether `name` is one of the rare "generational talent" archetype names."""
+    return name in RARE_ARCHETYPE_NAMES
+
+
+# ---------------------------------------------------------------------------
 # Goalie archetypes — separate tier since goalies use a wholly separate rating
 # vocabulary (ALL_GOALIE_RATINGS, not ALL_RATINGS).
 # ---------------------------------------------------------------------------

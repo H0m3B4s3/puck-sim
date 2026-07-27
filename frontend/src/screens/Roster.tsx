@@ -26,7 +26,7 @@ import api, {
   TacticsUpdateRequest,
   ApiError,
 } from "../api";
-import { Panel, FaceoffDotSpinner, formatMoney } from "../ui";
+import { Panel, FaceoffDotSpinner, formatMoney, RareArchetypeBadge } from "../ui";
 
 // Map a synergy tier to a theme color (elite=green, good=blue, ok=muted, poor=red).
 const synergyTierColor = (tier: string): string =>
@@ -91,22 +91,25 @@ const rosterColumns = (
     header: "Name",
     size: 180,
     cell: (info) => (
-      <button
-        onClick={() => onPlayer?.(info.row.original.pid)}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          color: "var(--color-accent-blue)",
-          cursor: "pointer",
-          textDecoration: "underline",
-          fontWeight: 500,
-          font: "inherit",
-        }}
-        title="View player details"
-      >
-        {String(info.getValue())}
-      </button>
+      <>
+        <button
+          onClick={() => onPlayer?.(info.row.original.pid)}
+          style={{
+            background: "none",
+            border: "none",
+            padding: 0,
+            color: "var(--color-accent-blue)",
+            cursor: "pointer",
+            textDecoration: "underline",
+            fontWeight: 500,
+            font: "inherit",
+          }}
+          title="View player details"
+        >
+          {String(info.getValue())}
+        </button>
+        <RareArchetypeBadge archetype={info.row.original.archetype} isRare={info.row.original.is_rare_archetype} />
+      </>
     ),
   }),
   columnHelper.accessor("position", {

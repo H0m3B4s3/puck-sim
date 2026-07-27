@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from pucksim.config import BURY_CAP_SHELTER
 from pucksim.gen.namegen import NATIONALITY_NAMES
-from pucksim.models.attributes import RATING_GROUPS, GOALIE_RATING_GROUPS
+from pucksim.models.attributes import RATING_GROUPS, GOALIE_RATING_GROUPS, is_rare_archetype
 from pucksim.models.player import Player
 from pucksim.models.world import World
 from pucksim.systems.legacy import resume as compute_resume
@@ -53,6 +53,7 @@ class PlayerDetailDTO(BaseModel):
     overall: int
     potential: int
     archetype: Optional[str] = None      # generation-template name (e.g. "Sniper")
+    is_rare_archetype: bool = False      # whether archetype is one of the rare "generational talent" archetypes
     role: Optional[str] = None           # coarse sim role slug (attributes.ROLE_*)
     role_label: Optional[str] = None     # display label for `role`
 
@@ -277,6 +278,7 @@ def get_player_detail(pid: int, world: World = Depends(get_world)) -> PlayerDeta
         overall=player.overall,
         potential=player.scouted_potential(),
         archetype=player.archetype,
+        is_rare_archetype=is_rare_archetype(player.archetype),
         role=player.role,
         role_label=role_label(player.role),
         team_id=player.team_id,

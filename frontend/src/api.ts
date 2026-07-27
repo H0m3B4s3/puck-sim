@@ -131,6 +131,7 @@ export interface PlayerSummary {
   shoots: string;
   secondary_position: string | null;
   archetype: string | null;
+  is_rare_archetype: boolean;
   role: string | null;
   role_label: string | null;
   injury_status: string | null;
@@ -396,6 +397,7 @@ export interface PlayerDetailDTO {
   overall: number;
   potential: number;
   archetype: string | null;
+  is_rare_archetype: boolean;
   role: string | null;
   role_label: string | null;
   team_id: number | null;
