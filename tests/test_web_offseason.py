@@ -155,6 +155,25 @@ def test_draft_board_returns_top_60_prospects(client):
     assert len(body["board"]) <= 60
 
 
+def test_draft_board_prospects_include_archetype_fields(client):
+    """Draft board prospects include archetype and is_rare_archetype fields."""
+    client.post("/career/new", json={"seed": 42})
+    _sim_to_playoffs(client)
+    client.post("/offseason/pre-draft")
+
+    resp = client.get("/offseason/draft/board")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Each prospect should have archetype and is_rare_archetype fields
+    for prospect in body["board"]:
+        assert "archetype" in prospect
+        assert "is_rare_archetype" in prospect
+        assert isinstance(prospect["is_rare_archetype"], bool)
+        if prospect["archetype"]:
+            assert isinstance(prospect["archetype"], str)
+
+
 def test_draft_pick_fails_if_user_not_on_clock(client):
     """Picking when not on the clock fails."""
     client.post("/career/new", json={"seed": 42})

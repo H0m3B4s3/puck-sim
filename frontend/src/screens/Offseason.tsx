@@ -7,8 +7,9 @@ import {
   ColumnDef,
 } from "@tanstack/react-table";
 import api, { FreeAgentRow, OffseasonDraftBoardEntry } from "../api";
-import { Panel, FaceoffDotSpinner } from "../ui";
+import { Panel, FaceoffDotSpinner, RareArchetypeBadge } from "../ui";
 import { WorldSummary } from "../api";
+import { usePlayerFilters } from "../playerFilters";
 
 /**
  * Offseason screen (T9 feature)
@@ -242,6 +243,8 @@ function DraftBoardTable({
   onPick: (pid: number) => void;
   isLoading: boolean;
 }) {
+  const { filtered, filterBar } = usePlayerFilters(board);
+
   const columns: ColumnDef<OffseasonDraftBoardEntry>[] = [
     {
       header: "Name",
@@ -264,6 +267,10 @@ function DraftBoardTable({
             title="View player details"
           >
             {String(info.getValue())}
+            <RareArchetypeBadge
+              archetype={info.row.original.archetype}
+              isRare={info.row.original.is_rare_archetype}
+            />
           </button>
           <div style={{ fontSize: "0.875rem", color: "var(--color-muted)" }}>
             {info.row.original.position}
@@ -303,13 +310,14 @@ function DraftBoardTable({
   ];
 
   const table = useReactTable({
-    data: board,
+    data: filtered,
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
 
   return (
     <div>
+      {filterBar}
       <table
         style={{
           width: "100%",
@@ -562,6 +570,7 @@ function FreeAgentsSignTable({
   onSignSuccess: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { filtered, filterBar } = usePlayerFilters(freeAgents);
 
   const signMutation = useMutation({
     mutationFn: (pid: number) => api.signFreeAgent(pid),
@@ -595,6 +604,10 @@ function FreeAgentsSignTable({
             title="View player details"
           >
             {String(info.getValue())}
+            <RareArchetypeBadge
+              archetype={info.row.original.archetype}
+              isRare={info.row.original.is_rare_archetype}
+            />
           </button>
           <div style={{ fontSize: "0.875rem", color: "var(--color-muted)" }}>
             {info.row.original.position}
@@ -643,13 +656,14 @@ function FreeAgentsSignTable({
   ];
 
   const table = useReactTable({
-    data: freeAgents,
+    data: filtered,
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
 
   return (
     <div style={{ marginBottom: "2rem" }}>
+      {filterBar}
       <table
         style={{
           width: "100%",
