@@ -309,6 +309,25 @@ def test_free_agents_returns_a_list_of_players(client):
     assert isinstance(agents, list)
 
 
+def test_free_agents_include_potential_and_archetype_fields(client):
+    """Free agents list includes potential, archetype, and is_rare_archetype fields."""
+    client.post("/career/new", json={"seed": 101})
+    resp = client.get("/transactions/freeagents")
+    assert resp.status_code == 200
+    agents = resp.json()
+
+    # Each agent should have potential, archetype, and is_rare_archetype fields
+    if agents:  # Only check if there are agents
+        for agent in agents:
+            assert "potential" in agent
+            assert "archetype" in agent
+            assert "is_rare_archetype" in agent
+            assert isinstance(agent["potential"], int)
+            assert isinstance(agent["is_rare_archetype"], bool)
+            if agent["archetype"]:
+                assert isinstance(agent["archetype"], str)
+
+
 # ---------------------------------------------------------------------------
 # POST /transactions/freeagents/{pid}/sign
 # ---------------------------------------------------------------------------

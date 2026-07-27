@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from pucksim.models.world import World
+from pucksim.models.attributes import is_rare_archetype
 from pucksim.systems import awards, cap, draft_system, freeagency, trades
 from pucksim.systems.prospects import is_reserved_prospect
 from pucksim.web.serializers import (
@@ -207,6 +208,9 @@ def get_free_agents(world=Depends(get_world)) -> List[TransactionPlayerSummaryDT
             team_id=p.team_id,
             ask=freeagency.wave_market_salary(world, p),
             preferred_years=freeagency.contract_years_for(p),
+            potential=p.scouted_potential(),
+            archetype=p.archetype,
+            is_rare_archetype=is_rare_archetype(p.archetype),
         )
         for p in fa_players
     ]

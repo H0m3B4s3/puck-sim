@@ -7,7 +7,8 @@ import {
   ColumnDef,
 } from "@tanstack/react-table";
 import api, { FreeAgentRow } from "../api";
-import { Panel, FaceoffDotSpinner, awardLabel } from "../ui";
+import { Panel, FaceoffDotSpinner, awardLabel, RareArchetypeBadge } from "../ui";
+import { usePlayerFilters } from "../playerFilters";
 
 /**
  * Transactions Screen (Step 2.10d)
@@ -183,6 +184,9 @@ function FreeAgentsPanel({
     queryFn: () => api.getFreeAgents() as Promise<FreeAgentRow[]>,
   });
 
+  // Call usePlayerFilters BEFORE early returns (Rules of Hooks) -- pass empty array if loading
+  const { filtered, filterBar } = usePlayerFilters(freeAgents ?? []);
+
   const signMutation = useMutation({
     mutationFn: (fa: { pid: number; name: string }) => api.signFreeAgent(fa.pid),
     onSuccess: (_data, fa) => {
@@ -219,6 +223,10 @@ function FreeAgentsPanel({
             title="View player details"
           >
             {String(info.getValue())}
+            <RareArchetypeBadge
+              archetype={info.row.original.archetype}
+              isRare={info.row.original.is_rare_archetype}
+            />
           </button>
           <div style={{ fontSize: "0.875rem", color: "var(--color-muted)" }}>
             {info.row.original.position}
@@ -272,13 +280,13 @@ function FreeAgentsPanel({
   ];
 
   const table = useReactTable({
-    data: freeAgents ?? [],
+    data: filtered,
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
 
-  // Early returns must come AFTER every hook (Rules of Hooks): useReactTable
-  // above runs on every render regardless of loading/error/empty state.
+  // Early returns must come AFTER every hook (Rules of Hooks): useReactTable and usePlayerFilters
+  // above run on every render regardless of loading/error/empty state.
   if (isLoading) return <FaceoffDotSpinner />;
   if (error) return <p className="text-muted">Error loading free agents</p>;
   if (!freeAgents || freeAgents.length === 0) {
@@ -287,6 +295,7 @@ function FreeAgentsPanel({
 
   return (
     <div>
+      {filterBar}
       <table
         style={{
           width: "100%",

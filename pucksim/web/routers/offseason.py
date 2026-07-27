@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from pucksim.models.league import Phase
+from pucksim.models.attributes import is_rare_archetype
 from pucksim.sim.playoffs import champion
 from pucksim.systems import draft_system, freeagency, offseason, prospects
 from pucksim.web.session import get_session_id, get_world, session_store
@@ -41,6 +42,8 @@ class DraftBoardProspect(BaseModel):
     age: int
     overall: int
     potential: int
+    archetype: Optional[str] = None
+    is_rare_archetype: bool = False
 
 
 class DraftBoardResponse(BaseModel):
@@ -222,6 +225,8 @@ def get_draft_board(
             age=p.age,
             overall=p.overall,
             potential=p.scouted_potential(),
+            archetype=p.archetype,
+            is_rare_archetype=is_rare_archetype(p.archetype),
         )
         for p in board
     ]

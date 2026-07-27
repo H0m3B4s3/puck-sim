@@ -438,6 +438,9 @@ export interface TransactionPlayerSummaryDTO {
   age: number;
   overall: number;
   team_id: number | null;
+  potential: number;
+  archetype: string | null;
+  is_rare_archetype: boolean;
 }
 
 export interface FreeAgentRow extends TransactionPlayerSummaryDTO {
@@ -601,6 +604,8 @@ export interface OffseasonDraftBoardEntry {
   age: number;
   overall: number;
   potential: number;
+  archetype: string | null;
+  is_rare_archetype: boolean;
 }
 
 export interface OffseasonDraftBoardResponse {

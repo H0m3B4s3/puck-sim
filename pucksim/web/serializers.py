@@ -263,6 +263,9 @@ class TransactionPlayerSummaryDTO(BaseModel):
     team_id: Optional[int] = None
     ask: int = 0  # Market salary (wave-adjusted if in offseason)
     preferred_years: int = 1  # Preferred contract length
+    potential: int = 0
+    archetype: Optional[str] = None
+    is_rare_archetype: bool = False
 
 
 # ---------------------------------------------------------------------------
