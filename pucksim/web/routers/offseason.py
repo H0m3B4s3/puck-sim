@@ -26,6 +26,7 @@ class OffseasonPreDraftResponse(BaseModel):
     """Response from POST /offseason/pre-draft"""
     resumed: bool
     retired: int
+    resigned: int = 0
     new_fas: int
     inducted: List[dict]
     milestones: List[dict]
@@ -140,6 +141,7 @@ def pre_draft_handler(
     return OffseasonPreDraftResponse(
         resumed=False,
         retired=summary.get("retired", 0),
+        resigned=summary.get("resigned", 0),
         new_fas=summary.get("new_fas", 0),
         inducted=summary.get("inducted", []),
         milestones=summary.get("milestones", []),

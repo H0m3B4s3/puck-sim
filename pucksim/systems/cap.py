@@ -280,6 +280,12 @@ def extend_contract(world: World, team: Team, pid: int, salary: int, add_years: 
         return False, "No additional years available."
     player.contract.salaries.extend([salary] * add_years)
     player.contract.guaranteed.extend([True] * add_years)
+    # An extension is a new, market-rate deal -- even if the player's ORIGINAL contract was
+    # an entry-level one (is_rookie_scale=True), the years being added here never are. Without
+    # this, a re-signed ELC graduate stays flagged as still on his entry-level deal for the
+    # life of the extension, inflating every "share of the league on entry-level contracts"
+    # metric (systems/prospects.py / the econ-balance tests) even though he's making real money.
+    player.contract.is_rookie_scale = False
     return True, f"Extended {add_years} year(s) at {salary // 1_000_000}M."
 
 

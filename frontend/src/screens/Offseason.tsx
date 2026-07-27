@@ -75,7 +75,7 @@ function PreDraftStage({ toast }: { toast: (msg: string) => void }) {
       const r = await api.preDraft();
       if (!r.resumed) {
         toast(
-          `Retired ${r.retired}, ${r.new_fas} reached free agency`
+          `Retired ${r.retired}, ${r.resigned} re-signed by their own team, ${r.new_fas} reached free agency`
         );
         if (r.awards) {
           // Show award toasts
