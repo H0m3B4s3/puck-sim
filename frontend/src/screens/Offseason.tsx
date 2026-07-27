@@ -1,11 +1,13 @@
-import { useState, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   flexRender,
   getCoreRowModel,
+  getSortedRowModel,
   useReactTable,
   ColumnDef,
 } from "@tanstack/react-table";
+import type { SortingState } from "@tanstack/react-table";
 import api, { FreeAgentRow, OffseasonDraftBoardEntry } from "../api";
 import { Panel, FaceoffDotSpinner, RareArchetypeBadge } from "../ui";
 import { WorldSummary } from "../api";
@@ -244,8 +246,13 @@ function DraftBoardTable({
   isLoading: boolean;
 }) {
   const { filtered, filterBar } = usePlayerFilters(board);
+  const [sorting, setSorting] = useState<SortingState>([]);
 
-  const columns: ColumnDef<OffseasonDraftBoardEntry>[] = [
+  // Memoized: an unstable `columns` array combined with an uncontrolled useReactTable (no
+  // `state` prop) is documented by TanStack Table as unsafe -- see playerFilters.tsx's
+  // usePlayerFilters, which memoizes `filtered` for the same reason after this exact
+  // combination reproduced a real tab-freezing infinite render loop.
+  const columns = useMemo<ColumnDef<OffseasonDraftBoardEntry>[]>(() => [
     {
       header: "Name",
       accessorKey: "name",
@@ -296,6 +303,7 @@ function DraftBoardTable({
     {
       header: "Action",
       id: "action",
+      enableSorting: false,
       cell: (info) => (
         <button
           className="btn btn-primary"
@@ -307,12 +315,15 @@ function DraftBoardTable({
         </button>
       ),
     },
-  ];
+  ], [onPlayer, onPick, isLoading]);
 
   const table = useReactTable({
     data: filtered,
     columns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
@@ -337,6 +348,8 @@ function DraftBoardTable({
               {headerGroup.headers.map((header) => (
                 <th
                   key={header.id}
+                  onClick={header.column.getToggleSortingHandler()}
+                  className={header.column.getCanSort() ? "sortable-header" : ""}
                   style={{
                     padding: "0.75rem 1rem",
                     textAlign: "left",
@@ -349,6 +362,8 @@ function DraftBoardTable({
                   {header.isPlaceholder
                     ? null
                     : flexRender(header.column.columnDef.header, header.getContext())}
+                  {header.column.getIsSorted() &&
+                    ` ${header.column.getIsSorted() === "desc" ? "↓" : "↑"}`}
                 </th>
               ))}
             </tr>
@@ -571,6 +586,7 @@ function FreeAgentsSignTable({
 }) {
   const queryClient = useQueryClient();
   const { filtered, filterBar } = usePlayerFilters(freeAgents);
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   const signMutation = useMutation({
     mutationFn: (pid: number) => api.signFreeAgent(pid),
@@ -582,7 +598,11 @@ function FreeAgentsSignTable({
     },
   });
 
-  const columns: ColumnDef<FreeAgentRow>[] = [
+  // Memoized: an unstable `columns` array combined with an uncontrolled useReactTable (no
+  // `state` prop) is documented by TanStack Table as unsafe -- see playerFilters.tsx's
+  // usePlayerFilters, which memoizes `filtered` for the same reason after this exact
+  // combination reproduced a real tab-freezing infinite render loop.
+  const columns = useMemo<ColumnDef<FreeAgentRow>[]>(() => [
     {
       header: "Player",
       accessorKey: "name",
@@ -642,6 +662,7 @@ function FreeAgentsSignTable({
     {
       header: "Action",
       id: "action",
+      enableSorting: false,
       cell: (info) => (
         <button
           className="btn btn-primary"
@@ -653,12 +674,15 @@ function FreeAgentsSignTable({
         </button>
       ),
     },
-  ];
+  ], [onPlayer, signMutation.isPending, signMutation.mutate]);
 
   const table = useReactTable({
     data: filtered,
     columns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   return (
@@ -683,6 +707,8 @@ function FreeAgentsSignTable({
               {headerGroup.headers.map((header) => (
                 <th
                   key={header.id}
+                  onClick={header.column.getToggleSortingHandler()}
+                  className={header.column.getCanSort() ? "sortable-header" : ""}
                   style={{
                     padding: "0.75rem 1rem",
                     textAlign: "left",
@@ -695,6 +721,8 @@ function FreeAgentsSignTable({
                   {header.isPlaceholder
                     ? null
                     : flexRender(header.column.columnDef.header, header.getContext())}
+                  {header.column.getIsSorted() &&
+                    ` ${header.column.getIsSorted() === "desc" ? "↓" : "↑"}`}
                 </th>
               ))}
             </tr>

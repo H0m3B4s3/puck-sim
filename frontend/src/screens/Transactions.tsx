@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   flexRender,
   getCoreRowModel,
+  getSortedRowModel,
   useReactTable,
   ColumnDef,
 } from "@tanstack/react-table";
+import type { SortingState } from "@tanstack/react-table";
 import api, { FreeAgentRow } from "../api";
 import { Panel, FaceoffDotSpinner, awardLabel, RareArchetypeBadge } from "../ui";
 import { usePlayerFilters } from "../playerFilters";
@@ -201,7 +203,15 @@ function FreeAgentsPanel({
     },
   });
 
-  const columns: ColumnDef<FreeAgentRow>[] = [
+  const [sorting, setSorting] = useState<SortingState>([]);
+
+  // Memoized: TanStack Table's own docs require columns/data to be referentially stable
+  // across renders for an UNCONTROLLED table (no explicit `state` prop) -- an unstable
+  // `columns` array here recreates on every render regardless of whether onPlayer/mutation
+  // state actually changed. See playerFilters.tsx's usePlayerFilters for why this matters:
+  // an unmemoized `data` array reference reproduced a genuine tab-freezing infinite render
+  // loop (table.getRowModel() alone, no cells even rendered, was enough to trigger it).
+  const columns = useMemo<ColumnDef<FreeAgentRow>[]>(() => [
     {
       header: "Player",
       accessorKey: "name",
@@ -261,6 +271,7 @@ function FreeAgentsPanel({
     {
       header: "Action",
       id: "action",
+      enableSorting: false,
       cell: (info) => (
         <button
           className="btn btn-primary"
@@ -277,12 +288,19 @@ function FreeAgentsPanel({
         </button>
       ),
     },
-  ];
+  // Depend on signMutation.isPending/.mutate specifically, not the whole signMutation object --
+  // useMutation() returns a freshly-merged result object on every render (react-query does not
+  // guarantee referential stability of the object itself), so depending on it directly would
+  // recreate `columns` every render just as if this useMemo weren't here at all.
+  ], [onPlayer, signMutation.isPending, signMutation.mutate]);
 
   const table = useReactTable({
     data: filtered,
     columns,
+    state: { sorting },
+    onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
   });
 
   // Early returns must come AFTER every hook (Rules of Hooks): useReactTable and usePlayerFilters
@@ -315,6 +333,8 @@ function FreeAgentsPanel({
               {headerGroup.headers.map((header) => (
                 <th
                   key={header.id}
+                  onClick={header.column.getToggleSortingHandler()}
+                  className={header.column.getCanSort() ? "sortable-header" : ""}
                   style={{
                     padding: "0.75rem 1rem",
                     textAlign: "left",
@@ -327,6 +347,8 @@ function FreeAgentsPanel({
                   {header.isPlaceholder
                     ? null
                     : flexRender(header.column.columnDef.header, header.getContext())}
+                  {header.column.getIsSorted() &&
+                    ` ${header.column.getIsSorted() === "desc" ? "↓" : "↑"}`}
                 </th>
               ))}
             </tr>

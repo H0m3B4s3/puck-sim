@@ -1,4 +1,4 @@
-import { useState, ReactNode } from "react";
+import { useState, useMemo, ReactNode } from "react";
 
 export interface FilterablePlayer {
   position: string;
@@ -14,23 +14,39 @@ export function usePlayerFilters<T extends FilterablePlayer>(players: T[]) {
   const [minPotential, setMinPotential] = useState<string>("");
   const [archetype, setArchetype] = useState<string>("ALL");
 
-  // Derive unique positions and archetypes from the players
-  const positions = Array.from(new Set(players.map((p) => p.position)))
-    .filter((pos) => pos)
-    .sort();
+  // Derive unique positions and archetypes from the players. Memoized on `players` -- every
+  // consumer of this hook feeds it straight into an UNCONTROLLED useReactTable (no explicit
+  // `state`/`onXChange`), and that combination is documented by TanStack Table itself to be
+  // unsafe with unstable data/derived-array references: a brand-new array on every render can
+  // send table.getRowModel() into an infinite recompute-then-rerender loop (confirmed directly --
+  // it reproduced a real, tab-freezing hang with zero cells even rendered, just from calling
+  // getRowModel() against a `data` array that changes identity every render). `filtered` is the
+  // one actually fed to the table as `data`, so it's the fix that matters, but memoizing
+  // `positions`/`archetypes` too avoids the same class of bug for any future consumer.
+  const positions = useMemo(
+    () => Array.from(new Set(players.map((p) => p.position))).filter((pos) => pos).sort(),
+    [players],
+  );
 
-  const archetypes = Array.from(new Set(players.map((p) => p.archetype).filter((a) => a !== null) as string[]))
-    .sort();
+  const archetypes = useMemo(
+    () =>
+      Array.from(new Set(players.map((p) => p.archetype).filter((a) => a !== null) as string[])).sort(),
+    [players],
+  );
 
   // Apply filters
-  const filtered = players.filter((p) => {
-    if (position !== "ALL" && p.position !== position) return false;
-    if (minAge !== "" && p.age < parseInt(minAge, 10)) return false;
-    if (maxAge !== "" && p.age > parseInt(maxAge, 10)) return false;
-    if (minPotential !== "" && p.potential < parseInt(minPotential, 10)) return false;
-    if (archetype !== "ALL" && p.archetype !== archetype) return false;
-    return true;
-  });
+  const filtered = useMemo(
+    () =>
+      players.filter((p) => {
+        if (position !== "ALL" && p.position !== position) return false;
+        if (minAge !== "" && p.age < parseInt(minAge, 10)) return false;
+        if (maxAge !== "" && p.age > parseInt(maxAge, 10)) return false;
+        if (minPotential !== "" && p.potential < parseInt(minPotential, 10)) return false;
+        if (archetype !== "ALL" && p.archetype !== archetype) return false;
+        return true;
+      }),
+    [players, position, minAge, maxAge, minPotential, archetype],
+  );
 
   const filterBar: ReactNode = (
     <div
