@@ -16,6 +16,11 @@ pip install -e ".[dev,web]"
 pytest
 ```
 
+The suite is large enough (1130+ tests) that `pytest-xdist` (a dev dependency) is worth using for
+day-to-day iteration: `pytest -n auto` runs it in parallel across available cores, cutting a
+~20-minute serial run to well under 5 minutes. Both give the same result; use plain `pytest` when
+you want deterministic single-process output (e.g. debugging a specific failure).
+
 ## Status (2026-07-23)
 
 All of v1's gameplay systems (DEVPLAN.md Steps 2.1–2.8) are implemented and merged: special
@@ -93,11 +98,27 @@ both teams changed lines on a shared horn. See
 [docs/DISTRIBUTION_TARGETS.md](docs/DISTRIBUTION_TARGETS.md) — that round's real deliverable is the
 instrument, not the constants.
 
-1111 backend tests pass (plus one deliberate `xfail`, a documented roster-depth gap); a full 82-game
+A UI/feedback round then acted on direct playtest notes rather than a new systems pass. Line editing
+moved off the roster screen onto its own tab, with each slot now showing a player's rating alongside
+his position. The roster screen gained sortable Ratings/Season Stats/Contract tabs instead of one
+fixed column set. The draft board and both free-agency screens are filterable by position, age,
+potential and archetype, sharing one filter hook rather than three copies of the same logic. A new
+League Stats screen lists every player in the league — sortable, searchable by name — where
+previously the only current-season view capped every category at the top 10. Rare "generational
+talent" archetypes now carry a ⭐ wherever a player's name appears. And free agency itself changed:
+teams now try to re-sign their own pending free agents before the market opens, weighted so stars
+are retained far more often than fringe players, instead of every expiring contract hitting the
+open market unconditionally regardless of quality — the fix required a shared per-team cap-space
+pool (a naive per-player check let several simultaneous re-signings each look affordable while
+collectively over-committing) and closed a separate, previously-latent gap where late-offseason
+roster-minimum fills had no cap check of their own at all.
+
+1130 backend tests pass (plus one deliberate `xfail`, a documented roster-depth gap); a full 82-game
 season plus a complete playoff bracket runs cleanly end-to-end, both headlessly and through the web
-app. **Note the suite takes roughly twenty minutes** — several tests sim multiple full seasons back
-to back. See [DEVPLAN.md](DEVPLAN.md) for the full step-by-step plan and status notes, including a
-handful of known non-blocking loose ends (search that file for "Known" and "not yet wired").
+app. **The suite takes roughly twenty minutes single-threaded** — several tests sim multiple full
+seasons back to back — or well under five with `pytest -n auto` (see "Run tests" above). See
+[DEVPLAN.md](DEVPLAN.md) for the full step-by-step plan and status notes, including a handful of
+known non-blocking loose ends (search that file for "Known" and "not yet wired").
 
 ## Run the web app
 
