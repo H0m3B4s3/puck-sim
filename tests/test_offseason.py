@@ -208,81 +208,131 @@ def test_resign_pending_free_agents_depth_player_retention_lower_than_elite():
     )
 
 
-def test_resign_pending_free_agents_defensive_clamping_on_tight_cap():
-    """When a team has very tight cap space, re-signing logic doesn't exceed the cap."""
-    world = build_world_with_team()
+def test_resign_pending_free_agents_multiple_extensions_stay_cap_legal_next_season(monkeypatch):
+    """Two simultaneous elite pending free agents on a tight-cap team must not collectively
+    commit more than the team can actually afford once their new deals become current.
 
-    # Add roster to near-capacity with moderate salaries
-    for i in range(config.ROSTER_MAX - 2):
-        p = make_skater(i + 100, 1, overall=60, contract=flat_contract(3_000_000, 2))
-        world.add_player(p)
-        world.teams[1].add_player(i + 100)
+    Regression test for a real bug found in review: cap.extend_contract's own legality check
+    reads cap.cap_space(team), which is payroll-based and blind to sibling extensions granted
+    in the SAME pass (extending appends the new salary at the tail of the contract, so it
+    never moves payroll/cap_space until expire_contracts rolls the old year off). Checking
+    each player independently against the same unchanged cap_space would let both pass while
+    their combined new salaries blow well past what the team can afford next season. This test
+    simulates all the way to the point the fix is designed to protect -- AFTER
+    expire_contracts() rolls the old years off and the new extensions become the current,
+    cap-counting salary.
+    """
+    from pucksim.systems import cap as cap_module
 
-    # Add one high-paid elite player expiring soon
-    elite = make_skater(1, 1, overall=87, age=27, contract=flat_contract(8_000_000, 1))
-    world.add_player(elite)
+    monkeypatch.setattr(O, "_resign_probability", lambda player: 1.0)  # deterministic retention
+
+    world = build_world_with_team()  # World() defaults salary_cap to config.SALARY_CAP_BASE
+    # NOTE: salary_cap is never reassigned below -- market_salary/max_salary scale with the
+    # cap, so computing an offer at one cap and then changing world.salary_cap before the
+    # function runs would make it recompute a DIFFERENT offer internally, invalidating the
+    # test's sizing. Tightness comes entirely from filler payroll instead.
+    elite_a = make_skater(1, 1, overall=90, age=26, contract=flat_contract(1_000_000, 1))
+    elite_b = make_skater(2, 1, overall=88, age=27, contract=flat_contract(1_000_000, 1))
+    world.add_player(elite_a)
+    world.add_player(elite_b)
     world.teams[1].add_player(1)
-
-    # Add one more expiring mid-level player
-    mid = make_skater(2, 1, overall=72, age=28, contract=flat_contract(4_000_000, 1))
-    world.add_player(mid)
     world.teams[1].add_player(2)
 
-    # Tighten the cap artificially to force defensive clamping
-    from pucksim.systems import cap as cap_module
-    initial_payroll = cap_module.payroll(world, world.teams[1])
-    world.salary_cap = initial_payroll + 2_000_000  # Very tight, only 2M space
+    # Pad the roster up to config.ROSTER_MIN so cap.signing_allowance's OWN reservation for
+    # "remaining mandatory roster-minimum fills" is zero, same as any real generated league's
+    # roster (already at/above ROSTER_MIN in the overwhelming majority of cases) -- otherwise
+    # this artificially tiny 2-player test "team" would trip that reservation (which scales
+    # with how far below ROSTER_MIN the roster sits) for reasons that have nothing to do with
+    # what this test is actually checking. Multi-year contracts so none of these count as
+    # "pending" themselves.
+    for i in range(config.ROSTER_MIN - 2):
+        filler_i = make_skater(200 + i, 1, overall=50, contract=flat_contract(1_000_000, 3))
+        world.add_player(filler_i)
+        world.teams[1].add_player(200 + i)
 
-    # Attempt to resign both expiring players
-    retained = O.resign_pending_free_agents(world)
-
-    # Verify we didn't push over the cap (even before expire_contracts advances years)
+    # Squeeze cap_space down to a fixed amount comfortably above RESIGN_ROSTER_CHURN_BUFFER
+    # via filler payroll -- comfortably below what a 90 AND an 88 overall's market offers
+    # would need even individually (this game's salary curve puts elite players well above
+    # this), so neither offer can be paid in full.
     current_payroll = cap_module.payroll(world, world.teams[1])
-    assert current_payroll <= world.salary_cap, (
-        f"Payroll {current_payroll} exceeds cap {world.salary_cap} after retentions"
+    target_cap_space = O.RESIGN_ROSTER_CHURN_BUFFER + 3_000_000
+    filler_salary = world.salary_cap - target_cap_space - current_payroll
+    filler = make_skater(100, 1, overall=50, contract=flat_contract(filler_salary, 3))
+    world.add_player(filler)
+    world.teams[1].add_player(100)
+    assert cap_module.signing_allowance(world, world.teams[1]) == target_cap_space  # sanity-check
+    team_room = target_cap_space - O.RESIGN_ROSTER_CHURN_BUFFER
+
+    retained = O.resign_pending_free_agents(world)
+    # Both get retained -- cap.extend_contract's own per-call check always permits at least a
+    # FLAT renewal at a player's own current salary (it adds that back as "about to free up"),
+    # so scarcity doesn't exclude anyone here, it rations the RAISE. What must hold is that the
+    # team's shared room went to the higher-overall player, not both or neither.
+    assert {1, 2} <= set(retained)
+    assert elite_a.contract.salaries[-1] == team_room + 1_000_000  # got the raise
+    assert elite_b.contract.salaries[-1] == 1_000_000  # flat renewal only -- no room left
+
+    O.expire_contracts(world)  # roll the old (pre-extension) years off
+    final_payroll = cap_module.payroll(world, world.teams[1])
+    assert final_payroll <= world.salary_cap, (
+        f"Payroll {final_payroll:,} exceeds cap {world.salary_cap:,} once the new "
+        f"extensions became current -- multiple simultaneous re-signings over-committed."
     )
 
-    # After expire_contracts, team should still be legal
-    O.expire_contracts(world)
-    final_payroll = cap_module.payroll(world, world.teams[1])
-    # It's OK to be slightly over after advancing (defensive clamping might still allow
-    # a player to be at current salary without increase), but system should never crash
-    # and fill_rosters will enforce the hard cap with can_sign checks
-    assert len(world.teams[1].roster) >= config.ROSTER_MIN
 
+def test_resign_pending_free_agents_processes_best_players_first(monkeypatch):
+    """When a team has multiple pending free agents and scarce cap room, the higher-overall
+    player must claim the team's shared room first -- not whoever happens to be listed first.
 
-def test_resign_pending_free_agents_processes_best_players_first():
-    """When a team has multiple pending free agents and limited cap space, it should
-    process best-first so stars get extended before depth."""
-    world = build_world_with_team()
+    ``fringe`` (pid 2) is added to ``team.roster`` AFTER ``elite`` (pid 1) here, so pid/roster
+    order and quality order actually agree -- this test only proves something if
+    ``resign_pending_free_agents`` truly sorts by overall (rather than, say, roster iteration
+    order), which is exactly what the exact-salary assertions below check: the shared cap_space
+    goes entirely to the elite player's raise, leaving fringe a flat (no-raise) renewal.
+    """
+    from pucksim.systems import cap as cap_module
 
-    # One elite player + one fringe player, both expiring
-    elite = make_skater(1, 1, overall=86, age=25, contract=flat_contract(5_000_000, 1))
+    monkeypatch.setattr(O, "_resign_probability", lambda player: 1.0)  # deterministic retention
+
+    world = build_world_with_team()  # World() defaults salary_cap to config.SALARY_CAP_BASE
+    # salary_cap is never reassigned -- see the sibling test above for why (offers scale with
+    # the cap, so tightness comes from filler payroll instead).
+    elite = make_skater(1, 1, overall=86, age=25, contract=flat_contract(1_000_000, 1))
     fringe = make_skater(2, 1, overall=55, age=31, contract=flat_contract(1_000_000, 1))
     world.add_player(elite)
     world.add_player(fringe)
     world.teams[1].add_player(1)
     world.teams[1].add_player(2)
 
-    # Limited cap space: enough for one extension, not both
-    # Fill the cap to leave just enough room for one medium extension (~3-4M)
-    world.salary_cap = 85_000_000
-    for i in range(config.ROSTER_MAX - 2):
-        filler = make_skater(i + 100, 1, overall=50, contract=flat_contract(7_500_000, 3))
-        world.add_player(filler)
-        world.teams[1].add_player(i + 100)
+    # Pad the roster up to config.ROSTER_MIN -- see the sibling test above for why (otherwise
+    # cap.signing_allowance's OWN reservation for "remaining mandatory roster-minimum fills"
+    # would trip on this artificially tiny 2-player test "team" for reasons unrelated to what
+    # this test checks).
+    for i in range(config.ROSTER_MIN - 2):
+        filler_i = make_skater(200 + i, 1, overall=50, contract=flat_contract(1_000_000, 3))
+        world.add_player(filler_i)
+        world.teams[1].add_player(200 + i)
 
-    # Run retention - with limited cap and best-first sorting, elite should get priority
+    # Squeeze cap_space to a fixed amount comfortably above RESIGN_ROSTER_CHURN_BUFFER via
+    # filler -- comfortably below an 86 overall's market offer, so the raise this buys can
+    # only go to one of the two.
+    current_payroll = cap_module.payroll(world, world.teams[1])
+    target_cap_space = O.RESIGN_ROSTER_CHURN_BUFFER + 2_000_000
+    filler_salary = world.salary_cap - target_cap_space - current_payroll
+    filler = make_skater(100, 1, overall=50, contract=flat_contract(filler_salary, 3))
+    world.add_player(filler)
+    world.teams[1].add_player(100)
+    assert cap_module.signing_allowance(world, world.teams[1]) == target_cap_space  # sanity-check
+    team_room = target_cap_space - O.RESIGN_ROSTER_CHURN_BUFFER
+
     retained = O.resign_pending_free_agents(world)
 
-    # The elite player has a much higher chance to be retained due to both:
-    # 1. Better-first processing (checked first)
-    # 2. Higher retention probability (90% vs 15%)
-    # Multiple runs show elite is retained more often
-    # (We can't assert specific outcome due to probabilistic nature, but best-first
-    # is ensured by the sorting in the implementation)
-    # Verify that the function sorted by overall before processing
-    # by running it many times and checking the elite player has higher retention
+    assert {1, 2} <= set(retained)
+    assert elite.contract.current_salary == 1_000_000  # unchanged: extension appends, doesn't replace
+    # Elite claimed the team's entire shared room as a raise...
+    assert elite.contract.salaries[-1] == team_room + 1_000_000
+    # ...leaving fringe nothing but a flat renewal at his old rate.
+    assert fringe.contract.salaries[-1] == 1_000_000
 
 
 # ---------------------------------------------------------------------------

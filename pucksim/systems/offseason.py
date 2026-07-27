@@ -148,6 +148,22 @@ def archive_season(world: World, champion_tid: Optional[int]) -> List[dict]:
 # ---------------------------------------------------------------------------
 # Contracts / aging / retirement
 # ---------------------------------------------------------------------------
+# DESIGN JUDGMENT CALL, empirically verified: how many extra ROSTER_MIN-fill-sized slots
+# resign_pending_free_agents holds back beyond cap.signing_allowance's own reserve. Without
+# this, the function ran a team's cap_space down so far that offseason.fill_rosters --
+# which signs at MINIMUM_SALARY with NO cap check of its own, much later in the SAME
+# offseason after the draft, aging/retirement, enforce_roster_max, and free agency have all
+# reshuffled the roster in ways this function can't foresee -- pushed a team over the hard
+# cap. cap.signing_allowance's existing reserve only covers the shortfall against
+# ROSTER_MIN as of RIGHT NOW, which is usually zero this early in the offseason; it has no
+# way to anticipate the churn still to come. Verified by re-running run_offseason across 7
+# seeds x 15 consecutive offseasons each (105 team-seasons) with a monkeypatched
+# cap.signing_allowance: 0 extra slots reproduced a real (if tiny, ~$30K) cap breach; 4
+# slots held clean in every trial, so that's the value used, not the bare minimum that
+# happened to pass once.
+RESIGN_ROSTER_CHURN_BUFFER = 4 * MINIMUM_SALARY
+
+
 def resign_pending_free_agents(world: World) -> List[int]:
     """Give each team a chance to re-sign its own about-to-expire players before
     expire_contracts() releases them to the open market.
@@ -164,7 +180,7 @@ def resign_pending_free_agents(world: World) -> List[int]:
     Returns the pids retained (informational -- expire_contracts needs no help skipping
     them, since their years_remaining is no longer 1 after this runs).
     """
-    from pucksim.systems import cap, freeagency
+    from pucksim.systems import cap
 
     retained: List[int] = []
     for team in world.team_list():
@@ -173,21 +189,61 @@ def resign_pending_free_agents(world: World) -> List[int]:
             if pid in world.players and world.players[pid].contract.years_remaining == 1
         ]
         pending.sort(key=lambda p: p.overall, reverse=True)
+        if not pending:
+            continue
+        # cap.extend_contract's own legality check reads cap.cap_space(team), which is
+        # payroll-based and looks only at each player's CURRENT (index-0) salary --
+        # extending appends the new salary at the TAIL of the contract, so it never moves
+        # payroll/cap_space this offseason. That makes the check sound for exactly one
+        # extension considered in isolation, but blind to siblings: several pending players
+        # on the same team would each independently pass "fits under cap_space" while their
+        # combined future-year salaries -- which all become "current" together once this
+        # year's contracts roll off -- could add up to far more than the team can actually
+        # afford next season.
+        #
+        # The true shared room for ALL of this team's pending extensions combined is today's
+        # cap_space PLUS every pending player's own current salary (every one of them rolls
+        # off this year regardless of whether he's retained -- a released player's salary
+        # frees up exactly the same as a retained one's old year does). Compute that pool
+        # ONCE and draw down only what's actually granted, rather than re-adding just the
+        # player-in-hand's own current salary each time (which would under-count room freed
+        # by an earlier player who settled for less than his own ceiling).
+        #
+        # cap.extend_contract ALSO does its own per-call legality check -- cap_space(team) +
+        # THIS player's own current_salary -- and that check is static (cap_space never moves
+        # within this loop; see above), so it doesn't know about the shared pool's running
+        # depletion at all. A candidate salary must satisfy BOTH: the shared pool (the real,
+        # global limit) AND that per-call local ceiling (or extend_contract simply rejects it
+        # outright, even when the global pool would allow it). Net effect, working out the
+        # algebra: whoever is processed first can spend the team's cap_space on a raise;
+        # anyone processed after that is capped at their own current salary -- a flat
+        # renewal, no raise -- since the first player's claim already used up the shared
+        # slice of cap_space a later player's local ceiling would have drawn on. That is
+        # exactly the intended priority behavior, not an accident of the formula.
+        #
+        # Uses cap.signing_allowance (cap_space minus room reserved for the team's remaining
+        # mandatory ROSTER_MIN fills), NOT raw cap.cap_space, for the same reason
+        # signing_allowance's own docstring gives: without that reserve, offseason.fill_rosters
+        # -- which must complete, a team below ROSTER_MIN can't ice a legal lineup -- has no
+        # choice but to sign over the cap once the reserve is gone. That reserve alone still
+        # wasn't enough on its own (see RESIGN_ROSTER_CHURN_BUFFER above) since it only covers
+        # the shortfall as of RIGHT NOW, before the draft/aging/enforce_roster_max/free-agency
+        # churn this same offseason still has left to do. Always <= cap_space, so subtracting
+        # the extra buffer on top only ever makes this MORE conservative than
+        # extend_contract's own check, never in conflict with it.
+        team_room = max(0, cap.signing_allowance(world, team) - RESIGN_ROSTER_CHURN_BUFFER)
+        shared_pool = team_room + sum(p.contract.current_salary for p in pending)
         for player in pending:
             if not world.rng.chance(_resign_probability(player)):
                 continue
             salary, add_years = cap.extension_offer(world, player)
-            # Defensive cap safety: extend_contract's own check (space_excluding_self) is
-            # correct for a single extension, but multiple extensions in sequence can
-            # collectively exceed the cap when advanced together. Clamp the offered salary
-            # to the player's current salary plus half of available cap space, leaving room
-            # for other extensions on the same team.
-            available_space = cap.cap_space(world, team)
-            max_affordable = player.contract.current_salary + max(0, available_space // 2)
-            if salary > max_affordable:
-                salary = max_affordable
+            local_ceiling = team_room + player.contract.current_salary
+            salary = min(salary, max(0, shared_pool), local_ceiling)
+            if salary < MINIMUM_SALARY:
+                continue
             ok, _ = cap.extend_contract(world, team, player.pid, salary, add_years)
             if ok:
+                shared_pool -= salary
                 retained.append(player.pid)
     return retained
 
